@@ -598,4 +598,14 @@ if st.session_state["authentication_status"]:
         else: run_strike_zones_app(df_global)
             
         with st.sidebar:
-            if app_choice == "Pivot
+            if app_choice == "Pivot Tables":
+                st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
+                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
+                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
+                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
+            st.markdown('<div style="margin-top: 6rem;"></div>', unsafe_allow_html=True)
+            authenticator.logout('Logout', 'sidebar')
+    except Exception as e:
+        st.error(f"Error: {e}")
+elif st.session_state["authentication_status"] is False: st.error('Incorrect password')
+elif st.session_state["authentication_status"] is None: st.warning('Please login')
