@@ -124,6 +124,22 @@ def clean_strike_fmt(val):
     except:
         return str(val)
 
+# Reset Callbacks to prevent Session State modification errors
+def reset_sz_callback():
+    for k in ["sz_ticker", "sz_start", "sz_end", "sz_exp"]:
+        if k in st.session_state: del st.session_state[k]
+    # Clear specific ticker inclusion logic
+    to_del = [key for key in st.session_state.keys() if key.startswith("sz_include_")]
+    for key in to_del: del st.session_state[key]
+
+def reset_db_callback():
+    for k in ["db_start", "db_end", "db_exp", "db_ticker", "db_inc_cb", "db_inc_pb", "db_inc_ps"]:
+        if k in st.session_state: del st.session_state[k]
+
+def reset_pv_callback():
+    for k in ["pv_start", "pv_end", "pv_ticker", "pv_notional", "pv_mkt_cap", "pv_ema_filter"]:
+        if k in st.session_state: del st.session_state[k]
+
 COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
@@ -203,20 +219,22 @@ def run_options_database_app(df):
     )
 
 def run_rankings_app(df):
-    """Rank symbols based on trade volume and sentiment logic"""
+    """Rank symbols based on trade volume and sentiment logic with bullish/bearish split"""
     st.title("🏆 Rankings")
 
     # Formula is (Calls Bought) + (Puts Sold) - (Puts Bought)
-    # Default range: 2 weeks before yesterday to yesterday
     yesterday = date.today() - timedelta(days=1)
     start_default = yesterday - timedelta(days=14)
 
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
-    c1, c2 = st.columns(2, gap="medium")
+    # Using smaller column ratios to shrink date input boxes
+    c1, c2, c3, c_pad = st.columns([1.5, 1.5, 1, 2], gap="small")
     with c1:
         rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
     with c2:
         rank_end = st.date_input("Trade End Date", value=yesterday, key="rank_end")
+    with c3:
+        limit = st.number_input("Limit", value=20, min_value=1, max_value=200, key="rank_limit")
     st.markdown('</div>', unsafe_allow_html=True)
 
     f = df.copy()
@@ -230,29 +248,34 @@ def run_rankings_app(df):
         return
 
     # Count occurrences per type per symbol
-    # We pivot to get one row per symbol
     counts = f.groupby(["Symbol", "Order Type"]).size().unstack(fill_value=0)
     
-    # Ensure all required columns exist
+    # Ensure all required columns exist for the formula
     for col in ["Calls Bought", "Puts Sold", "Puts Bought"]:
         if col not in counts.columns:
             counts[col] = 0
 
-    # Calculate Score
+    # Score calculation
     counts["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
     
-    # Sort and display
-    res = counts[["Calls Bought", "Puts Sold", "Puts Bought", "Score"]].sort_values(by="Score", ascending=False).reset_index()
+    # Final Result Construction
+    res = counts[["Calls Bought", "Puts Sold", "Puts Bought", "Score"]].reset_index()
     
-    st.subheader("Symbol Sentiment Rankings")
-    st.caption("Score = (Calls Bought) + (Puts Sold) - (Puts Bought)")
-    
-    st.dataframe(
-        res,
-        use_container_width=True,
-        hide_index=True,
-        height=get_table_height(res, max_rows=30)
-    )
+    # Tables Construction
+    bull_df = res.sort_values(by="Score", ascending=False).head(limit)
+    bear_df = res.sort_values(by="Score", ascending=True).head(limit)
+
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.markdown("<h3 style='color: #71d28a; font-size: 1.2rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
+        st.caption("Top Score (High to Low)")
+        st.dataframe(bull_df, use_container_width=True, hide_index=True, height=get_table_height(bull_df))
+
+    with col_right:
+        st.markdown("<h3 style='color: #f29ca0; font-size: 1.2rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
+        st.caption("Bottom Score (Low to High)")
+        st.dataframe(bear_df, use_container_width=True, hide_index=True, height=get_table_height(bear_df))
 
 def run_strike_zones_app(df):
     """Options Strike Zones with side-by-side charts and interactive inclusion logic"""
@@ -611,8 +634,26 @@ if st.session_state["authentication_status"]:
     .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
     th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-    .legend-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; margin-top: 25px; color: var(--text); text-transform: uppercase; letter-spacing: 0.8px; opacity: 0.9; }
-    .legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 14px; color: var(--text); }
+    
+    /* Clean text-based legend styling - Text set to White for readability */
+    .legend-title { 
+        font-size: 14px; 
+        font-weight: 700; 
+        margin-bottom: 12px; 
+        margin-top: 25px; 
+        color: #ffffff; 
+        text-transform: uppercase; 
+        letter-spacing: 0.8px; 
+        opacity: 1.0; 
+    }
+    .legend-item { 
+        display: flex; 
+        align-items: center; 
+        gap: 10px; 
+        margin-bottom: 8px; 
+        font-size: 14px; 
+        color: #ffffff; 
+    }
     .color-dot { width: 14px; height: 14px; border-radius: 3px; }
     </style>""", unsafe_allow_html=True)
     
