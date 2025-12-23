@@ -74,17 +74,20 @@ def process_ticker_indicators(df, timeframe='Daily'):
     """
     FIX: Indicators are calculated on the RAW dataframe first.
     Slicing/Resampling happens AFTER to ensure indicator warm-up parity.
+    Explicit separation of Daily/Weekly paths.
     """
     df = df.copy().sort_values('Date')
     
     # --- STEP 1: Calculate on full raw data ---
+    # This ensures RSI and EMA have the same 'history' as your local computer
     df['RSI'] = calculate_rsi(df['Price'], RSI_PERIOD)
     df['EMA8'] = calculate_ema(df['Price'], EMA_PERIOD) 
     df['EMA21'] = calculate_ema(df['Price'], EMA21_PERIOD)
     df['VolSMA'] = df['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     
-    # --- STEP 2: Resample/Slice if needed ---
+    # --- STEP 2: Explicitly handle Timeframe Logic ---
     if timeframe == 'Weekly':
+        # Resample block: aggregate OHLCV and take the last calculated indicator values
         df = df.resample('W-FRI', on='Date').agg({
             'Open': 'first',
             'High': 'max',
@@ -98,6 +101,7 @@ def process_ticker_indicators(df, timeframe='Daily'):
             'VolSMA': 'last'
         }).reset_index().dropna()
     else:
+        # Daily block: Bypass resampling completely to maintain index integrity
         df = df.dropna()
 
     return df
