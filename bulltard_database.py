@@ -85,8 +85,10 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
 def get_market_cap(symbol: str) -> float:
     try:
         t = yf.Ticker(symbol)
-        # Fallback to info, then try basic stats if info fails
-        mc = t.info.get('marketCap', 0)
+        # Use fast_info as it is much more reliable and faster than info for basic stats
+        mc = t.fast_info.get('market_cap', 0)
+        if not mc:
+            mc = t.info.get('marketCap', 0)
         return float(mc) if mc else 0.0
     except:
         return 0.0
