@@ -143,7 +143,7 @@ COLUMN_CONFIG_PIVOT = {
 # --- 3. APP MODULES ---
 
 def run_strike_zones_app(df):
-    """Restored full Options Strike Zones logic"""
+    """Full Options Strike Zones logic restored"""
     st.title("📊 Options Strike Zones Dashboard")
 
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
@@ -436,22 +436,35 @@ if st.session_state["authentication_status"]:
     .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
     th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-    .legend-box { padding: 10px; border: 1px solid #3a3f45; border-radius: 8px; margin-top: 20px; font-size: 13px; }
-    .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
-    .color-dot { width: 12px; height: 12px; border-radius: 50%; }
+    
+    /* Clean text-based legend styling */
+    .legend-title { 
+        font-size: 14px; 
+        font-weight: 700; 
+        margin-bottom: 12px; 
+        margin-top: 25px; 
+        color: var(--text); 
+        text-transform: uppercase; 
+        letter-spacing: 0.8px;
+        opacity: 0.9;
+    }
+    .legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 14px; color: var(--text); }
+    .color-dot { width: 14px; height: 14px; border-radius: 3px; }
     </style>""", unsafe_allow_html=True)
+    
     with st.sidebar:
         st.header("Navigation")
         app_choice = st.selectbox("Select Tool", ["Strike Zones", "Pivot Tables"])
         
-        st.markdown('<div class="legend-box"><strong>Expiry Legend</strong>', unsafe_allow_html=True)
-        st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
-        st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
-        st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays from now</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
         st.markdown("---")
         authenticator.logout('Logout', 'sidebar')
+        
+        # Expiry Legend only visible in Pivot Tables view, placed below Logout
+        if app_choice == "Pivot Tables":
+            st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays from now</div>', unsafe_allow_html=True)
         
     try:
         sheet_url = st.secrets["GSHEET_URL"]
