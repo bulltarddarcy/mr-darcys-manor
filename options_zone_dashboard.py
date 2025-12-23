@@ -33,6 +33,14 @@ authenticator = stauth.Authenticate(
 authenticator.login(location='main')
 
 # --- 2. GLOBAL DATA LOADING & UTILITIES ---
+COLUMN_CONFIG_PIVOT = {
+    "Symbol": st.column_config.TextColumn("Sym", width=65),
+    "Strike": st.column_config.TextColumn("Strike", width=95),
+    "Expiry_Table": st.column_config.TextColumn("Exp", width=90),
+    "Contracts": st.column_config.NumberColumn("Qty", width=60),
+    "Dollars": st.column_config.NumberColumn("Dollars", width=110),
+}
+
 @st.cache_data(show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
     df = pd.read_csv(url)
@@ -133,10 +141,8 @@ def run_options_database_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        # Detect ticker passed from session state (set by Rankings links)
         default_ticker = st.session_state.get("db_ticker", "")
         db_ticker = st.text_input("Ticker", value=default_ticker, key="db_ticker_input").strip().upper()
-        # Keep state updated
         st.session_state["db_ticker"] = db_ticker
     with c2:
         start_date = st.date_input("Trade Start Date", value=None, key="db_start")
@@ -163,7 +169,6 @@ def run_options_database_app(df):
     if db_exp_end:
         f = f[f["Expiry_DT"].dt.date <= db_exp_end]
 
-    # Handle column casing
     order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
     allowed_types = []
     if inc_cb: allowed_types.append("Calls Bought")
@@ -200,7 +205,7 @@ def run_options_database_app(df):
     )
 
 def run_rankings_app(df):
-    """Rank symbols based on trade count volume and sentiment score"""
+    """Rank symbols based on trade count volume and sentiment score using standard tables"""
     st.title("🏆 Rankings")
 
     yesterday = date.today() - timedelta(days=1)
@@ -244,50 +249,28 @@ def run_rankings_app(df):
     res = counts.reset_index().merge(last_trades, on="Symbol")
     res = res.rename(columns={"Trade Date": "Last Trade"})
     
-    bull_df = res.sort_values(by=["Score", "Trade Count"], ascending=[False, False]).head(limit)
-    bear_df = res.sort_values(by=["Score", "Trade Count"], ascending=[True, False]).head(limit)
+    # Selection and configuration for tables
+    display_cols = ["Symbol", "Trade Count", "Last Trade", "Score"]
+    rank_col_config = {
+        "Symbol": st.column_config.TextColumn("Symbol", width=70),
+        "Trade Count": st.column_config.NumberColumn("Trade Count", width=100),
+        "Last Trade": st.column_config.TextColumn("Last Trade", width=100),
+        "Score": st.column_config.NumberColumn("Score", width=60),
+    }
 
-    def render_html_ranking_table(df, title, title_color, caption):
-        st.markdown(f"<h3 style='color: {title_color}; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>{title}</h3>", unsafe_allow_html=True)
-        st.caption(caption)
-        
-        table_rows = ""
-        for _, row in df.iterrows():
-            # Use relative URL parameters to avoid host redirection issues
-            url = f"?tool=Options+Database&ticker={row['Symbol']}"
-            table_rows += f"""
-                <tr>
-                    <td style="padding: 10px 8px; border-bottom: 1px solid #3a3f45;">
-                        <a href="{url}" target="_self" style="color: #66b7ff; text-decoration: none; font-weight: 600;">{row['Symbol']}</a>
-                    </td>
-                    <td style="padding: 10px 8px; border-bottom: 1px solid #3a3f45;">{row['Trade Count']}</td>
-                    <td style="padding: 10px 8px; border-bottom: 1px solid #3a3f45;">{row['Last Trade']}</td>
-                    <td style="padding: 10px 8px; border-bottom: 1px solid #3a3f45;">{row['Score']}</td>
-                </tr>
-            """
-
-        html_table = f"""
-        <table style="width: 100%; border-collapse: collapse; color: #e7e7ea; font-family: sans-serif; font-size: 13px; margin-top: 10px;">
-            <thead>
-                <tr style="background: #262730; color: #888; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px;">
-                    <th style="text-align: left; padding: 10px 8px; border-bottom: 1px solid #3a3f45;">Symbol</th>
-                    <th style="text-align: left; padding: 10px 8px; border-bottom: 1px solid #3a3f45;">Count</th>
-                    <th style="text-align: left; padding: 10px 8px; border-bottom: 1px solid #3a3f45;">Last Trade</th>
-                    <th style="text-align: left; padding: 10px 8px; border-bottom: 1px solid #3a3f45;">Score</th>
-                </tr>
-            </thead>
-            <tbody>
-                {table_rows}
-            </tbody>
-        </table>
-        """
-        st.markdown(html_table, unsafe_allow_html=True)
+    bull_df = res[display_cols].sort_values(by=["Score", "Trade Count"], ascending=[False, False]).head(limit)
+    bear_df = res[display_cols].sort_values(by=["Score", "Trade Count"], ascending=[True, False]).head(limit)
 
     col_left, col_right = st.columns(2, gap="large")
     with col_left:
-        render_html_ranking_table(bull_df, "Bullish Rankings", "#71d28a", "Highest Sentiment Scores")
+        st.markdown("<h3 style='color: #71d28a; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
+        st.caption("Highest Sentiment Scores")
+        st.dataframe(bull_df, use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bull_df))
+
     with col_right:
-        render_html_ranking_table(bear_df, "Bearish Rankings", "#f29ca0", "Lowest Sentiment Scores")
+        st.markdown("<h3 style='color: #f29ca0; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
+        st.caption("Lowest Sentiment Scores")
+        st.dataframe(bear_df, use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bear_df))
 
 def run_strike_zones_app(df):
     """Options Strike Zones with side-by-side charts and interactive inclusion logic"""
@@ -491,14 +474,12 @@ def run_pivot_tables_app(df):
 
 # --- 4. MAIN EXECUTION ---
 if st.session_state["authentication_status"]:
-    # Handle direct navigation and ticker passing via query params
+    # Check for direct link parameters from Rankings
     params = st.query_params
     if "tool" in params:
         st.session_state["app_choice_internal"] = params.get("tool")
     if "ticker" in params:
         st.session_state["db_ticker"] = params.get("ticker")
-    
-    # Consume query params only once
     if "tool" in params or "ticker" in params:
         st.query_params.clear()
 
