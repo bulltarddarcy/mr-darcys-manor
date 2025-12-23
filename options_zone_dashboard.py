@@ -101,15 +101,15 @@ def get_table_height(df, max_rows=30):
     # Increased max_rows check to 30 as requested
     return (display_rows + 1) * 35 + 5
 
-# Shared column configuration to keep widths small
+# Shared column configuration standardized to 'small' for all columns
 COLUMN_CONFIG = {
     "Symbol": st.column_config.TextColumn(width="small"),
     "Strike": st.column_config.TextColumn(width="small"),
-    "Expiry": st.column_config.TextColumn(width="medium"),
+    "Expiry": st.column_config.TextColumn(width="small"),
     "Contracts": st.column_config.NumberColumn(width="small"),
-    "Dollars": st.column_config.NumberColumn(width="medium"),
-    "Trade Date": st.column_config.TextColumn(width="medium"),
-    "Order Type": st.column_config.TextColumn(width="medium"),
+    "Dollars": st.column_config.NumberColumn(width="small"),
+    "Trade Date": st.column_config.TextColumn(width="small"),
+    "Order Type": st.column_config.TextColumn(width="small"),
     "Strike (Actual)": st.column_config.NumberColumn(width="small"),
 }
 
@@ -377,7 +377,8 @@ def run_pivot_tables_app(df):
         if not calls_bought.empty:
             st.dataframe(
                 calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
-                use_container_width=True,
+                # Disabled container width to prevent 'gigantic' columns
+                use_container_width=False,
                 hide_index=True,
                 height=get_table_height(calls_bought, max_rows=30),
                 column_config=COLUMN_CONFIG
@@ -392,7 +393,8 @@ def run_pivot_tables_app(df):
         if not puts_sold.empty:
             st.dataframe(
                 puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
-                use_container_width=True,
+                # Disabled container width to prevent 'gigantic' columns
+                use_container_width=False,
                 hide_index=True,
                 height=get_table_height(puts_sold, max_rows=30),
                 column_config=COLUMN_CONFIG
@@ -400,7 +402,7 @@ def run_pivot_tables_app(df):
         else:
             st.info("No Puts Sold matching filters.")
 
-    # 3. Risk Reversals Table (Date Filter only) - Keeps full width
+    # 3. Risk Reversals Table (Date Filter only) - Keeps full width logic but config-constrained
     st.subheader("Risk Reversals")
     rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     rr_data = rr_data[rr_data["Order Type"] == "Risk Reversals"]
@@ -423,13 +425,17 @@ def run_pivot_tables_app(df):
         rr_pivot.loc[rr_pivot["Symbol"] == rr_pivot["Symbol"].shift(1), "Symbol_Display"] = ""
         rr_final = rr_pivot.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
         
+        # Define local RR config to match standardized 'small' widths
+        rr_config = COLUMN_CONFIG.copy()
+        rr_config["Order Type"] = st.column_config.TextColumn(width="small")
+
         rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
         st.dataframe(
             rr_final[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
             use_container_width=False,
             hide_index=True,
             height=get_table_height(rr_final, max_rows=30),
-            column_config=COLUMN_CONFIG
+            column_config=rr_config
         )
     else:
         st.info("No Risk Reversals found in this date range.")
