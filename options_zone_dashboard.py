@@ -210,8 +210,11 @@ def run_options_database_app(df):
     )
 
 def run_strike_zones_app(df):
-    """Restored full Options Strike Zones logic with interactive inclusion logic"""
-    st.title("📊 Options Strike Zones Dashboard")
+    """Restored full Options Strike Zones logic with interactive inclusion logic and fixed UI reset"""
+    st.title("📊 Options Strike Zones")
+
+    # Calculate default expiry range for reset logic
+    exp_range_default = (date.today() + timedelta(days=365))
 
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
@@ -222,7 +225,6 @@ def run_strike_zones_app(df):
     with c3:
         td_end = st.date_input("Trade Date (end)", value=st.session_state.get("sz_end", None), key="sz_end")
     with c4:
-        exp_range_default = (date.today() + timedelta(days=365))
         exp_end = st.date_input("Exp. Range (end)", value=st.session_state.get("sz_exp", exp_range_default), key="sz_exp")
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -249,11 +251,16 @@ def run_strike_zones_app(df):
         
         st.markdown("---")
         if st.button("Reset All Defaults", use_container_width=True):
-            keys_to_clear = ["sz_ticker", "sz_start", "sz_end", "sz_exp"]
+            # To force widgets to reset, we update their session state keys explicitly
+            st.session_state["sz_ticker"] = "AMZN"
+            st.session_state["sz_start"] = None
+            st.session_state["sz_end"] = None
+            st.session_state["sz_exp"] = exp_range_default
+            
+            # Clear the specific inclusion state key for this ticker
             inc_key = f"sz_include_{ticker}"
             if inc_key in st.session_state: del st.session_state[inc_key]
-            for k in keys_to_clear:
-                if k in st.session_state: del st.session_state[k]
+            
             st.rerun()
 
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
@@ -408,7 +415,7 @@ def run_strike_zones_app(df):
             "Symbol": st.column_config.TextColumn("Symbol"),
             "Strike": st.column_config.TextColumn("Strike"),
             "Expiry Display": st.column_config.TextColumn("Expiry"),
-            "Contracts": st.column_config.NumberColumn("Contracts", format="%d"),
+            "Contracts": st.column_config.NumberColumn("Contracts", format="%,d"),
             "Dollars": st.column_config.NumberColumn("Dollars", format="$%,.0f"),
             "Included": st.column_config.CheckboxColumn("Included", default=True)
         }
@@ -600,8 +607,13 @@ if st.session_state["authentication_status"]:
             st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
             st.markdown("---")
             if st.button("Reset All Defaults", use_container_width=True, key="pv_reset_btn"):
-                for k in ["pv_start", "pv_end", "pv_ticker", "pv_notional", "pv_mkt_cap", "pv_ema_filter"]:
-                    if k in st.session_state: del st.session_state[k]
+                # Reset pivot table session states explicitly
+                st.session_state["pv_start"] = yesterday
+                st.session_state["pv_end"] = yesterday
+                st.session_state["pv_ticker"] = ""
+                st.session_state["pv_notional"] = "5M"
+                st.session_state["pv_mkt_cap"] = "100B"
+                st.session_state["pv_ema_filter"] = "All"
                 st.rerun()
         
     try:
