@@ -126,7 +126,7 @@ def clean_strike_fmt(val):
     except:
         return str(val)
 
-# Shrunk column widths for side-by-side pivot tables
+# Column widths for side-by-side tables
 COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
@@ -155,7 +155,6 @@ def run_strike_zones_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     with st.sidebar:
-        # Header removed as requested
         def compact_divider():
             st.markdown('<hr style="margin: 1.0em 0; opacity: 0.15;">', unsafe_allow_html=True)
         st.markdown("**View Mode**")
@@ -178,9 +177,7 @@ def run_strike_zones_app(df):
         
         st.markdown("---")
         if st.button("Reset All Defaults", use_container_width=True):
-            # Clear keys for widgets and inclusion state
             keys_to_clear = ["sz_ticker", "sz_start", "sz_end", "sz_exp"]
-            # Also clear the specific inclusion state key for this ticker
             inc_key = f"sz_include_{ticker}"
             if inc_key in st.session_state: del st.session_state[inc_key]
             for k in keys_to_clear:
@@ -322,7 +319,6 @@ def run_strike_zones_app(df):
     if show_table:
         st.subheader("Data Table")
         st.caption("Tip: Uncheck 'Included' to exclude a trade from calculations and charts above.")
-        
         column_config = {
             "Trade Date Display": st.column_config.TextColumn("Trade Date"),
             "Order Type": st.column_config.TextColumn("Order Type"),
@@ -333,7 +329,6 @@ def run_strike_zones_app(df):
             "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
             "Included": st.column_config.CheckboxColumn("Included", default=True)
         }
-
         edited_df = st.data_editor(
             edit_pool[cols_to_show],
             column_config=column_config,
@@ -341,14 +336,13 @@ def run_strike_zones_app(df):
             hide_index=True,
             key="strike_zones_editor"
         )
-
         if not edited_df.equals(edit_pool[cols_to_show]):
             st.session_state[state_key] = edited_df["Included"].tolist()
             st.rerun()
 
 
 def run_pivot_tables_app(df):
-    """Analyzes exposure using Pivot Tables with robust 1:1 Risk Reversal pairing"""
+    """Analyzes exposure using Pivot Tables with robust 1:1 Risk Reversal pairing and split row display"""
     st.title("🎯 Pivot Tables")
     yesterday = date.today() - timedelta(days=1)
 
@@ -388,16 +382,33 @@ def run_pivot_tables_app(df):
     df_cb_solo = cb_pool[~cb_pool['_original_idx'].isin(used_cb_ids)].copy()
     df_ps_solo = ps_pool[~ps_pool['_original_idx'].isin(used_ps_ids)].copy()
     
-    df_rr = pd.DataFrame(columns=['Symbol', 'Strike', 'Expiry_DT', 'Contracts', 'Dollars'])
+    # Constructing RR data as split rows
+    df_rr_rows = []
     if not rr_matches.empty:
-        df_rr_matched = pd.DataFrame()
-        df_rr_matched['Symbol'] = rr_matches['Symbol']
-        df_rr_matched['Trade Date'] = rr_matches['Trade Date']
-        df_rr_matched['Expiry_DT'] = rr_matches['Expiry_DT']
-        df_rr_matched['Contracts'] = rr_matches['Contracts']
-        df_rr_matched['Dollars'] = rr_matches['Dollars_c'] + rr_matches['Dollars_p']
-        df_rr_matched['Strike'] = rr_matches['Strike_c'].apply(clean_strike_fmt) + " & " + rr_matches['Strike_p'].apply(clean_strike_fmt)
-        df_rr = df_rr_matched
+        for idx, row in rr_matches.iterrows():
+            # Call side row
+            df_rr_rows.append({
+                'Symbol': row['Symbol'],
+                'Trade Date': row['Trade Date'],
+                'Expiry_DT': row['Expiry_DT'],
+                'Contracts': row['Contracts'],
+                'Dollars': row['Dollars_c'],
+                'Strike': f"{clean_strike_fmt(row['Strike_c'])} (C)",
+                'Pair_ID': idx,
+                'Pair_Side': 0 # Call is first
+            })
+            # Put side row
+            df_rr_rows.append({
+                'Symbol': row['Symbol'],
+                'Trade Date': row['Trade Date'],
+                'Expiry_DT': row['Expiry_DT'],
+                'Contracts': row['Contracts'],
+                'Dollars': row['Dollars_p'],
+                'Strike': f"{clean_strike_fmt(row['Strike_p'])} (P)",
+                'Pair_ID': idx,
+                'Pair_Side': 1 # Put is second
+            })
+    df_rr = pd.DataFrame(df_rr_rows)
 
     def apply_filters(data, exclude_filters=False):
         if data.empty: return data
@@ -418,37 +429,48 @@ def run_pivot_tables_app(df):
     df_ps_f = apply_filters(df_ps_solo, exclude_filters=False)
     df_rr_f = apply_filters(df_rr, exclude_filters=True)
 
-    def get_ranked_pivot(data):
+    def get_ranked_pivot(data, is_rr=False):
         if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
+        
         sym_rank = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
-        piv = data.groupby(["Symbol", "Strike", "Expiry_DT"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index()
-        piv = piv.merge(sym_rank, on="Symbol")
-        piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
-        piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
+        
+        if is_rr:
+            # For RR, we don't aggregate by Strike because we want to see both rows of the pair.
+            # We just merge the rank and sort.
+            piv = data.merge(sym_rank, on="Symbol")
+            piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
+            # Sort by total symbol volume, then individual Pair_ID to keep calls/puts together
+            piv = piv.sort_values(by=["Total_Sym_Dollars", "Pair_ID", "Pair_Side"], ascending=[False, True, True])
+        else:
+            piv = data.groupby(["Symbol", "Strike", "Expiry_DT"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index()
+            piv = piv.merge(sym_rank, on="Symbol")
+            piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
+            piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
+            
         piv["Symbol_Display"] = piv["Symbol"]
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
         res = piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})
         return res[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
 
     col1, col2, col3 = st.columns(3)
-    currency_format = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
+    fmt = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
 
     with col1:
         st.subheader("Calls Bought")
         tbl = get_ranked_pivot(df_cb_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(currency_format).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
+        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
         else: st.info("None.")
     with col2:
         st.subheader("Puts Sold")
         tbl = get_ranked_pivot(df_ps_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(currency_format).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
+        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
         else: st.info("None.")
     with col3:
         st.subheader("Risk Reversals")
-        tbl = get_ranked_pivot(df_rr_f)
+        tbl = get_ranked_pivot(df_rr_f, is_rr=True)
         if not tbl.empty: 
-            st.dataframe(tbl.style.format(currency_format).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-            st.caption("⚠️ RR Table reflects date range only (ignores Ticker, Min Dollars, Mkt Cap, and EMA filters).")
+            st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
+            st.caption("⚠️ RR Table reflects date range only (ignores Ticker, Min Dollars, Mkt Cap, and EMA filters). Pairs are shown as Call row over Put row.")
         else: st.info("None.")
 
 # --- 4. MAIN EXECUTION ---
@@ -460,27 +482,20 @@ if st.session_state["authentication_status"]:
     .control-box{padding:14px 0; border-radius:10px;}
     .zones-panel{padding:14px 0; border-radius:10px;}
     .zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
-    
-    /* Reduced space between label and bar: width reduced to 100px from 220px */
     .zone-label{width:100px;font-weight:700;color:#fff; text-align: right;}
-    
     .zone-bar{height:22px;border-radius:6px;min-width:6px}
     .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
     .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
     .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
-    
-    /* Adjusted Spot Divider CSS - Width 600px, Start offset 112px */
     .price-divider{position:relative;margin:16px 0 12px 0;height:2px;}
-    .price-divider .line{height:2px;background:var(--line);opacity:.9;width:600px;margin-left:112px;}
+    .price-divider .line{height:2px;background:var(--line);opacity:.9;width:652px;margin-left:112px;}
     .price-badge{position:absolute;left:412px;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
       border:1px solid #56b6ff;border-radius:16px;padding:6px 12px;font-weight:800;font-size:12px;letter-spacing:.3px;
       box-shadow:0 2px 8px rgba(0,0,0,.35); white-space: nowrap;}
-      
     .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
     .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
     th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-    
     .legend-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; margin-top: 25px; color: var(--text); text-transform: uppercase; letter-spacing: 0.8px; opacity: 0.9; }
     .legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 14px; color: var(--text); }
     .color-dot { width: 14px; height: 14px; border-radius: 3px; }
@@ -489,7 +504,6 @@ if st.session_state["authentication_status"]:
     with st.sidebar:
         st.header("Navigation")
         app_choice = st.selectbox("Select Tool", ["Strike Zones", "Pivot Tables"])
-        
         st.markdown("---")
         authenticator.logout('Logout', 'sidebar')
         
@@ -498,6 +512,11 @@ if st.session_state["authentication_status"]:
             st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
             st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
             st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays from now</div>', unsafe_allow_html=True)
+            st.markdown("---")
+            if st.button("Reset All Defaults", use_container_width=True, key="pv_reset"):
+                for k in ["pv_start", "pv_end", "pv_ticker", "pv_notional", "pv_mkt_cap", "pv_ema_filter"]:
+                    if k in st.session_state: del st.session_state[k]
+                st.rerun()
         
     try:
         sheet_url = st.secrets["GSHEET_URL"]
