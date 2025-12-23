@@ -2,5 +2,5 @@ streamlit
 pandas
 numpy
 yfinance
-streamlit-authenticator
-pyyaml
+streamlit-authenticator==0.3.4
+PyYAML
