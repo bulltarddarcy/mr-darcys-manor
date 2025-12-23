@@ -98,16 +98,6 @@ def get_table_height(df, max_rows=50):
     display_rows = min(row_count, max_rows)
     return (display_rows + 1) * 35 + 5
 
-def apply_custom_styling(styler, df):
-    """Removes horizontal borders for rows with empty Symbols (grouped tickers)."""
-    def style_borders(row):
-        # If Symbol is empty, remove the top border to visually group it with the above row
-        if row["Symbol"] == "":
-            return ["border-top: none !important"] * len(row)
-        return [""] * len(row)
-    
-    return styler.apply(style_borders, axis=1)
-
 # --- 3. APP MODULES ---
 
 def run_strike_zones_app(df):
@@ -354,6 +344,7 @@ def run_pivot_tables_app(df):
         piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
         
         piv["Symbol_Display"] = piv["Symbol"]
+        # Hide duplicate tickers for cleaner look
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
         
         final_df = piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
@@ -365,12 +356,9 @@ def run_pivot_tables_app(df):
     st.subheader("Calls Bought")
     calls_bought = get_ranked_pivot(f, "Calls Bought", std_cols)
     if not calls_bought.empty:
-        styled_calls = apply_custom_styling(
-            calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}),
-            calls_bought
-        )
+        # Use simple format for display; CSS handling happens via markdown
         st.dataframe(
-            styled_calls, 
+            calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
             use_container_width=True,
             hide_index=True,
             height=get_table_height(calls_bought)
@@ -382,12 +370,8 @@ def run_pivot_tables_app(df):
     st.subheader("Puts Sold")
     puts_sold = get_ranked_pivot(f, "Puts Sold", std_cols)
     if not puts_sold.empty:
-        styled_puts = apply_custom_styling(
-            puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}),
-            puts_sold
-        )
         st.dataframe(
-            styled_puts, 
+            puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
             use_container_width=True,
             hide_index=True,
             height=get_table_height(puts_sold)
@@ -419,12 +403,8 @@ def run_pivot_tables_app(df):
         rr_final = rr_pivot.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
         
         rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
-        styled_rr = apply_custom_styling(
-            rr_final[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}),
-            rr_final
-        )
         st.dataframe(
-            styled_rr, 
+            rr_final[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
             use_container_width=True,
             hide_index=True,
             height=get_table_height(rr_final)
@@ -437,6 +417,7 @@ def run_pivot_tables_app(df):
 if st.session_state["authentication_status"]:
     st.set_page_config(page_title="Trading Toolbox", layout="wide")
     
+    # Updated CSS to remove row separators for rows with empty Symbol column
     st.markdown("""
     <style>
     :root{
@@ -461,6 +442,15 @@ if st.session_state["authentication_status"]:
     .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
     .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
+    
+    /* CUSTOM TABLE STYLING: Remove horizontal lines for rows that have been grouped (Symbol is blank) */
+    [data-testid="stTable"] tr:has(td:first-child:empty) {
+        border-top: none !important;
+    }
+    [data-testid="stDataFrame"] div[data-testid="stTable"] tr:has(td:first-child:empty) td {
+        border-top: none !important;
+    }
+
     th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
     [data-testid="stSidebar"] .stMarkdown p { margin-bottom: 0px; }
     [data-testid="stSidebar"] .stCheckbox { margin-bottom: -10px; }
