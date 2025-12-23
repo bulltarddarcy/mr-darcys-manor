@@ -386,9 +386,9 @@ def run_strike_zones_app(df):
 
     spot, ema8, ema21, sma200, history = get_stock_indicators(ticker)
     
-    if spot is None:
-        st.warning(f"Could not fetch current price for {ticker}. Indicators will not be accurate.")
-        spot = 100.0
+    # Restored fallback manual input exactly as in original file
+    if spot is None: 
+        spot = st.number_input("Manual Current Price", value=100.0)
 
     def pct_from_spot(x):
         if x is None or np.isnan(x): return "—"
