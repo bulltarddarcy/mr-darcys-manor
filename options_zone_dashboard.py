@@ -23,7 +23,6 @@ credentials = {
     }
 }
 
-# Initialize authenticator
 authenticator = stauth.Authenticate(
     credentials, 
     "options_dashboard_cookie", 
@@ -31,29 +30,26 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=30
 )
 
-# Render the login widget
 authenticator.login(location='main')
 
 # --- 2. GLOBAL DATA LOADING ---
 @st.cache_data(show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
     df = pd.read_csv(url)
-    # Adding 'Strike' and 'Expiry' for the Pivot Tables app display
     want = ["Trade Date","Order Type","Symbol","Strike (Actual)","Strike","Expiry","Contracts","Dollars","Error"]
     keep = [c for c in want if c in df.columns]
     df = df[keep].copy()
     
     if "Dollars" in df.columns:
         df["Dollars"] = (df["Dollars"].astype(str)
-                         .str.replace(",", "", regex=False)
-                         .str.replace("$","", regex=False))
+                         .str.replace("$", "", regex=False)
+                         .str.replace(",", "", regex=False))
         df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
     
     if "Trade Date" in df.columns:
         df["Trade Date"] = pd.to_datetime(df["Trade Date"], errors="coerce")
     
     if "Expiry" in df.columns:
-        # We keep both the datetime version for filtering and the raw string for the pivot tables
         df["Expiry_DT"] = pd.to_datetime(df["Expiry"], errors="coerce")
         
     if "Strike (Actual)" in df.columns:
@@ -70,20 +66,21 @@ def run_strike_zones_app(df):
     """Logic for the original Strike Zones Dashboard"""
     st.title("📊 Options Strike Zones Dashboard")
 
+    yesterday = date.today() - timedelta(days=1)
+
     # ---------- Controls ----------
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
         ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
     with c2:
-        td_start = st.date_input("Trade Date (start)", value=date.today() - timedelta(days=180), key="sz_start")
+        td_start = st.date_input("Trade Date (start)", value=yesterday, key="sz_start", format="DD MMM YY")
     with c3:
-        td_end = st.date_input("Trade Date (end)", value=date.today(), key="sz_end")
+        td_end = st.date_input("Trade Date (end)", value=yesterday, key="sz_end", format="DD MMM YY")
     with c4:
-        exp_end = st.date_input("Exp. Range (end)", value=date.today().replace(year=date.today().year+1), key="sz_exp")
+        exp_end = st.date_input("Exp. Range (end)", value=date.today().replace(year=date.today().year+1), key="sz_exp", format="DD MMM YY")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Sidebar Settings
     with st.sidebar:
         st.header("Display Settings")
         def compact_divider():
@@ -124,7 +121,7 @@ def run_strike_zones_app(df):
         st.warning("No trades match current filters.")
         return
 
-    # ---------- Price & Indicators ----------
+    # ---------- indicators ----------
     @st.cache_data(ttl=300)
     def get_stock_indicators(sym: str):
         try:
@@ -227,20 +224,25 @@ def run_strike_zones_app(df):
 
     if show_table:
         st.markdown("### Data Table")
-        st.dataframe(used, use_container_width=True)
+        display_used = used.copy()
+        display_used["Trade Date"] = display_used["Trade Date"].dt.strftime("%d %b %y")
+        display_used["Expiry"] = pd.to_datetime(display_used["Expiry"]).dt.strftime("%d %b %y")
+        st.dataframe(display_used, use_container_width=True)
 
 
 def run_pivot_tables_app(df):
     """Analyzes exposure using Pivot Tables across defined order types"""
     st.title("💼 Pivot Tables")
     
+    yesterday = date.today() - timedelta(days=1)
+
     # ---------- Inputs ----------
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        td_start = st.date_input("Trade Start Date", value=date.today() - timedelta(days=90), key="pv_start")
+        td_start = st.date_input("Trade Start Date", value=yesterday, key="pv_start", format="DD MMM YY")
     with c2:
-        td_end = st.date_input("Trade End Date", value=date.today(), key="pv_end")
+        td_end = st.date_input("Trade End Date", value=yesterday, key="pv_end", format="DD MMM YY")
     with c3:
         ticker_filter = st.text_input("Ticker (leave blank for all)", value="", key="pv_ticker").strip().upper()
     with c4:
@@ -249,36 +251,50 @@ def run_pivot_tables_app(df):
         min_notional = notional_choices[min_notional_label]
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ---------- Global Filtering (for Calls Bought / Puts Sold) ----------
+    # ---------- Global Filtering ----------
     f = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     
-    # Ticker Filter
     if ticker_filter:
         f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
     
-    # Notional Filter
     f = f[f["Dollars"] >= min_notional]
 
-    def get_pivot(data, order_type, columns):
+    def get_ranked_pivot(data, order_type, columns):
         subset = data[data["Order Type"] == order_type].copy()
         if subset.empty:
             return pd.DataFrame(columns=columns)
-        # Grouping by Symbol, Strike (text), and Expiry (text)
+        
+        # 1. aggregate at Symbol level to find 'Total Rank'
+        sym_rank = subset.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
+        
+        # 2. Perform main aggregation
         piv = subset.groupby(["Symbol", "Strike", "Expiry"]).agg({
             "Contracts": "sum",
             "Dollars": "sum"
         }).reset_index()
-        # Ensure numeric types for formatting
+        
+        # 3. Join rank data to main pivot
+        piv = piv.merge(sym_rank, on="Symbol")
+        
+        # 4. Standardize types and format Expiry
         piv["Contracts"] = pd.to_numeric(piv["Contracts"], errors='coerce').fillna(0)
         piv["Dollars"] = pd.to_numeric(piv["Dollars"], errors='coerce').fillna(0.0)
-        return piv[columns].sort_values(["Symbol", "Expiry"])
+        piv["Expiry"] = pd.to_datetime(piv["Expiry"]).dt.strftime("%d %b %y")
+        
+        # 5. SORT: By Total Symbol Vol (Desc), then by Strike Dollars (Desc)
+        piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
+        
+        # 6. CLEAR REDUNDANT SYMBOLS (Leave rows below the first empty)
+        # Use shift() to check if current symbol is same as previous
+        piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol"] = ""
+        
+        return piv[columns]
 
-    # Columns for standard tables
     std_cols = ["Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
 
     # 1. Calls Bought Table
     st.subheader("Calls Bought")
-    calls_bought = get_pivot(f, "Calls Bought", std_cols)
+    calls_bought = get_ranked_pivot(f, "Calls Bought", std_cols)
     if not calls_bought.empty:
         st.dataframe(calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True)
     else:
@@ -286,28 +302,36 @@ def run_pivot_tables_app(df):
 
     # 2. Puts Sold Table
     st.subheader("Puts Sold")
-    puts_sold = get_pivot(f, "Puts Sold", std_cols)
+    puts_sold = get_ranked_pivot(f, "Puts Sold", std_cols)
     if not puts_sold.empty:
         st.dataframe(puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True)
     else:
         st.info("No Puts Sold found matching these filters.")
 
-    # 3. Risk Reversals Table (Special Exceptions)
-    # Ignores ticker and notional filters, only uses start/end dates
+    # 3. Risk Reversals Table
     st.subheader("Risk Reversals")
     rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     rr_data = rr_data[rr_data["Order Type"] == "Risk Reversals"]
     
     if not rr_data.empty:
-        # Grouping with Order Type included between Symbol and Strike
-        rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
+        sym_rank_rr = rr_data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
         rr_pivot = rr_data.groupby(["Symbol", "Order Type", "Strike", "Expiry"]).agg({
             "Contracts": "sum",
             "Dollars": "sum"
         }).reset_index()
-        # Coerce types for the style formatter
+        
+        rr_pivot = rr_pivot.merge(sym_rank_rr, on="Symbol")
         rr_pivot["Contracts"] = pd.to_numeric(rr_pivot["Contracts"], errors='coerce').fillna(0)
         rr_pivot["Dollars"] = pd.to_numeric(rr_pivot["Dollars"], errors='coerce').fillna(0.0)
+        rr_pivot["Expiry"] = pd.to_datetime(rr_pivot["Expiry"]).dt.strftime("%d %b %y")
+        
+        # Sort
+        rr_pivot = rr_pivot.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
+        
+        # Clear redundant symbols for RR table
+        rr_pivot.loc[rr_pivot["Symbol"] == rr_pivot["Symbol"].shift(1), "Symbol"] = ""
+        
+        rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
         st.dataframe(rr_pivot[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True)
     else:
         st.info("No Risk Reversals found in this date range.")
@@ -315,7 +339,6 @@ def run_pivot_tables_app(df):
 
 # --- 4. MAIN EXECUTION ---
 if st.session_state["authentication_status"]:
-    # 1. Page Config & Global Styling
     st.set_page_config(page_title="Trading Toolbox", layout="wide")
     
     st.markdown("""
@@ -348,14 +371,12 @@ if st.session_state["authentication_status"]:
     </style>
     """, unsafe_allow_html=True)
 
-    # 2. Sidebar Navigation
     with st.sidebar:
         st.header("Navigation")
         app_choice = st.selectbox("Select Tool", ["Strike Zones", "Pivot Tables"])
         st.markdown("---")
         authenticator.logout('Logout', 'sidebar')
 
-    # 3. Load Global Data
     try:
         sheet_url = st.secrets["GSHEET_URL"]
         df_global = load_and_clean_data(sheet_url)
@@ -363,13 +384,11 @@ if st.session_state["authentication_status"]:
         st.error(f"Error initializing data: {e}")
         st.stop()
 
-    # 4. Routing
     if app_choice == "Strike Zones":
         run_strike_zones_app(df_global)
     elif app_choice == "Pivot Tables":
         run_pivot_tables_app(df_global)
 
-# --- 5. LOGIN FEEDBACK ---
 elif st.session_state["authentication_status"] is False:
     st.error('Username/password is incorrect')
 elif st.session_state["authentication_status"] is None:
