@@ -4,7 +4,7 @@ warnings.filterwarnings("ignore", message="Could not infer format", category=Use
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import yfinance as yf
 import math
 import streamlit_authenticator as stauth
@@ -78,7 +78,8 @@ def run_strike_zones_app(df):
     with c3:
         td_end = st.date_input("Trade Date (end)", value=yesterday, key="sz_end", format="DD MMM YY")
     with c4:
-        exp_end = st.date_input("Exp. Range (end)", value=date.today().replace(year=date.today().year+1), key="sz_exp", format="DD MMM YY")
+        exp_range_end = date.today().replace(year=date.today().year+1)
+        exp_end = st.date_input("Exp. Range (end)", value=exp_range_end, key="sz_exp", format="DD MMM YY")
     st.markdown('</div>', unsafe_allow_html=True)
 
     with st.sidebar:
@@ -285,9 +286,11 @@ def run_pivot_tables_app(df):
         piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
         
         # 6. CLEAR REDUNDANT SYMBOLS (Leave rows below the first empty)
-        # Use shift() to check if current symbol is same as previous
-        piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol"] = ""
+        # Use shift() to check if current symbol is same as previous in the sorted order
+        piv["Symbol_Display"] = piv["Symbol"]
+        piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
         
+        piv = piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
         return piv[columns]
 
     std_cols = ["Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
@@ -329,7 +332,9 @@ def run_pivot_tables_app(df):
         rr_pivot = rr_pivot.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
         
         # Clear redundant symbols for RR table
-        rr_pivot.loc[rr_pivot["Symbol"] == rr_pivot["Symbol"].shift(1), "Symbol"] = ""
+        rr_pivot["Symbol_Display"] = rr_pivot["Symbol"]
+        rr_pivot.loc[rr_pivot["Symbol"] == rr_pivot["Symbol"].shift(1), "Symbol_Display"] = ""
+        rr_pivot = rr_pivot.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
         
         rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
         st.dataframe(rr_pivot[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True)
