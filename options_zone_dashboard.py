@@ -124,29 +124,6 @@ def clean_strike_fmt(val):
     except:
         return str(val)
 
-# Reset Callbacks to prevent Session State modification errors
-def reset_sz_callback():
-    for k in ["sz_ticker", "sz_start", "sz_end", "sz_exp"]:
-        if k in st.session_state: del st.session_state[k]
-    to_del = [key for key in st.session_state.keys() if key.startswith("sz_include_")]
-    for key in to_del: del st.session_state[key]
-
-def reset_db_callback():
-    for k in ["db_start", "db_end", "db_exp", "db_ticker", "db_inc_cb", "db_inc_pb", "db_inc_ps"]:
-        if k in st.session_state: del st.session_state[k]
-
-def reset_pv_callback():
-    for k in ["pv_start", "pv_end", "pv_ticker", "pv_notional", "pv_mkt_cap", "pv_ema_filter"]:
-        if k in st.session_state: del st.session_state[k]
-
-COLUMN_CONFIG_PIVOT = {
-    "Symbol": st.column_config.TextColumn("Sym", width=65),
-    "Strike": st.column_config.TextColumn("Strike", width=95),
-    "Expiry_Table": st.column_config.TextColumn("Exp", width=90),
-    "Contracts": st.column_config.NumberColumn("Qty", width=60),
-    "Dollars": st.column_config.NumberColumn("Dollars", width=110),
-}
-
 # --- 3. APP MODULES ---
 
 def run_options_database_app(df):
@@ -156,7 +133,7 @@ def run_options_database_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        # Detect ticker passed from Rankings links
+        # Ticker input, check if passed from Rankings links
         default_ticker = st.session_state.get("db_ticker", "")
         db_ticker = st.text_input("Ticker", value=default_ticker, key="db_ticker_input").strip().upper()
         st.session_state["db_ticker"] = db_ticker
@@ -248,9 +225,14 @@ def run_rankings_app(df):
 
     target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
     f_filtered = f[f["Order Type"].isin(target_types)].copy()
-    last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
     
+    if f_filtered.empty:
+        st.warning("No trades of the specified sentiment types found in this range.")
+        return
+
+    last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
     counts = f_filtered.groupby(["Symbol", "Order Type"]).size().unstack(fill_value=0)
+    
     for col in target_types:
         if col not in counts.columns: counts[col] = 0
 
@@ -260,17 +242,16 @@ def run_rankings_app(df):
     res = counts.reset_index().merge(last_trades, on="Symbol")
     res = res.rename(columns={"Trade Date": "Last Trade"})
     
-    bull_df = res.sort_values(by="Score", ascending=False).head(limit)
-    bear_df = res.sort_values(by="Score", ascending=True).head(limit)
+    bull_df = res.sort_values(by=["Score", "Trade Count"], ascending=[False, False]).head(limit)
+    bear_df = res.sort_values(by=["Score", "Trade Count"], ascending=[True, False]).head(limit)
 
     def render_html_ranking_table(df, title, title_color, caption):
         st.markdown(f"<h3 style='color: {title_color}; font-size: 1.1rem; margin-bottom: 0;'>{title}</h3>", unsafe_allow_html=True)
         st.caption(caption)
         
-        # HTML template for compact tables with self-targeting links
         html = f"""
         <style>
-            .rank-table {{ width: 100%; border-collapse: collapse; font-family: sans-serif; font-size: 13.5px; color: #e7e7ea; margin-top: 10px; }}
+            .rank-table {{ width: 100%; border-collapse: collapse; font-family: sans-serif; font-size: 13px; color: #e7e7ea; margin-top: 10px; }}
             .rank-table th {{ text-align: left; padding: 10px 8px; border-bottom: 1px solid #3a3f45; background: #262730; color: #888; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }}
             .rank-table td {{ padding: 10px 8px; border-bottom: 1px solid #3a3f45; }}
             .rank-table tr:hover {{ background: #2b2d33; }}
@@ -280,10 +261,10 @@ def run_rankings_app(df):
         <table class="rank-table">
             <thead>
                 <tr>
-                    <th style="width: 20%;">Symbol</th>
-                    <th style="width: 25%;">Trade Count</th>
-                    <th style="width: 30%;">Last Trade</th>
-                    <th style="width: 25%;">Score</th>
+                    <th style="width: 25%;">Symbol</th>
+                    <th style="width: 20%;">Count</th>
+                    <th style="width: 35%;">Last Trade</th>
+                    <th style="width: 20%;">Score</th>
                 </tr>
             </thead>
             <tbody>
@@ -431,7 +412,7 @@ def run_strike_zones_app(df):
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
                 for _, r in zs[zs["Zone_Low"] + (zone_w/2) < spot].sort_values("ZoneIdx", ascending=False).iterrows():
-                    color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
+                    color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max_abs if 'max_abs' in locals() else abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
             else:
@@ -471,7 +452,7 @@ def run_pivot_tables_app(df):
     keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
     cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
     rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
-    df_cb_solo, df_ps_solo = cb_pool[~cb_pool.index.isin(rr_matches['index_x'] if 'index_x' in rr_matches else [])], ps_pool[~ps_pool.index.isin(rr_matches['index_y'] if 'index_y' in rr_matches else [])]
+    df_cb_solo, df_ps_solo = cb_pool[~cb_pool.index.isin(rr_matches.index)], ps_pool[~ps_pool.index.isin(rr_matches.index)]
     
     rr_rows = []
     for idx, row in rr_matches.iterrows():
@@ -515,7 +496,7 @@ def run_pivot_tables_app(df):
 
 # --- 4. MAIN EXECUTION ---
 if st.session_state["authentication_status"]:
-    # Handle incoming navigation params from HTML rankings links
+    # Handle direct navigation and ticker passing via query params
     params = st.query_params
     if "tool" in params and "ticker" in params:
         st.session_state["app_choice_internal"] = params["tool"]
