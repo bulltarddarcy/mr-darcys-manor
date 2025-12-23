@@ -495,7 +495,7 @@ if st.session_state["authentication_status"]:
     .control-box{padding:14px 0; border-radius:10px;}
     .zones-panel{padding:14px 0; border-radius:10px;}
     .zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
-    .zone-label{width:100px;font-weight:700;color:#fff; text-align: right;}
+    .zone-label{width:100px;font-weight:700; text-align: right;}
     .zone-bar{height:22px;border-radius:6px;min-width:6px}
     .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
     .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
