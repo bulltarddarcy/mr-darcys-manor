@@ -33,11 +33,27 @@ def get_drive_file_id(url):
     return None
 
 def download_large_drive_file(file_id):
-    """Downloads files from Drive, attempting to bypass the virus scan warning for large files."""
-    # Use the confirm=t parameter which is a common bypass for the virus scan warning
-    base_url = f"https://docs.google.com/uc?export=download&id={file_id}&confirm=t"
+    """
+    Downloads files from Drive, handling the virus scan warning for large files
+    by extracting the confirmation token from the session cookies.
+    """
+    base_url = "https://docs.google.com/uc?export=download"
     session = requests.Session()
-    response = session.get(base_url, stream=True)
+    
+    # First attempt to get the confirmation token
+    response = session.get(base_url, params={'id': file_id}, stream=True)
+    
+    confirm_token = None
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            confirm_token = value
+            break
+            
+    if confirm_token:
+        # Second request with the confirmation token
+        params = {'id': file_id, 'confirm': confirm_token}
+        response = session.get(base_url, params=params, stream=True)
+        
     return response
 
 # --- Technical Indicator Logic (Matches divergence_make_dashboard.py) ---
@@ -146,17 +162,17 @@ def load_large_data(url):
             'High': 'float32', 'Low': 'float32', 'Volume': 'float32'
         }
         
-        # Read directly from response content
+        # Read binary content into buffer
         df = pd.read_csv(io.BytesIO(response.content), dtype=dtype_dict)
         
-        # Determine date column name
+        # Handle Date parsing and column normalization
         date_col = next((c for c in df.columns if 'date' in c.lower()), None)
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col])
             if date_col != 'Date': 
                 df.rename(columns={date_col: 'Date'}, inplace=True)
         else:
-            # Assume first column is date
+            # Fallback to first column as Date
             df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
             df.rename(columns={df.columns[0]: 'Date'}, inplace=True)
             
@@ -250,6 +266,6 @@ if final_url:
             fig_rsi.update_layout(height=300, title=f"RSI ({timeframe})", template="plotly_dark")
             st.plotly_chart(fig_rsi, use_container_width=True)
     else:
-        st.warning("Data load failed. Please check Drive permissions (Viewer) or ensure Secrets contain correct links.")
+        st.warning("Data load failed. Ensure the Google Drive files are shared as 'Anyone with the link' and are set to 'Viewer'.")
 else:
     st.info("Select a dataset to begin.")
