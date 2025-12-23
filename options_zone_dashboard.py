@@ -66,7 +66,7 @@ def run_strike_zones_app(df):
     """Logic for the original Strike Zones Dashboard"""
     st.title("📊 Options Strike Zones Dashboard")
 
-    # Strictly ensure 'yesterday' is a date object
+    # yesterday as a date object
     yesterday = date.today() - timedelta(days=1)
 
     # ---------- Controls ----------
@@ -75,12 +75,12 @@ def run_strike_zones_app(df):
     with c1:
         ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
     with c2:
-        td_start = st.date_input("Trade Date (start)", value=yesterday, key="sz_start", format="DD MMM YY")
+        td_start = st.date_input("Trade Date (start)", value=yesterday, key="sz_start")
     with c3:
-        td_end = st.date_input("Trade Date (end)", value=yesterday, key="sz_end", format="DD MMM YY")
+        td_end = st.date_input("Trade Date (end)", value=yesterday, key="sz_end")
     with c4:
         exp_range_end = (date.today() + timedelta(days=365))
-        exp_end = st.date_input("Exp. Range (end)", value=exp_range_end, key="sz_exp", format="DD MMM YY")
+        exp_end = st.date_input("Exp. Range (end)", value=exp_range_end, key="sz_exp")
     st.markdown('</div>', unsafe_allow_html=True)
 
     with st.sidebar:
@@ -227,6 +227,7 @@ def run_strike_zones_app(df):
     if show_table:
         st.markdown("### Data Table")
         display_used = used.copy()
+        # Formatting dates for the table
         display_used["Trade Date"] = display_used["Trade Date"].dt.strftime("%d %b %y")
         display_used["Expiry"] = pd.to_datetime(display_used["Expiry"]).dt.strftime("%d %b %y")
         st.dataframe(display_used, use_container_width=True)
@@ -236,16 +237,16 @@ def run_pivot_tables_app(df):
     """Analyzes exposure using Pivot Tables across defined order types"""
     st.title("💼 Pivot Tables")
     
-    # Strictly ensure 'yesterday' is a date object
+    # yesterday as a date object
     yesterday = date.today() - timedelta(days=1)
 
     # ---------- Inputs ----------
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        td_start = st.date_input("Trade Start Date", value=yesterday, key="pv_start", format="DD MMM YY")
+        td_start = st.date_input("Trade Start Date", value=yesterday, key="pv_start")
     with c2:
-        td_end = st.date_input("Trade End Date", value=yesterday, key="pv_end", format="DD MMM YY")
+        td_end = st.date_input("Trade End Date", value=yesterday, key="pv_end")
     with c3:
         ticker_filter = st.text_input("Ticker (leave blank for all)", value="", key="pv_ticker").strip().upper()
     with c4:
@@ -279,7 +280,7 @@ def run_pivot_tables_app(df):
         # 3. Join rank data to main pivot
         piv = piv.merge(sym_rank, on="Symbol")
         
-        # 4. Standardize types and format Expiry
+        # 4. Standardize types and format Expiry to 02 Jan 30
         piv["Contracts"] = pd.to_numeric(piv["Contracts"], errors='coerce').fillna(0)
         piv["Dollars"] = pd.to_numeric(piv["Dollars"], errors='coerce').fillna(0.0)
         piv["Expiry"] = pd.to_datetime(piv["Expiry"]).dt.strftime("%d %b %y")
