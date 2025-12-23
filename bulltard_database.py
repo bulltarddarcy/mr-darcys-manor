@@ -434,21 +434,46 @@ def run_rsi_divergences_app():
     api_key = st.secrets.get("GDRIVE_API_KEY")
     if folder_id and api_key:
         try:
-            url = f"https://www.googleapis.com/drive/v3/files?q='{folder_id}'+in+parents+and+mimeType='text/html'+and+trashed=false&orderBy=name+desc&pageSize=1&key={api_key}"
-            response = requests.get(url, timeout=10).json()
-            files = response.get('files', [])
-            if not files:
-                st.warning("No HTML files found in the specified Google Drive folder.")
+            # Broaden the query: look for files with '.html' in the name within the folder
+            # This is more resilient than relying on Drive's internal mimeType detection
+            query = f"'{folder_id}'+in+parents+and+name+contains+'.html'+and+trashed=false"
+            url = f"https://www.googleapis.com/drive/v3/files?q={query}&orderBy=name+desc&pageSize=1&key={api_key}"
+            
+            response_obj = requests.get(url, timeout=10)
+            if response_obj.status_code != 200:
+                st.error(f"Google Drive API Error ({response_obj.status_code}): {response_obj.text}")
                 return
+                
+            response = response_obj.json()
+            files = response.get('files', [])
+            
+            if not files:
+                st.warning("No HTML files found in the specified Google Drive folder. Ensure the folder is shared with 'Anyone with the link' as Viewer.")
+                # Show folder ID for debugging
+                st.caption(f"Searching folder: {folder_id}")
+                return
+                
             latest_id = files[0]['id']
             latest_name = files[0]['name']
+            
+            # Fetch content with explicit media request
             content_url = f"https://www.googleapis.com/drive/v3/files/{latest_id}?alt=media&key={api_key}"
-            html_content = requests.get(content_url, timeout=10).text
-            st.info(f"Loaded from Cloud: {latest_name}")
+            content_response = requests.get(content_url, timeout=10)
+            
+            if content_response.status_code != 200:
+                st.error(f"Failed to download file content ({content_response.status_code}): {content_response.text}")
+                return
+                
+            # Ensure proper encoding for HTML injection
+            content_response.encoding = 'utf-8'
+            html_content = content_response.text
+            
+            st.info(f"Loaded: {latest_name}")
             components.html(html_content, height=1200, scrolling=True)
             return
+            
         except Exception as e:
-            st.error(f"Cloud load failed: {e}.")
+            st.error(f"Cloud load execution failed: {e}.")
     else:
         st.error("Google Drive Secrets (GDRIVE_FOLDER_ID / GDRIVE_API_KEY) are missing. Please add them to Streamlit Secrets.")
 
