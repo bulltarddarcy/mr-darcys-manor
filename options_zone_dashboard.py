@@ -367,35 +367,40 @@ def run_pivot_tables_app(df):
 
     std_cols = ["Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
 
+    # Side-by-side layout for Calls Bought and Puts Sold
+    col_left, col_right = st.columns(2)
+
     # 1. Calls Bought Table
-    st.subheader("Calls Bought")
-    calls_bought = get_ranked_pivot(f, "Calls Bought", std_cols)
-    if not calls_bought.empty:
-        st.dataframe(
-            calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
-            use_container_width=False,
-            hide_index=True,
-            height=get_table_height(calls_bought, max_rows=30),
-            column_config=COLUMN_CONFIG
-        )
-    else:
-        st.info("No Calls Bought found matching these filters.")
+    with col_left:
+        st.subheader("Calls Bought")
+        calls_bought = get_ranked_pivot(f, "Calls Bought", std_cols)
+        if not calls_bought.empty:
+            st.dataframe(
+                calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+                use_container_width=True,
+                hide_index=True,
+                height=get_table_height(calls_bought, max_rows=30),
+                column_config=COLUMN_CONFIG
+            )
+        else:
+            st.info("No Calls Bought matching filters.")
 
     # 2. Puts Sold Table
-    st.subheader("Puts Sold")
-    puts_sold = get_ranked_pivot(f, "Puts Sold", std_cols)
-    if not puts_sold.empty:
-        st.dataframe(
-            puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
-            use_container_width=False,
-            hide_index=True,
-            height=get_table_height(puts_sold, max_rows=30),
-            column_config=COLUMN_CONFIG
-        )
-    else:
-        st.info("No Puts Sold found matching these filters.")
+    with col_right:
+        st.subheader("Puts Sold")
+        puts_sold = get_ranked_pivot(f, "Puts Sold", std_cols)
+        if not puts_sold.empty:
+            st.dataframe(
+                puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+                use_container_width=True,
+                hide_index=True,
+                height=get_table_height(puts_sold, max_rows=30),
+                column_config=COLUMN_CONFIG
+            )
+        else:
+            st.info("No Puts Sold matching filters.")
 
-    # 3. Risk Reversals Table (Date Filter only)
+    # 3. Risk Reversals Table (Date Filter only) - Keeps full width
     st.subheader("Risk Reversals")
     rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     rr_data = rr_data[rr_data["Order Type"] == "Risk Reversals"]
