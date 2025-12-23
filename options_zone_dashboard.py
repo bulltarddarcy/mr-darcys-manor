@@ -124,6 +124,22 @@ def clean_strike_fmt(val):
     except:
         return str(val)
 
+# Reset Callbacks to prevent Session State modification errors
+def reset_sz_callback():
+    for k in ["sz_ticker", "sz_start", "sz_end", "sz_exp"]:
+        if k in st.session_state: del st.session_state[k]
+    # Clear specific ticker inclusion logic
+    to_del = [key for key in st.session_state.keys() if key.startswith("sz_include_")]
+    for key in to_del: del st.session_state[key]
+
+def reset_db_callback():
+    for k in ["db_start", "db_end", "db_exp", "db_ticker", "db_inc_cb", "db_inc_pb", "db_inc_ps"]:
+        if k in st.session_state: del st.session_state[k]
+
+def reset_pv_callback():
+    for k in ["pv_start", "pv_end", "pv_ticker", "pv_notional", "pv_mkt_cap", "pv_ema_filter"]:
+        if k in st.session_state: del st.session_state[k]
+
 COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
@@ -135,33 +151,30 @@ COLUMN_CONFIG_PIVOT = {
 # --- 3. APP MODULES ---
 
 def run_options_database_app(df):
-    """Simple list view of all trade data with custom highlighting"""
+    """Simple list view of all trade data with custom highlighting and top-level sorting"""
     st.title("📂 Options Database")
 
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        db_ticker = st.text_input("Ticker/Symbol", value=st.session_state.get("db_ticker", ""), key="db_ticker").strip().upper()
+        db_ticker = st.text_input("Ticker/Symbol", value="", key="db_ticker").strip().upper()
     with c2:
-        start_date = st.date_input("Trade Start Date", value=st.session_state.get("db_start", None), key="db_start")
+        start_date = st.date_input("Trade Start Date", value=None, key="db_start")
     with c3:
-        end_date = st.date_input("Trade End Date", value=st.session_state.get("db_end", None), key="db_end")
+        end_date = st.date_input("Trade End Date", value=None, key="db_end")
     with c4:
         exp_range_default = (date.today() + timedelta(days=365))
-        db_exp_end = st.date_input("Expiration Range (end)", value=st.session_state.get("db_exp", exp_range_default), key="db_exp")
+        db_exp_end = st.date_input("Expiration Range (end)", value=exp_range_default, key="db_exp")
     st.markdown('</div>', unsafe_allow_html=True)
 
     with st.sidebar:
         st.markdown("**Include Order Type**")
-        inc_cb = st.checkbox("Calls Bought", value=st.session_state.get("db_inc_cb", True), key="db_inc_cb")
-        inc_pb = st.checkbox("Puts Bought", value=st.session_state.get("db_inc_pb", True), key="db_inc_pb")
-        inc_ps = st.checkbox("Puts Sold", value=st.session_state.get("db_inc_ps", True), key="db_inc_ps")
+        inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
+        inc_pb = st.checkbox("Puts Bought", value=True, key="db_inc_pb")
+        inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
         
         st.markdown("---")
-        if st.button("Reset All Defaults", use_container_width=True, key="db_reset"):
-            for k in ["db_start", "db_end", "db_exp", "db_ticker", "db_inc_cb", "db_inc_pb", "db_inc_ps"]:
-                if k in st.session_state: del st.session_state[k]
-            st.rerun()
+        st.button("Reset All Defaults", use_container_width=True, key="db_reset_btn", on_click=reset_db_callback)
 
     f = df.copy()
     if db_ticker:
@@ -209,23 +222,21 @@ def run_options_database_app(df):
     )
 
 def run_strike_zones_app(df):
-    """Restored full Options Strike Zones logic with interactive inclusion logic and fixed UI reset"""
+    """Options Strike Zones with side-by-side charts and interactive inclusion logic"""
     st.title("📊 Options Strike Zones")
 
-    # Calculate default expiry range for reset logic
     exp_range_default = (date.today() + timedelta(days=365))
 
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        # Use session state to handle manual overrides or resets
-        ticker = st.text_input("Ticker", value=st.session_state.get("sz_ticker", "AMZN"), key="sz_ticker").strip().upper()
+        ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
     with c2:
-        td_start = st.date_input("Trade Date (start)", value=st.session_state.get("sz_start", None), key="sz_start")
+        td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
     with c3:
-        td_end = st.date_input("Trade Date (end)", value=st.session_state.get("sz_end", None), key="sz_end")
+        td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
     with c4:
-        exp_end = st.date_input("Exp. Range (end)", value=st.session_state.get("sz_exp", exp_range_default), key="sz_exp")
+        exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
     st.markdown('</div>', unsafe_allow_html=True)
 
     with st.sidebar:
@@ -250,18 +261,7 @@ def run_strike_zones_app(df):
         show_table       = st.checkbox("Show Strike Zone Table", value=True)
         
         st.markdown("---")
-        if st.button("Reset All Defaults", use_container_width=True):
-            # Deleting keys instead of setting them fixes the "cannot be modified" instantiation error
-            for key in ["sz_ticker", "sz_start", "sz_end", "sz_exp"]:
-                if key in st.session_state:
-                    del st.session_state[key]
-            
-            # Clear the specific inclusion state key for this ticker
-            inc_key = f"sz_include_{ticker}"
-            if inc_key in st.session_state: 
-                del st.session_state[inc_key]
-            
-            st.rerun()
+        st.button("Reset All Defaults", use_container_width=True, key="sz_reset_btn", on_click=reset_sz_callback)
 
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
     if td_start:
@@ -271,22 +271,19 @@ def run_strike_zones_app(df):
     today_val = date.today()
     f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
     
-    # 2. PREPARE EDITABLE TABLE DATA
+    # Sort pool for data table by most recent first
     edit_pool_raw = f[f["Order Type"].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
     if edit_pool_raw.empty:
         st.warning("No trades match current filters.")
         return
-
-    # Sort by most recent Trades first for the data table
+        
     edit_pool = edit_pool_raw.sort_values(by="Trade Date", ascending=False).copy()
-
     edit_pool["Trade Date Display"] = edit_pool["Trade Date"].dt.strftime("%d %b %y")
     edit_pool["Expiry Display"] = edit_pool["Expiry_DT"].dt.strftime("%d %b %y")
     
     state_key = f"sz_include_{ticker}"
     if state_key not in st.session_state:
         st.session_state[state_key] = [True] * len(edit_pool)
-    
     if len(st.session_state[state_key]) != len(edit_pool):
         st.session_state[state_key] = [True] * len(edit_pool)
 
@@ -325,7 +322,6 @@ def run_strike_zones_app(df):
     if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
     st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
 
-    # Layout for Bars + Stock Chart
     col_bars, col_chart = st.columns([1.5, 1])
 
     with col_bars:
@@ -381,15 +377,12 @@ def run_strike_zones_app(df):
                 for _, r in above.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
-                    # Added $ symbol to dollar values
+                    # Added $ to graphic values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-                
                 st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
-                
                 for _, r in below.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
-                    # Added $ symbol to dollar values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
             else:
@@ -404,7 +397,6 @@ def run_strike_zones_app(df):
                 for _, r in agg.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs_exp)*420))
-                    # Added $ symbol to dollar values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
     with col_chart:
@@ -414,7 +406,6 @@ def run_strike_zones_app(df):
         else:
             st.info("No history available for chart.")
 
-    # 4. DATA TABLE EDITOR
     if show_table:
         st.subheader("Data Table")
         st.caption("Tip: Uncheck 'Included' to exclude a trade from calculations and charts above.")
@@ -448,30 +439,23 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5, c6 = st.columns(6, gap="small")
     with c1:
-        td_start = st.date_input("Trade Start Date", value=st.session_state.get("pv_start", yesterday), key="pv_start")
+        td_start = st.date_input("Trade Start Date", value=yesterday, key="pv_start")
     with c2:
-        td_end = st.date_input("Trade End Date", value=st.session_state.get("pv_end", yesterday), key="pv_end")
+        td_end = st.date_input("Trade End Date", value=yesterday, key="pv_end")
     with c3:
-        ticker_filter = st.text_input("Ticker (blank=all)", value=st.session_state.get("pv_ticker", ""), key="pv_ticker").strip().upper()
+        ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
     with c4:
         notional_choices = {"0M": 0, "5M": 5_000_000, "10M": 10_000_000, "50M": 50_000_000, "100M": 100_000_000}
         choice_keys = list(notional_choices.keys())
-        default_choice = st.session_state.get("pv_notional", "5M")
-        default_idx = choice_keys.index(default_choice) if default_choice in choice_keys else 1
-        min_notional_label = st.selectbox("Min Dollars", options=choice_keys, index=default_idx, key="pv_notional")
+        min_notional_label = st.selectbox("Min Dollars", options=choice_keys, index=1, key="pv_notional")
         min_notional = notional_choices[min_notional_label]
     with c5:
         mkt_cap_choices = {"0B": 0, "100B": 100e9, "200B": 200e9, "500B": 500e9, "1T": 1e12}
         cap_keys = list(mkt_cap_choices.keys())
-        default_cap = st.session_state.get("pv_mkt_cap", "100B")
-        default_cap_idx = cap_keys.index(default_cap) if default_cap in cap_keys else 1
-        min_mkt_cap_label = st.selectbox("Mkt Cap Min", options=cap_keys, index=default_cap_idx, key="pv_mkt_cap")
+        min_mkt_cap_label = st.selectbox("Mkt Cap Min", options=cap_keys, index=1, key="pv_mkt_cap")
         min_mkt_cap = mkt_cap_choices[min_mkt_cap_label]
     with c6:
-        ema_options = ["All", "Yes"]
-        default_ema = st.session_state.get("pv_ema_filter", "All")
-        ema_idx = ema_options.index(default_ema) if default_ema in ema_options else 0
-        ema_filter = st.selectbox("Over 21 Day EMA", options=ema_options, index=ema_idx, key="pv_ema_filter")
+        ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- RR Pairing Engine ---
@@ -615,15 +599,7 @@ if st.session_state["authentication_status"]:
             st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
             st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
             st.markdown("---")
-            if st.button("Reset All Defaults", use_container_width=True, key="pv_reset_btn"):
-                # Use explicit keys to reset filters visually
-                st.session_state["pv_start"] = yesterday
-                st.session_state["pv_end"] = yesterday
-                st.session_state["pv_ticker"] = ""
-                st.session_state["pv_notional"] = "5M"
-                st.session_state["pv_mkt_cap"] = "100B"
-                st.session_state["pv_ema_filter"] = "All"
-                st.rerun()
+            st.button("Reset All Defaults", use_container_width=True, key="pv_reset_btn", on_click=reset_pv_callback)
         
     try:
         sheet_url = st.secrets["GSHEET_URL"]
