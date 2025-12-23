@@ -274,6 +274,9 @@ def run_rankings_app(df):
         "Score": st.column_config.NumberColumn("Score", width=40),
     }
 
+    # Custom currency formatter to ensure -$1,000 instead of $-1,000
+    fmt_currency = lambda x: f"-${abs(x):,.0f}" if x < 0 else f"${x:,.0f}"
+
     # Sorting Bullish: Score desc, then Dollars desc
     bull_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
     # Sorting Bearish: Score asc, then Dollars asc
@@ -286,7 +289,7 @@ def run_rankings_app(df):
         st.markdown("<h3 style='color: #71d28a; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
         st.caption("Highest Sentiment Scores & Dollars")
         st.dataframe(
-            bull_df.style.format({"Dollars": "${:,.0f}", "Trade Count": "{:,.0f}"}),
+            bull_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}"}),
             use_container_width=True, 
             hide_index=True, 
             column_config=rank_col_config, 
@@ -297,7 +300,7 @@ def run_rankings_app(df):
         st.markdown("<h3 style='color: #f29ca0; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
         st.caption("Lowest Sentiment Scores & Dollars")
         st.dataframe(
-            bear_df.style.format({"Dollars": "${:,.0f}", "Trade Count": "{:,.0f}"}),
+            bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}"}),
             use_container_width=True, 
             hide_index=True, 
             column_config=rank_col_config, 
@@ -395,6 +398,9 @@ def run_strike_zones_app(df):
     else:
         used["Signed Dollars"] = used.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
 
+        # Helper to format negative currency as -$1,000
+        fmt_neg = lambda x: f"-${abs(x):,.0f}" if x < 0 else f"${x:,.0f}"
+
         if view_mode == "Price Zones":
             strike_min, strike_max = float(np.nanmin(used["Strike (Actual)"].values)), float(np.nanmax(used["Strike (Actual)"].values))
             if width_mode == "Auto":
@@ -416,12 +422,14 @@ def run_strike_zones_app(df):
             for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
                 if r["Zone_Low"] + (zone_w/2) > spot:
                     color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                    st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                    val_str = fmt_neg(r["Net_Dollars"])
+                    st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
             st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
             for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
                 if r["Zone_Low"] + (zone_w/2) < spot:
                     color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                    st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                    val_str = fmt_neg(r["Net_Dollars"])
+                    st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
         else:
             e = used.copy()
@@ -430,7 +438,8 @@ def run_strike_zones_app(df):
             st.subheader("Expiry Buckets")
             for _, r in agg.iterrows():
                 color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
-                st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                val_str = fmt_neg(r["Net_Dollars"])
+                st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
     if show_table:
         st.subheader("Data Table")
@@ -439,8 +448,8 @@ def run_strike_zones_app(df):
             column_config={
                 "Trade Date Display": "Trade Date", 
                 "Expiry Display": "Expiry", 
-                "Contracts": st.column_config.NumberColumn("Qty", format="%d"), 
-                "Dollars": st.column_config.NumberColumn("Dollars", format="$ %d"), 
+                "Contracts": st.column_config.NumberColumn("Qty", format="%,.0f"), 
+                "Dollars": st.column_config.NumberColumn("Dollars", format="$ %,.0f"), 
                 "Included": st.column_config.CheckboxColumn(default=True)
             }, 
             use_container_width=True, 
