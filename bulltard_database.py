@@ -253,11 +253,16 @@ def run_strike_zones_app(df):
         width_mode = st.radio("Select Sizing", ["Auto", "Fixed"])
         fixed_size_choice = 10
         if width_mode == "Fixed": fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
+        
+        st.markdown("**Include Order Type**")
         inc_calls_bought = st.checkbox("Calls Bought", value=True)
         inc_puts_sold    = st.checkbox("Puts Sold", value=True)
         inc_puts_bought  = st.checkbox("Puts Bought", value=True)
+        
+        st.markdown("**Other Options**")
         hide_empty      = st.checkbox("Hide Empty Zones", value=True)
         show_table       = st.checkbox("Show Strike Zone Table", value=True)
+        
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
     if td_start: f = f[f["Trade Date"].dt.date >= td_start]
     if td_end: f = f[f["Trade Date"].dt.date <= td_end]
