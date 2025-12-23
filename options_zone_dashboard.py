@@ -66,6 +66,7 @@ def run_strike_zones_app(df):
     """Logic for the original Strike Zones Dashboard"""
     st.title("📊 Options Strike Zones Dashboard")
 
+    # Strictly ensure 'yesterday' is a date object
     yesterday = date.today() - timedelta(days=1)
 
     # ---------- Controls ----------
@@ -78,7 +79,7 @@ def run_strike_zones_app(df):
     with c3:
         td_end = st.date_input("Trade Date (end)", value=yesterday, key="sz_end", format="DD MMM YY")
     with c4:
-        exp_range_end = date.today().replace(year=date.today().year+1)
+        exp_range_end = (date.today() + timedelta(days=365))
         exp_end = st.date_input("Exp. Range (end)", value=exp_range_end, key="sz_exp", format="DD MMM YY")
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -235,6 +236,7 @@ def run_pivot_tables_app(df):
     """Analyzes exposure using Pivot Tables across defined order types"""
     st.title("💼 Pivot Tables")
     
+    # Strictly ensure 'yesterday' is a date object
     yesterday = date.today() - timedelta(days=1)
 
     # ---------- Inputs ----------
@@ -286,7 +288,6 @@ def run_pivot_tables_app(df):
         piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
         
         # 6. CLEAR REDUNDANT SYMBOLS (Leave rows below the first empty)
-        # Use shift() to check if current symbol is same as previous in the sorted order
         piv["Symbol_Display"] = piv["Symbol"]
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
         
