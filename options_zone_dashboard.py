@@ -228,7 +228,7 @@ def run_rankings_app(df):
 
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     # Using smaller column ratios to shrink date input boxes
-    c1, c2, c3, c_pad = st.columns([1.5, 1.5, 1, 2], gap="small")
+    c1, c2, c3, c_pad = st.columns([1.2, 1.2, 0.8, 3], gap="small")
     with c1:
         rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
     with c2:
@@ -254,13 +254,13 @@ def run_rankings_app(df):
     # Get Last Trade per symbol
     last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
     
-    # Get component counts
+    # Get component counts (size() counts the number of trades/rows)
     counts = f_filtered.groupby(["Symbol", "Order Type"]).size().unstack(fill_value=0)
     for col in target_types:
         if col not in counts.columns:
             counts[col] = 0
 
-    # Calculate Score and Trade Count
+    # Calculate Score and Trade Count (all based on count of trades)
     counts["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
     counts["Trade Count"] = counts["Calls Bought"] + counts["Puts Sold"] + counts["Puts Bought"]
     
@@ -271,10 +271,10 @@ def run_rankings_app(df):
     # Define Column order and compact config
     display_cols = ["Symbol", "Trade Count", "Last Trade", "Score"]
     rank_col_config = {
-        "Symbol": st.column_config.TextColumn("Symbol", width=70),
-        "Trade Count": st.column_config.NumberColumn("Count", width=90),
-        "Last Trade": st.column_config.TextColumn("Last", width=90),
-        "Score": st.column_config.NumberColumn("Score", width=70),
+        "Symbol": st.column_config.TextColumn("Symbol", width=60),
+        "Trade Count": st.column_config.NumberColumn("Trade Count", width=100),
+        "Last Trade": st.column_config.TextColumn("Last Trade", width=100),
+        "Score": st.column_config.NumberColumn("Score", width=60),
     }
 
     bull_df = res[display_cols].sort_values(by="Score", ascending=False).head(limit)
@@ -442,13 +442,11 @@ def run_strike_zones_app(df):
                 for _, r in above.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
-                    # Added $ to graphic values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
                 for _, r in below.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
-                    # Added $ to graphic values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
             else:
@@ -463,7 +461,6 @@ def run_strike_zones_app(df):
                 for _, r in agg.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs_exp)*420))
-                    # Added $ to graphic values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
     with col_chart:
@@ -518,8 +515,7 @@ def run_pivot_tables_app(df):
         min_notional = notional_choices[min_notional_label]
     with c5:
         mkt_cap_choices = {"0B": 0, "100B": 100e9, "200B": 200e9, "500B": 500e9, "1T": 1e12}
-        cap_keys = list(mkt_cap_choices.keys())
-        min_mkt_cap_label = st.selectbox("Mkt Cap Min", options=cap_keys, index=1, key="pv_mkt_cap")
+        min_mkt_cap_label = st.selectbox("Mkt Cap Min", options=list(mkt_cap_choices.keys()), index=1, key="pv_mkt_cap")
         min_mkt_cap = mkt_cap_choices[min_mkt_cap_label]
     with c6:
         ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
