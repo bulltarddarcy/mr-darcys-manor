@@ -8,6 +8,9 @@ from datetime import date, timedelta, datetime
 import yfinance as yf
 import math
 import streamlit_authenticator as stauth
+import os
+import glob
+import streamlit.components.v1 as components
 
 # --- 1. AUTHENTICATION SETUP ---
 credentials = {
@@ -519,6 +522,35 @@ def run_pivot_tables_app(df):
         st.subheader("Risk Reversals"); tbl = get_p(df_rr_f, True)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT); st.caption("⚠️ RR Table reflects date range only")
 
+def run_rsi_divergences_app():
+    """Display the latest RSI Divergence HTML report from the local filesystem."""
+    st.title("📈 RSI Divergences")
+    
+    # Path setup based on your generation script
+    # Finds latest HTML file in dashboards/divergences
+    search_path = os.path.join("dashboards", "divergences", "*.html")
+    files = glob.glob(search_path)
+    
+    if not files:
+        st.warning("No RSI Divergence reports found in `dashboards/divergences`.")
+        st.info("Ensure the `divergence_make_dashboard.py` script has run.")
+        return
+        
+    # Get the most recently modified file
+    latest_file = max(files, key=os.path.getmtime)
+    
+    try:
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        file_name = os.path.basename(latest_file)
+        st.caption(f"Showing report: {file_name}")
+        
+        # Render the HTML using Streamlit Components
+        components.html(html_content, height=1200, scrolling=True)
+    except Exception as e:
+        st.error(f"Error loading report: {e}")
+
 # --- 4. MAIN EXECUTION ---
 if st.session_state["authentication_status"]:
     # Process incoming navigation params (e.g. from Rankings hyperlinks)
@@ -555,7 +587,7 @@ if st.session_state["authentication_status"]:
     
     with st.sidebar:
         st.header("Select Tool")
-        tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones"]
+        tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
         default_tool_idx = 0
         if "app_choice_internal" in st.session_state:
             try: default_tool_idx = tools.index(st.session_state["app_choice_internal"])
@@ -570,6 +602,7 @@ if st.session_state["authentication_status"]:
         if app_choice == "Options Database": run_options_database_app(df_global)
         elif app_choice == "Rankings": run_rankings_app(df_global)
         elif app_choice == "Pivot Tables": run_pivot_tables_app(df_global)
+        elif app_choice == "RSI Divergences": run_rsi_divergences_app()
         else: run_strike_zones_app(df_global)
             
         with st.sidebar:
