@@ -141,10 +141,8 @@ def run_options_database_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        # Detect ticker passed from session state (set by Rankings links)
         default_ticker = st.session_state.get("db_ticker", "")
         db_ticker = st.text_input("Ticker", value=default_ticker, key="db_ticker_input").strip().upper()
-        # Keep state updated
         st.session_state["db_ticker"] = db_ticker
     with c2:
         start_date = st.date_input("Trade Start Date", value=None, key="db_start")
@@ -171,7 +169,6 @@ def run_options_database_app(df):
     if db_exp_end:
         f = f[f["Expiry_DT"].dt.date <= db_exp_end]
 
-    # Handle column casing
     order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
     allowed_types = []
     if inc_cb: allowed_types.append("Calls Bought")
@@ -208,7 +205,7 @@ def run_options_database_app(df):
     )
 
 def run_rankings_app(df):
-    """Rank symbols based on trade count volume and sentiment score with compact HTML display"""
+    """Rank symbols based on sentiment logic with Score and Net Dollars columns"""
     st.title("🏆 Rankings")
 
     yesterday = date.today() - timedelta(days=1)
@@ -240,62 +237,55 @@ def run_rankings_app(df):
         st.warning("No trades of the specified sentiment types found in this range.")
         return
 
-    last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
+    # Calculate Score components (Trade Counts)
     counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
+    # Calculate Dollar components (Financial sum)
+    dollars = f_filtered.groupby(["Symbol", order_type_col])["Dollars"].sum().unstack(fill_value=0)
+    # Get Last Trade
+    last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
     
     for col in target_types:
         if col not in counts.columns: counts[col] = 0
+        if col not in dollars.columns: dollars[col] = 0
 
-    counts["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
-    counts["Trade Count"] = counts["Calls Bought"] + counts["Puts Sold"] + counts["Puts Bought"]
+    # Score calculation (Trade Count based)
+    scores_df = pd.DataFrame(index=counts.index)
+    scores_df["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
+    scores_df["Trade Count"] = counts["Calls Bought"] + counts["Puts Sold"] + counts["Puts Bought"]
     
-    res = counts.reset_index().merge(last_trades, on="Symbol")
+    # Dollars calculation (Tiebreaker)
+    scores_df["Dollars"] = dollars["Calls Bought"] + dollars["Puts Sold"] - dollars["Puts Bought"]
+    
+    # Merge and final table assembly
+    res = scores_df.reset_index().merge(last_trades, on="Symbol")
     res = res.rename(columns={"Trade Date": "Last Trade"})
     
-    bull_df = res.sort_values(by=["Score", "Trade Count"], ascending=[False, False]).head(limit)
-    bear_df = res.sort_values(by=["Score", "Trade Count"], ascending=[True, False]).head(limit)
+    # Reorder columns: Symbol, Trade Count, Last Trade, Dollars, Score
+    display_cols = ["Symbol", "Trade Count", "Last Trade", "Dollars", "Score"]
+    
+    rank_col_config = {
+        "Symbol": st.column_config.TextColumn("Symbol", width=70),
+        "Trade Count": st.column_config.NumberColumn("Trade Count", width=80),
+        "Last Trade": st.column_config.TextColumn("Last Trade", width=90),
+        "Dollars": st.column_config.NumberColumn("Dollars", format="$%,.0f", width=100),
+        "Score": st.column_config.NumberColumn("Score", width=60),
+    }
 
-    def render_html_ranking_table(df, title, title_color, caption):
-        st.markdown(f"<h3 style='color: {title_color}; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>{title}</h3>", unsafe_allow_html=True)
-        st.caption(caption)
-        
-        table_rows = ""
-        for _, row in df.iterrows():
-            # Use relative URL parameters to avoid host redirection issues
-            url = f"?tool=Options+Database&ticker={row['Symbol']}"
-            table_rows += f"""
-                <tr>
-                    <td style="padding: 8px; border-bottom: 1px solid #3a3f45;">
-                        <a href="{url}" target="_self" style="color: #66b7ff; text-decoration: none; font-weight: 600;">{row['Symbol']}</a>
-                    </td>
-                    <td style="padding: 8px; border-bottom: 1px solid #3a3f45; text-align: center;">{row['Trade Count']}</td>
-                    <td style="padding: 8px; border-bottom: 1px solid #3a3f45; text-align: center;">{row['Last Trade']}</td>
-                    <td style="padding: 8px; border-bottom: 1px solid #3a3f45; text-align: center;">{row['Score']}</td>
-                </tr>
-            """
-
-        html_table = f"""
-        <table style="width: 340px; border-collapse: collapse; color: #e7e7ea; font-family: sans-serif; font-size: 13px; margin-top: 10px;">
-            <thead>
-                <tr style="background: #262730; color: #888; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px;">
-                    <th style="text-align: left; padding: 8px; border-bottom: 1px solid #3a3f45; width: 70px;">Symbol</th>
-                    <th style="text-align: center; padding: 8px; border-bottom: 1px solid #3a3f45; width: 60px;">Count</th>
-                    <th style="text-align: center; padding: 8px; border-bottom: 1px solid #3a3f45; width: 110px;">Last Trade</th>
-                    <th style="text-align: center; padding: 8px; border-bottom: 1px solid #3a3f45; width: 60px;">Score</th>
-                </tr>
-            </thead>
-            <tbody>
-                {table_rows}
-            </tbody>
-        </table>
-        """
-        st.markdown(html_table, unsafe_allow_html=True)
+    # Sorting Bullish: Score desc, then Dollars desc
+    bull_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
+    # Sorting Bearish: Score asc, then Dollars asc
+    bear_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[True, True]).head(limit)
 
     col_left, col_right = st.columns(2, gap="large")
     with col_left:
-        render_html_ranking_table(bull_df, "Bullish Rankings", "#71d28a", "Highest Sentiment Scores")
+        st.markdown("<h3 style='color: #71d28a; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
+        st.caption("Highest Sentiment Scores & Dollars")
+        st.dataframe(bull_df, use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bull_df))
+
     with col_right:
-        render_html_ranking_table(bear_df, "Bearish Rankings", "#f29ca0", "Lowest Sentiment Scores")
+        st.markdown("<h3 style='color: #f29ca0; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
+        st.caption("Lowest Sentiment Scores & Dollars")
+        st.dataframe(bear_df, use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bear_df))
 
 def run_strike_zones_app(df):
     """Options Strike Zones with side-by-side charts and interactive inclusion logic"""
@@ -499,17 +489,6 @@ def run_pivot_tables_app(df):
 
 # --- 4. MAIN EXECUTION ---
 if st.session_state["authentication_status"]:
-    # Handle direct navigation and ticker passing via query params
-    params = st.query_params
-    if "tool" in params:
-        st.session_state["app_choice_internal"] = params.get("tool")
-    if "ticker" in params:
-        st.session_state["db_ticker"] = params.get("ticker")
-    
-    # Consume query params only once
-    if "tool" in params or "ticker" in params:
-        st.query_params.clear()
-
     st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
     st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
     html,body,[class*="css"]{color:var(--text)!important;background-color:var(--bg)!important;}
