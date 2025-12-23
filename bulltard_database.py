@@ -267,21 +267,23 @@ def run_rankings_app(df):
         "Score": st.column_config.NumberColumn("Score", width=40),
     }
 
-    fmt_currency = lambda x: f"-${abs(x):,.0f}" if x < 0 else f"${x:,.0f}"
+    # Formatting functions for negative parenthetical values
+    fmt_currency = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
+    fmt_score = lambda x: f"({abs(int(x))})" if x < 0 else f"{int(x)}"
 
     bull_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
     bear_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[True, True]).head(limit)
 
-    st.caption("Ranking tables vary from Bulltard's as he does not exclude expired trades and these do. Tickers with the same score are sorted in descending order based on Dollars.")
+    st.caption("Ranking tables vary from Bulltard's as he includes expired trades and these do not. Tickers with the same score are sorted in descending order based on Dollars.")
 
     col_left, col_right = st.columns(2, gap="large")
     with col_left:
         st.markdown("<h3 style='color: #71d28a; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
-        st.dataframe(bull_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}"}), use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bull_df))
+        st.dataframe(bull_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bull_df))
 
     with col_right:
         st.markdown("<h3 style='color: #f29ca0; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
-        st.dataframe(bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}"}), use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bear_df))
+        st.dataframe(bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bear_df))
 
 def run_strike_zones_app(df):
     """Options Strike Zones with interactive inclusion logic"""
