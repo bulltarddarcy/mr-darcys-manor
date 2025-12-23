@@ -47,6 +47,7 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
 
     if "Contracts" in df.columns:
+        # Fixed: Removed commas from contracts to ensure numeric conversion doesn't fail/return 0
         df["Contracts"] = (df["Contracts"].astype(str)
                            .str.replace(",", "", regex=False))
         df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(0)
@@ -125,14 +126,14 @@ def highlight_expiry(val):
     except:
         return ""
 
-# Optimized column widths
+# Shrunk column widths to fit 3 tables side-by-side without horizontal scrolling
 COLUMN_CONFIG_PIVOT = {
-    "Symbol": st.column_config.TextColumn("Symbol", width=90),
-    "Strike": st.column_config.TextColumn("Strike", width=90),
-    "Expiry": st.column_config.TextColumn("Expiry", width=110),
-    "Contracts": st.column_config.NumberColumn("Contracts", width=100),
-    "Dollars": st.column_config.NumberColumn("Dollars", width=130),
-    "Order Type": st.column_config.TextColumn("Order Type", width=120),
+    "Symbol": st.column_config.TextColumn("Sym", width=55),
+    "Strike": st.column_config.TextColumn("Strk", width=65),
+    "Expiry": st.column_config.TextColumn("Exp", width=85),
+    "Contracts": st.column_config.NumberColumn("Qty", width=65),
+    "Dollars": st.column_config.NumberColumn("$ Vol", width=95),
+    "Order Type": st.column_config.TextColumn("Type", width=85),
 }
 
 # --- 3. APP MODULES ---
@@ -317,7 +318,7 @@ def run_strike_zones_app(df):
 
 def run_pivot_tables_app(df):
     """Analyzes exposure using Pivot Tables across defined order types"""
-    st.title("📈 Pivot Tables")
+    st.title("🎯 Pivot Tables")
     
     yesterday = date.today() - timedelta(days=1)
 
@@ -387,9 +388,10 @@ def run_pivot_tables_app(df):
 
     std_cols = ["Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
 
-    # Layout: Three columns for side-by-side view
+    # Side-by-side layout using three columns
     col1, col2, col3 = st.columns(3)
 
+    # 1. Calls Bought Table
     with col1:
         st.subheader("Calls Bought")
         df_cb = get_ranked_pivot(f, "Calls Bought", std_cols)
@@ -397,14 +399,15 @@ def run_pivot_tables_app(df):
             st.dataframe(
                 df_cb.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"})
                 .map(highlight_expiry, subset=["Expiry"]),
-                use_container_width=False,
+                use_container_width=True, # Forced container width with small fixed config prevents horizontal scroll
                 hide_index=True,
                 height=get_table_height(df_cb, max_rows=30),
                 column_config=COLUMN_CONFIG_PIVOT
             )
         else:
-            st.info("No Calls Bought found.")
+            st.info("No Calls Bought.")
 
+    # 2. Puts Sold Table
     with col2:
         st.subheader("Puts Sold")
         df_ps = get_ranked_pivot(f, "Puts Sold", std_cols)
@@ -412,14 +415,15 @@ def run_pivot_tables_app(df):
             st.dataframe(
                 df_ps.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"})
                 .map(highlight_expiry, subset=["Expiry"]),
-                use_container_width=False,
+                use_container_width=True,
                 hide_index=True,
                 height=get_table_height(df_ps, max_rows=30),
                 column_config=COLUMN_CONFIG_PIVOT
             )
         else:
-            st.info("No Puts Sold found.")
+            st.info("No Puts Sold.")
 
+    # 3. Risk Reversals Table
     with col3:
         st.subheader("Risk Reversals")
         rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
@@ -447,13 +451,13 @@ def run_pivot_tables_app(df):
             st.dataframe(
                 rr_final[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"})
                 .map(highlight_expiry, subset=["Expiry"]),
-                use_container_width=False,
+                use_container_width=True,
                 hide_index=True,
                 height=get_table_height(rr_final, max_rows=30),
                 column_config=COLUMN_CONFIG_PIVOT
             )
         else:
-            st.info("No Risk Reversals found.")
+            st.info("No Risk Reversals.")
 
 
 # --- 4. MAIN EXECUTION ---
