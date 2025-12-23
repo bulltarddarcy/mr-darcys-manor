@@ -263,11 +263,12 @@ def run_rankings_app(df):
     # Reorder columns: Symbol, Trade Count, Last Trade, Dollars, Score
     display_cols = ["Symbol", "Trade Count", "Last Trade", "Dollars", "Score"]
     
+    # Compact column widths based on content length + buffer
     rank_col_config = {
-        "Symbol": st.column_config.TextColumn("Symbol", width=70),
-        "Trade Count": st.column_config.NumberColumn("Trade Count", width=80),
+        "Symbol": st.column_config.TextColumn("Symbol", width=65),
+        "Trade Count": st.column_config.NumberColumn("Trade Count", width=95),
         "Last Trade": st.column_config.TextColumn("Last Trade", width=90),
-        "Dollars": st.column_config.NumberColumn("Dollars", format="$%,.0f", width=100),
+        "Dollars": st.column_config.NumberColumn("Dollars", format="$%,.0f", width=110),
         "Score": st.column_config.NumberColumn("Score", width=60),
     }
 
@@ -275,6 +276,8 @@ def run_rankings_app(df):
     bull_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
     # Sorting Bearish: Score asc, then Dollars asc
     bear_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[True, True]).head(limit)
+
+    st.caption("Ranking tables vary from Bulltard's as he does not exclude expired trades and these do. Tickers with the same score are sorted in descending order based on Dollars.")
 
     col_left, col_right = st.columns(2, gap="large")
     with col_left:
@@ -423,7 +426,19 @@ def run_strike_zones_app(df):
 
     if show_table:
         st.subheader("Data Table")
-        edited_df = st.data_editor(edit_pool[cols_to_show], column_config={"Trade Date Display": "Trade Date", "Expiry Display": "Expiry", "Contracts": st.column_config.NumberColumn(format="%,d"), "Dollars": st.column_config.NumberColumn(format="$%,.0f"), "Included": st.column_config.CheckboxColumn(default=True)}, use_container_width=True, hide_index=True, key="strike_zones_editor")
+        edited_df = st.data_editor(
+            edit_pool[cols_to_show], 
+            column_config={
+                "Trade Date Display": "Trade Date", 
+                "Expiry Display": "Expiry", 
+                "Contracts": st.column_config.NumberColumn(format="%,d"), 
+                "Dollars": st.column_config.NumberColumn(format="$%,.0f"), 
+                "Included": st.column_config.CheckboxColumn(default=True)
+            }, 
+            use_container_width=True, 
+            hide_index=True, 
+            key="strike_zones_editor"
+        )
         if not edited_df.equals(edit_pool[cols_to_show]): st.session_state[state_key] = edited_df["Included"].tolist(); st.rerun()
 
 def run_pivot_tables_app(df):
