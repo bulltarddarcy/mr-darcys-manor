@@ -40,7 +40,7 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
     keep = [c for c in want if c in df.columns]
     df = df[keep].copy()
     
-    # Strip whitespace to ensure matches are clean
+    # Clean whitespace to ensure matches are clean
     for col in ["Order Type", "Symbol", "Strike", "Expiry"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
@@ -174,7 +174,6 @@ def run_strike_zones_app(df):
     display_used = used.copy()
     display_used["Trade Date"] = display_used["Trade Date"].dt.strftime("%d %b %y")
     display_used["Expiry"] = pd.to_datetime(display_used["Expiry"]).dt.strftime("%d %b %y")
-    # Using format "${:,.0f}" to ensure commas are added to Dollars
     st.dataframe(display_used.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True, hide_index=True, height=get_table_height(display_used, max_rows=30))
 
 
@@ -236,21 +235,35 @@ def run_pivot_tables_app(df):
         df_rr_matched['Strike'] = rr_matches['Strike_c'].apply(clean_strike_fmt) + "c/" + rr_matches['Strike_p'].apply(clean_strike_fmt) + "p"
         df_rr = df_rr_matched
 
-    def apply_filters(data):
+    def apply_filters(data, exclude_filters=False):
         if data.empty: return data
         f_data = data.copy()
-        if ticker_filter: f_data = f_data[f_data["Symbol"].astype(str).str.upper() == ticker_filter]
-        f_data = f_data[f_data["Dollars"] >= min_notional]
-        if not f_data.empty:
-            unique_syms = f_data["Symbol"].unique()
-            if min_mkt_cap > 0:
-                f_data = f_data[f_data["Symbol"].isin([s for s in unique_syms if get_market_cap(s) >= min_mkt_cap])]
+        
+        # 1. Ticker Filter (Always applies)
+        if ticker_filter: 
+            f_data = f_data[f_data["Symbol"].astype(str).str.upper() == ticker_filter]
+        
+        # Size & EMA Filters (Conditional)
+        if not exclude_filters:
+            # Min Dollars
+            f_data = f_data[f_data["Dollars"] >= min_notional]
+            
+            # Market Cap
+            if not f_data.empty and min_mkt_cap > 0:
                 unique_syms = f_data["Symbol"].unique()
-            if ema_filter == "Yes":
+                f_data = f_data[f_data["Symbol"].isin([s for s in unique_syms if get_market_cap(s) >= min_mkt_cap])]
+                
+            # 21-day EMA
+            if not f_data.empty and ema_filter == "Yes":
+                unique_syms = f_data["Symbol"].unique()
                 f_data = f_data[f_data["Symbol"].isin([s for s in unique_syms if is_above_ema21(s)])]
+        
         return f_data
 
-    df_cb_f, df_ps_f, df_rr_f = apply_filters(df_cb_solo), apply_filters(df_ps_solo), apply_filters(df_rr)
+    # Solo tables respect all filters; RR table ignores Min Dollars, Mkt Cap Min, and EMA
+    df_cb_f = apply_filters(df_cb_solo, exclude_filters=False)
+    df_ps_f = apply_filters(df_ps_solo, exclude_filters=False)
+    df_rr_f = apply_filters(df_rr, exclude_filters=True)
 
     def get_ranked_pivot(data):
         if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
