@@ -499,13 +499,14 @@ def run_pivot_tables_app(df):
         if data.empty: return data
         f = data.copy()
         
-        # Ticker Filter always applies
-        if ticker_filter: 
-            f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
-        
         # Skip quantitative filters if requested (for RR)
+        # Note:bypass_quant now also skips the Ticker filter for RR as requested
         if bypass_quant:
             return f
+            
+        # Ticker Filter (only applies to individual pools, not RR)
+        if ticker_filter: 
+            f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
             
         # Apply quantitative filters
         f = f[f["Dollars"] >= min_notional]
@@ -521,10 +522,10 @@ def run_pivot_tables_app(df):
             
         return f
 
-    # CB and PS get the full filters
+    # CB and PS get the full filters including ticker
     df_cb_f = apply_f(cb_pool, bypass_quant=False)
     df_ps_f = apply_f(ps_pool, bypass_quant=False)
-    # RR table only gets Date and Ticker filters
+    # RR table only gets Date and bypasses Ticker and quantitative filters
     df_rr_f = apply_f(df_rr, bypass_quant=True)
 
     def get_p(data, is_rr=False):
