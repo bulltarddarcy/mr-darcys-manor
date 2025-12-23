@@ -10,6 +10,8 @@ import math
 import streamlit_authenticator as stauth
 
 # --- 1. AUTHENTICATION SETUP ---
+# In the latest version, we provide the plain text passwords in the dict
+# and the library handles the verification logic internally.
 credentials = {
     "usernames": {
         "admin": {
@@ -23,12 +25,8 @@ credentials = {
     }
 }
 
-# Generate hashes for compatibility with latest library version
-hasher = stauth.Hasher(['tape-curtain-phone', 'darcy'])
-hashed_passwords = hasher.generate()
-credentials['usernames']['admin']['password'] = hashed_passwords[0]
-credentials['usernames']['mister']['password'] = hashed_passwords[1]
-
+# Initialize authenticator
+# The newest version of the library handles the hashing logic automatically
 authenticator = stauth.Authenticate(
     credentials, 
     "options_dashboard_cookie", 
