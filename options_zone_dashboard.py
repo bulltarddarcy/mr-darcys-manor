@@ -349,30 +349,36 @@ def run_pivot_tables_app(df):
         final_df = piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
         return final_df[columns]
 
-    def display_pivot_table(df, title):
-        st.subheader(title)
-        if df.empty:
-            st.info(f"No {title} found matching these filters.")
-            return
-
-        # Handle height and scrolling for tables > 50 rows
-        max_h = None
-        if len(df) > 50:
-            max_h = 600 # Cap height to force scrolling
-
-        # Using st.table for visual row-grouping borders, wrapped in container for height control
-        with st.container(height=max_h):
-            st.table(df.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).hide(axis='index'))
-
     std_cols = ["Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
 
     # 1. Calls Bought Table
-    display_pivot_table(get_ranked_pivot(f, "Calls Bought", std_cols), "Calls Bought")
+    st.subheader("Calls Bought")
+    calls_bought = get_ranked_pivot(f, "Calls Bought", std_cols)
+    if not calls_bought.empty:
+        st.dataframe(
+            calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+            use_container_width=True,
+            hide_index=True,
+            height=get_table_height(calls_bought)
+        )
+    else:
+        st.info("No Calls Bought found matching these filters.")
 
     # 2. Puts Sold Table
-    display_pivot_table(get_ranked_pivot(f, "Puts Sold", std_cols), "Puts Sold")
+    st.subheader("Puts Sold")
+    puts_sold = get_ranked_pivot(f, "Puts Sold", std_cols)
+    if not puts_sold.empty:
+        st.dataframe(
+            puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+            use_container_width=True,
+            hide_index=True,
+            height=get_table_height(puts_sold)
+        )
+    else:
+        st.info("No Puts Sold found matching these filters.")
 
-    # 3. Risk Reversals Table
+    # 3. Risk Reversals Table (Date Filter only)
+    st.subheader("Risk Reversals")
     rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     rr_data = rr_data[rr_data["Order Type"] == "Risk Reversals"]
     
@@ -395,9 +401,13 @@ def run_pivot_tables_app(df):
         rr_final = rr_pivot.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
         
         rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
-        display_pivot_table(rr_final[rr_cols], "Risk Reversals")
+        st.dataframe(
+            rr_final[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+            use_container_width=True,
+            hide_index=True,
+            height=get_table_height(rr_final)
+        )
     else:
-        st.subheader("Risk Reversals")
         st.info("No Risk Reversals found in this date range.")
 
 
@@ -405,7 +415,6 @@ def run_pivot_tables_app(df):
 if st.session_state["authentication_status"]:
     st.set_page_config(page_title="Trading Toolbox", layout="wide")
     
-    # CSS to handle the grouping look specifically for st.table
     st.markdown("""
     <style>
     :root{
@@ -430,20 +439,6 @@ if st.session_state["authentication_status"]:
     .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
     .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
-    
-    /* REMOVE BORDERS FOR GROUPED TICKERS */
-    /* Target cells in st.table where the first cell is empty/whitespace only */
-    div[data-testid="stTable"] table {
-        border-collapse: collapse !important;
-    }
-    div[data-testid="stTable"] table tr td {
-        border-top: 1px solid #3a3f45 !important;
-    }
-    /* If the first cell in a row is empty, remove the top border to merge visually with row above */
-    div[data-testid="stTable"] table tr:has(td:first-child:empty) td {
-        border-top: none !important;
-    }
-
     th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
     [data-testid="stSidebar"] .stMarkdown p { margin-bottom: 0px; }
     [data-testid="stSidebar"] .stCheckbox { margin-bottom: -10px; }
