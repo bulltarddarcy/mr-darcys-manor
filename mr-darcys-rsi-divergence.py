@@ -144,9 +144,10 @@ if not AVAILABLE_DATASETS:
     st.error("No data sources configured. Please add URL_DIVERGENCES, URL_MIDCAP, and URL_SP500 to your Streamlit Secrets.")
     st.stop()
 
-st.sidebar.header("Data Configuration")
+# Sidebar Styling and Layout
+st.sidebar.markdown("### Data Configuration")
 
-# Dataset Selection (Radio button replaces toggles for cleaner max-1 choice)
+# Dataset Selection
 selected_dataset = st.sidebar.radio(
     "Select Dataset", 
     list(AVAILABLE_DATASETS.keys()),
@@ -156,15 +157,15 @@ selected_dataset = st.sidebar.radio(
 # RSI Divergence Length (Timeframe)
 timeframe = st.sidebar.radio("RSI Divergence Length", ["Daily", "Weekly"], index=0)
 
+# View Mode selection
+view_mode = st.sidebar.radio("View Mode", ["Summary Dashboard", "Ticker Detail"], index=0)
+
 final_url = AVAILABLE_DATASETS[selected_dataset]
 
 if final_url:
     raw_df = load_large_data(final_url)
 
     if not raw_df.empty:
-        st.sidebar.divider()
-        view_mode = st.sidebar.radio("View Mode", ["Summary Dashboard", "Ticker Detail"])
-        
         if view_mode == "Summary Dashboard":
             st.header(f"System-Wide Scanner: {selected_dataset} ({timeframe})")
             all_bullish, all_bearish = [], []
