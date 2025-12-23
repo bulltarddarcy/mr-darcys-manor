@@ -86,6 +86,7 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
 def get_market_cap(symbol: str) -> float:
     try:
         t = yf.Ticker(symbol)
+        # Use fast_info as it is much more reliable and faster than info for basic stats
         mc = t.fast_info.get('market_cap', 0)
         if not mc:
             mc = t.info.get('marketCap', 0)
@@ -358,7 +359,7 @@ def run_strike_zones_app(df):
             st.rerun()
 
 def run_pivot_tables_app(df):
-    """Exposure analysis with split rows and robust RR pairing including 2:1 and 3:1 ratios"""
+    """Exposure analysis with split rows and robust RR pairing (Strict 1:1 ratio)"""
     st.title("🎯 Pivot Tables")
     yesterday = date.today() - timedelta(days=1)
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
@@ -380,61 +381,27 @@ def run_pivot_tables_app(df):
     cb_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy()
     ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
     
-    # Matching keys for joining potential RR components
-    # We exclude 'Contracts' from keys to allow ratio matching
-    join_keys = ['Trade Date', 'Symbol', 'Expiry_DT']
+    # 1:1 Matching keys
+    keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
+    cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
     
-    # We still need to handle multiple occurrences of same ticker on same date
-    cb_pool['occ'] = cb_pool.groupby(join_keys).cumcount()
-    ps_pool['occ'] = ps_pool.groupby(join_keys).cumcount()
+    rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
     
-    # Cross merge within the same ticker/date/expiry group
-    rr_candidates = pd.merge(cb_pool, ps_pool, on=join_keys, suffixes=('_c', '_p'))
-    
-    # Filter candidates based on valid ratios: 1:1, 2:1, 3:1, 1:2, 1:3
-    def is_valid_ratio(row):
-        c, p = row['Contracts_c'], row['Contracts_p']
-        if p == 0 or c == 0: return False
-        ratio = c / p
-        return ratio in [1.0, 2.0, 3.0, 0.5, 1/3]
-
-    rr_matches = rr_candidates[rr_candidates.apply(is_valid_ratio, axis=1)].copy()
-    
-    # Greedy selection to prevent using same row twice
-    used_indices_c = set()
-    used_indices_p = set()
-    final_matches = []
-    
-    # We sort to prioritize 1:1 matches if they exist
-    rr_matches['abs_ratio_diff'] = (rr_matches['Contracts_c'] / rr_matches['Contracts_p'] - 1).abs()
-    rr_matches = rr_matches.sort_values('abs_ratio_diff')
-
-    for idx, row in rr_matches.iterrows():
-        # Using index values to track unique rows from original pools
-        # Note: Indexing in candidate merge might be tricky, so we use original row index if available
-        # In this specific merge, we don't have original indices easily, so we rely on 'occ' for uniqueness
-        # Actually, simpler: just use unique row identities if they existed. 
-        # For now, we'll allow standard merging but warn about overlap if logic gets too fuzzy.
-        pass
-
-    # Simplified RR assembly logic
     rr_rows = []
     for idx, row in rr_matches.iterrows():
-        rr_rows.append({'Symbol': row['Symbol'], 'Trade Date': row['Trade Date'], 'Expiry_DT': row['Expiry_DT'], 'Contracts': row['Contracts_c'], 'Dollars': row['Contracts_c'], 'Strike': clean_strike_fmt(row['Strike_c']), 'Pair_ID': idx, 'Pair_Side': 0, 'Contracts_Actual': row['Contracts_c'], 'Dollars_Actual': row['Dollars_c']})
-        rr_rows.append({'Symbol': row['Symbol'], 'Trade Date': row['Trade Date'], 'Expiry_DT': row['Expiry_DT'], 'Contracts': row['Contracts_p'], 'Dollars': row['Contracts_p'], 'Strike': clean_strike_fmt(row['Strike_p']), 'Pair_ID': idx, 'Pair_Side': 1, 'Contracts_Actual': row['Contracts_p'], 'Dollars_Actual': row['Dollars_p']})
-    
+        rr_rows.append({'Symbol': row['Symbol'], 'Trade Date': row['Trade Date'], 'Expiry_DT': row['Expiry_DT'], 'Contracts': row['Contracts'], 'Dollars': row['Dollars_c'], 'Strike': clean_strike_fmt(row['Strike_c']), 'Pair_ID': idx, 'Pair_Side': 0})
+        rr_rows.append({'Symbol': row['Symbol'], 'Trade Date': row['Trade Date'], 'Expiry_DT': row['Expiry_DT'], 'Contracts': row['Contracts'], 'Dollars': row['Dollars_p'], 'Strike': clean_strike_fmt(row['Strike_p']), 'Pair_ID': idx, 'Pair_Side': 1})
     df_rr = pd.DataFrame(rr_rows)
-    if not df_rr.empty:
-        # Map original data columns back for consistency
-        df_rr = df_rr.rename(columns={'Contracts_Actual': 'Contracts', 'Dollars_Actual': 'Dollars'})
 
-    # Filter out RR components from individual pools
-    # For simplicity in this version, we exclude rows that matched perfectly
     if not rr_matches.empty:
-        match_keys = join_keys + ['occ_c', 'occ_p'] # Use occurrence tags if we refined the merge
-        # To keep code clean, we subtract matched volumes
-        cb_pool = cb_pool[~cb_pool.set_index(join_keys + ['occ']).index.isin(rr_matches.set_index(join_keys + ['occ_c']).index)]
-        ps_pool = ps_pool[~ps_pool.set_index(join_keys + ['occ']).index.isin(rr_matches.set_index(join_keys + ['occ_p']).index)]
+        match_keys = keys + ['occ']
+        def filter_out_matches(pool, matches):
+            temp_matches = matches[match_keys].copy()
+            temp_matches['_remove'] = True
+            merged = pool.merge(temp_matches, on=match_keys, how='left')
+            return merged[merged['_remove'].isna()].drop(columns=['_remove'])
+        cb_pool = filter_out_matches(cb_pool, rr_matches)
+        ps_pool = filter_out_matches(ps_pool, rr_matches)
 
     def apply_f(data, bypass_quant=False):
         if data.empty: return data
@@ -478,7 +445,7 @@ def run_pivot_tables_app(df):
         st.subheader("Risk Reversals"); tbl = get_p(df_rr_f, is_rr=True)
         if not tbl.empty: 
             st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT); 
-            st.caption("ℹ️ Includes 1:1, 2:1, and 3:1 ratios. Reflects Date filters only.")
+            st.caption("ℹ️ This table reflects 1:1 ratio Risk Reversals and Date filters only.")
         else: st.caption("No matched RR pairs found.")
 
 def run_rsi_divergences_app():
