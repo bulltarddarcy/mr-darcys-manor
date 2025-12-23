@@ -47,7 +47,7 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Dollars"] = (df["Dollars"].astype(str)
                          .str.replace(",", "", regex=False)
                          .str.replace("$","", regex=False))
-        df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce")
+        df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
     
     if "Trade Date" in df.columns:
         df["Trade Date"] = pd.to_datetime(df["Trade Date"], errors="coerce")
@@ -57,7 +57,7 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Expiry_DT"] = pd.to_datetime(df["Expiry"], errors="coerce")
         
     if "Strike (Actual)" in df.columns:
-        df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce")
+        df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce").fillna(0.0)
         
     if "Error" in df.columns:
         df = df[~df["Error"].astype(str).str.upper().isin(["TRUE","1","YES"])]
@@ -268,6 +268,9 @@ def run_pivot_tables_app(df):
             "Contracts": "sum",
             "Dollars": "sum"
         }).reset_index()
+        # Ensure numeric types for formatting
+        piv["Contracts"] = pd.to_numeric(piv["Contracts"], errors='coerce').fillna(0)
+        piv["Dollars"] = pd.to_numeric(piv["Dollars"], errors='coerce').fillna(0.0)
         return piv[columns].sort_values(["Symbol", "Expiry"])
 
     # Columns for standard tables
@@ -302,6 +305,9 @@ def run_pivot_tables_app(df):
             "Contracts": "sum",
             "Dollars": "sum"
         }).reset_index()
+        # Coerce types for the style formatter
+        rr_pivot["Contracts"] = pd.to_numeric(rr_pivot["Contracts"], errors='coerce').fillna(0)
+        rr_pivot["Dollars"] = pd.to_numeric(rr_pivot["Dollars"], errors='coerce').fillna(0.0)
         st.dataframe(rr_pivot[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True)
     else:
         st.info("No Risk Reversals found in this date range.")
