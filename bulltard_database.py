@@ -332,7 +332,7 @@ def run_strike_zones_app(df):
                     color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
                     val_str = fmt_neg(r["Net_Dollars"])
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
             for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
                 if r["Zone_Low"] + (zone_w/2) < spot:
                     color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
@@ -500,9 +500,37 @@ if st.session_state["authentication_status"]:
     .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
     .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
     .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
-    .price-divider{position:relative;margin:16px 0 12px 0;height:2px;}
-    .price-divider .line{height:2px;background:var(--line);opacity:.9;width:652px;margin-left:112px;}
-    .price-badge{position:absolute;left:438px;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff; border:1px solid #56b6ff;border-radius:16px;padding:6px 12px;font-weight:800;font-size:12px;letter-spacing:.3px; box-shadow:0 2px 8px rgba(0,0,0,.35); white-space: nowrap;}
+    
+    .price-divider {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        margin: 24px 0;
+        width: 100%;
+    }
+    .price-divider::before, .price-divider::after {
+        content: "";
+        flex-grow: 1;
+        height: 2px;
+        background: var(--line);
+        opacity: 0.6;
+    }
+    .price-badge {
+        background: #2b3a45;
+        color: #bfe7ff;
+        border: 1px solid #56b6ff;
+        border-radius: 16px;
+        padding: 6px 14px;
+        font-weight: 800;
+        font-size: 12px;
+        letter-spacing: 0.5px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+        white-space: nowrap;
+        margin: 0 12px;
+        z-index: 1;
+    }
+
     .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
     .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
