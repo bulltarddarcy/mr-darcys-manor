@@ -553,7 +553,7 @@ def run_pivot_tables_app(df):
         st.subheader("Risk Reversals"); tbl = get_p(df_rr_f, is_rr=True)
         if not tbl.empty: 
             st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT); 
-            st.caption("ℹ️ This table reflects the Date filters only.")
+            st.caption("ℹ️ This table reflects 1:1 ratio Risk Reversals and Date filters only.")
         else: st.caption("No matched RR pairs found.")
 
 def run_rsi_divergences_app():
