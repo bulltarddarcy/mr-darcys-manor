@@ -72,21 +72,20 @@ def run_strike_zones_app(df):
     """Logic for the original Strike Zones Dashboard"""
     st.title("📊 Options Strike Zones Dashboard")
 
-    # yesterday as a date object
-    yesterday = date.today() - timedelta(days=1)
-
     # ---------- Controls ----------
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
         ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
     with c2:
-        td_start = st.date_input("Trade Date (start)", value=yesterday, key="sz_start")
+        # Default to blank (None) as requested
+        td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
     with c3:
-        td_end = st.date_input("Trade Date (end)", value=yesterday, key="sz_end")
+        # Default to blank (None) as requested
+        td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
     with c4:
-        exp_range_end = (date.today() + timedelta(days=365))
-        exp_end = st.date_input("Exp. Range (end)", value=exp_range_end, key="sz_exp")
+        exp_range_default = (date.today() + timedelta(days=365))
+        exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
     st.markdown('</div>', unsafe_allow_html=True)
 
     with st.sidebar:
@@ -114,7 +113,13 @@ def run_strike_zones_app(df):
 
     # ---------- Filters ----------
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
-    f = f[(f["Trade Date"].dt.date >= td_start) & (f["Trade Date"].dt.date <= td_end)]
+    
+    # Apply trade date filters only if they are not "blank" (None)
+    if td_start:
+        f = f[f["Trade Date"].dt.date >= td_start]
+    if td_end:
+        f = f[f["Trade Date"].dt.date <= td_end]
+        
     today_val = date.today()
     f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
     
@@ -250,8 +255,10 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
+        # Default to yesterday as requested
         td_start = st.date_input("Trade Start Date", value=yesterday, key="pv_start")
     with c2:
+        # Default to yesterday as requested
         td_end = st.date_input("Trade End Date", value=yesterday, key="pv_end")
     with c3:
         ticker_filter = st.text_input("Ticker (leave blank for all)", value="", key="pv_ticker").strip().upper()
@@ -262,6 +269,7 @@ def run_pivot_tables_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ---------- Global Filtering ----------
+    # Pivot tables use mandatory yesterday default filters
     f = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     
     if ticker_filter:
