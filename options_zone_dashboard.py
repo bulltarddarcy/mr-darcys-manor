@@ -105,6 +105,8 @@ def highlight_expiry(val):
     try:
         expiry_date = datetime.strptime(val, "%d %b %y").date()
         today = date.today()
+        
+        # Calculate reference Fridays
         this_fri = today + timedelta(days=(4 - today.weekday()) % 7)
         next_fri = this_fri + timedelta(days=7)
         two_fri = this_fri + timedelta(days=14)
@@ -124,7 +126,7 @@ def clean_strike_fmt(val):
     except:
         return str(val)
 
-# Column widths for side-by-side tables
+# Shrunk column widths for side-by-side pivot tables
 COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
@@ -172,6 +174,18 @@ def run_strike_zones_app(df):
         compact_divider()
         st.markdown("**Other Options**")
         hide_empty      = st.checkbox("Hide Empty Zones", value=True)
+        show_table       = st.checkbox("Show Strike Zone Table", value=True)
+        
+        st.markdown("---")
+        if st.button("Reset All Defaults", use_container_width=True):
+            # Clear keys for widgets and inclusion state
+            keys_to_clear = ["sz_ticker", "sz_start", "sz_end", "sz_exp"]
+            # Also clear the specific inclusion state key for this ticker
+            inc_key = f"sz_include_{ticker}"
+            if inc_key in st.session_state: del st.session_state[inc_key]
+            for k in keys_to_clear:
+                if k in st.session_state: del st.session_state[k]
+            st.rerun()
 
     # 1. INITIAL FILTERING
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
@@ -183,35 +197,24 @@ def run_strike_zones_app(df):
     f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
     
     # 2. PREPARE EDITABLE TABLE DATA
-    # Create the display subset for the editor
     edit_pool = f[f["Order Type"].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
     if edit_pool.empty:
         st.warning("No trades match current filters.")
         return
 
-    # Formatted display columns
     edit_pool["Trade Date Display"] = edit_pool["Trade Date"].dt.strftime("%d %b %y")
     edit_pool["Expiry Display"] = edit_pool["Expiry_DT"].dt.strftime("%d %b %y")
     
-    # Check session state for existing exclusions to persist state
     state_key = f"sz_include_{ticker}"
     if state_key not in st.session_state:
         st.session_state[state_key] = [True] * len(edit_pool)
     
-    # Ensure length matches if filters changed
     if len(st.session_state[state_key]) != len(edit_pool):
         st.session_state[state_key] = [True] * len(edit_pool)
 
     edit_pool["Included"] = st.session_state[state_key]
-
-    # Display columns requested by user
     cols_to_show = ["Trade Date Display", "Order Type", "Symbol", "Strike", "Expiry Display", "Contracts", "Dollars", "Included"]
     
-    # Render table at the bottom later but we need its output NOW for the charts above
-    # We use a placeholder logic or session state to handle this
-    
-    # 3. CHART CALCULATION
-    # Get active rows based on the "Included" column
     active_mask = edit_pool["Included"] == True
     used = edit_pool[active_mask].copy()
 
@@ -316,34 +319,32 @@ def run_strike_zones_app(df):
                 st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
     # 4. DATA TABLE EDITOR
-    st.subheader("Data Table")
-    st.caption("Tip: Uncheck 'Included' to exclude a trade from calculations and charts above.")
-    
-    # Configure columns
-    column_config = {
-        "Trade Date Display": st.column_config.TextColumn("Trade Date"),
-        "Order Type": st.column_config.TextColumn("Order Type"),
-        "Symbol": st.column_config.TextColumn("Symbol"),
-        "Strike": st.column_config.TextColumn("Strike"),
-        "Expiry Display": st.column_config.TextColumn("Expiry"),
-        "Contracts": st.column_config.NumberColumn("Contracts", format="%d"),
-        "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
-        "Included": st.column_config.CheckboxColumn("Included", default=True)
-    }
+    if show_table:
+        st.subheader("Data Table")
+        st.caption("Tip: Uncheck 'Included' to exclude a trade from calculations and charts above.")
+        
+        column_config = {
+            "Trade Date Display": st.column_config.TextColumn("Trade Date"),
+            "Order Type": st.column_config.TextColumn("Order Type"),
+            "Symbol": st.column_config.TextColumn("Symbol"),
+            "Strike": st.column_config.TextColumn("Strike"),
+            "Expiry Display": st.column_config.TextColumn("Expiry"),
+            "Contracts": st.column_config.NumberColumn("Contracts", format="%d"),
+            "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
+            "Included": st.column_config.CheckboxColumn("Included", default=True)
+        }
 
-    # Display and capture edits
-    edited_df = st.data_editor(
-        edit_pool[cols_to_show],
-        column_config=column_config,
-        use_container_width=True,
-        hide_index=True,
-        key="strike_zones_editor"
-    )
+        edited_df = st.data_editor(
+            edit_pool[cols_to_show],
+            column_config=column_config,
+            use_container_width=True,
+            hide_index=True,
+            key="strike_zones_editor"
+        )
 
-    # Update session state when edited
-    if not edited_df.equals(edit_pool[cols_to_show]):
-        st.session_state[state_key] = edited_df["Included"].tolist()
-        st.rerun()
+        if not edited_df.equals(edit_pool[cols_to_show]):
+            st.session_state[state_key] = edited_df["Included"].tolist()
+            st.rerun()
 
 
 def run_pivot_tables_app(df):
@@ -459,15 +460,19 @@ if st.session_state["authentication_status"]:
     .control-box{padding:14px 0; border-radius:10px;}
     .zones-panel{padding:14px 0; border-radius:10px;}
     .zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
-    .zone-label{width:220px;font-weight:700;color:#fff}
+    
+    /* Reduced space between label and bar: width reduced to 100px from 220px */
+    .zone-label{width:100px;font-weight:700;color:#fff; text-align: right;}
+    
     .zone-bar{height:22px;border-radius:6px;min-width:6px}
     .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
     .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
     .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
     
+    /* Adjusted Spot Divider CSS - Width 600px, Start offset 112px */
     .price-divider{position:relative;margin:16px 0 12px 0;height:2px;}
-    .price-divider .line{height:2px;background:var(--line);opacity:.9;width:652px;margin-left:232px;}
-    .price-badge{position:absolute;left:558px;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
+    .price-divider .line{height:2px;background:var(--line);opacity:.9;width:600px;margin-left:112px;}
+    .price-badge{position:absolute;left:412px;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
       border:1px solid #56b6ff;border-radius:16px;padding:6px 12px;font-weight:800;font-size:12px;letter-spacing:.3px;
       box-shadow:0 2px 8px rgba(0,0,0,.35); white-space: nowrap;}
       
