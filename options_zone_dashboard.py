@@ -47,7 +47,6 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
 
     if "Contracts" in df.columns:
-        # Fixed: Removed commas from contracts to ensure numeric conversion doesn't fail/return 0
         df["Contracts"] = (df["Contracts"].astype(str)
                            .str.replace(",", "", regex=False))
         df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(0)
@@ -68,7 +67,6 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def get_market_cap(symbol: str) -> float:
-    """Fetch market cap for a ticker using yfinance."""
     try:
         t = yf.Ticker(symbol)
         mc = t.info.get('marketCap', 0)
@@ -78,7 +76,6 @@ def get_market_cap(symbol: str) -> float:
 
 @st.cache_data(ttl=300)
 def is_above_ema21(symbol: str) -> bool:
-    """Check if the current price is above the 21-day EMA."""
     try:
         ticker = yf.Ticker(symbol)
         h = ticker.history(period="60d")
@@ -92,7 +89,6 @@ def is_above_ema21(symbol: str) -> bool:
         return True
 
 def get_table_height(df, max_rows=30):
-    """Calculate height to show all rows up to max_rows without scrolling."""
     row_count = len(df)
     if row_count == 0:
         return 100
@@ -100,7 +96,7 @@ def get_table_height(df, max_rows=30):
     return (display_rows + 1) * 35 + 5
 
 def highlight_expiry(val):
-    """Highlights Expiry based on which Friday it falls on with user-defined colors."""
+    """Highlights Expiry based on proximity to upcoming Fridays."""
     try:
         expiry_date = datetime.strptime(val, "%d %b %y").date()
         today = date.today()
@@ -114,26 +110,22 @@ def highlight_expiry(val):
             return "" 
         
         if expiry_date == this_fri:
-            # This Friday (Green)
             return "background-color: #2d5a27; color: white;" 
         elif expiry_date == next_fri:
-            # Next Friday (Orange)
             return "background-color: #8c5e03; color: white;" 
         elif expiry_date == two_fri:
-            # Two Fridays from now (Red)
             return "background-color: #7d3c3c; color: white;" 
         return ""
     except:
         return ""
 
-# Shrunk column widths to fit 3 tables side-by-side without horizontal scrolling
+# Optimized column widths to prevent horizontal scroll while showing enough info
 COLUMN_CONFIG_PIVOT = {
-    "Symbol": st.column_config.TextColumn("Sym", width=55),
-    "Strike": st.column_config.TextColumn("Strk", width=65),
-    "Expiry": st.column_config.TextColumn("Exp", width=85),
-    "Contracts": st.column_config.NumberColumn("Qty", width=65),
-    "Dollars": st.column_config.NumberColumn("$ Vol", width=95),
-    "Order Type": st.column_config.TextColumn("Type", width=85),
+    "Symbol": st.column_config.TextColumn("Sym", width=65),
+    "Strike": st.column_config.TextColumn("Strike", width=95),
+    "Expiry": st.column_config.TextColumn("Exp", width=90),
+    "Contracts": st.column_config.NumberColumn("Qty", width=60),
+    "Dollars": st.column_config.NumberColumn("Dollars", width=90, format="$%d"),
 }
 
 # --- 3. APP MODULES ---
@@ -142,7 +134,6 @@ def run_strike_zones_app(df):
     """Logic for the original Strike Zones Dashboard"""
     st.title("📊 Options Strike Zones Dashboard")
 
-    # ---------- Controls ----------
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
@@ -179,7 +170,6 @@ def run_strike_zones_app(df):
         show_table       = st.checkbox("Show Strike Zone Table", value=True)
         show_raw         = st.checkbox("Show Trades Used Table", value=True)
 
-    # ---------- Filters ----------
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
     
     if td_start:
@@ -201,7 +191,6 @@ def run_strike_zones_app(df):
         st.warning("No trades match current filters.")
         return
 
-    # ---------- indicators ----------
     @st.cache_data(ttl=300)
     def get_stock_indicators(sym: str):
         try:
@@ -235,7 +224,6 @@ def run_strike_zones_app(df):
         return 0
     used["Signed Dollars"] = used.apply(lambda r: sign_for(r["Order Type"]) * (r["Dollars"] or 0.0), axis=1)
 
-    # ---------- Visualizations ----------
     if view_mode == "Price Zones":
         strike_min = float(np.nanmin(used["Strike (Actual)"].values))
         strike_max = float(np.nanmax(used["Strike (Actual)"].values))
@@ -317,7 +305,7 @@ def run_strike_zones_app(df):
 
 
 def run_pivot_tables_app(df):
-    """Analyzes exposure using Pivot Tables across defined order types"""
+    """Analyzes exposure using Pivot Tables with specific Risk Reversal pairing logic"""
     st.title("🎯 Pivot Tables")
     
     yesterday = date.today() - timedelta(days=1)
@@ -343,126 +331,114 @@ def run_pivot_tables_app(df):
         ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ---------- Global Filtering ----------
-    f = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
+    # --- 1. Identify Risk Reversals ---
+    # We use all data in the date range to find pairs, then filter the resulting lists.
+    d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
+    d_range['_original_idx'] = d_range.index
     
-    if ticker_filter:
-        f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
+    cb_pool = d_range[d_range["Order Type"] == "Calls Bought"].copy()
+    ps_pool = d_range[d_range["Order Type"] == "Puts Sold"].copy()
     
-    f = f[f["Dollars"] >= min_notional]
+    # Matching logic: same date, symbol, expiry, contracts
+    # Use cumcount to handle multiple identical trades in a day
+    match_keys = ['Trade Date', 'Symbol', 'Expiry', 'Contracts']
+    cb_pool['occ'] = cb_pool.groupby(match_keys).cumcount()
+    ps_pool['occ'] = ps_pool.groupby(match_keys).cumcount()
+    
+    rr_matches = pd.merge(
+        cb_pool, ps_pool, 
+        on=match_keys + ['occ'], 
+        suffixes=('_c', '_p')
+    )
+    
+    # Row IDs used in RR to exclude from solo tables
+    used_cb_ids = rr_matches['_original_idx_c'].tolist()
+    used_ps_ids = rr_matches['_original_idx_p'].tolist()
+    
+    # 3 Distinct Pools
+    df_cb_solo = cb_pool[~cb_pool['_original_idx'].isin(used_cb_ids)].copy()
+    df_ps_solo = ps_pool[~ps_pool['_original_idx'].isin(used_ps_ids)].copy()
+    
+    df_rr = pd.DataFrame()
+    if not rr_matches.empty:
+        df_rr['Symbol'] = rr_matches['Symbol']
+        df_rr['Trade Date'] = rr_matches['Trade Date']
+        df_rr['Expiry'] = rr_matches['Expiry']
+        df_rr['Contracts'] = rr_matches['Contracts']
+        df_rr['Dollars'] = rr_matches['Dollars_c'] + rr_matches['Dollars_p']
+        df_rr['Strike'] = rr_matches['Strike_c'].astype(str) + "c/" + rr_matches['Strike_p'].astype(str) + "p"
+        df_rr['Order Type'] = "Risk Reversal"
 
-    if not f.empty:
-        unique_syms = f["Symbol"].unique()
-        if min_mkt_cap > 0:
-            valid_mc_syms = [s for s in unique_syms if get_market_cap(s) >= min_mkt_cap]
-            f = f[f["Symbol"].isin(valid_mc_syms)]
-            unique_syms = f["Symbol"].unique()
-            
-        if ema_filter == "Yes":
-            valid_ema_syms = [s for s in unique_syms if is_above_ema21(s)]
-            f = f[f["Symbol"].isin(valid_ema_syms)]
+    def apply_filters(data):
+        if data.empty: return data
+        f_data = data.copy()
+        if ticker_filter:
+            f_data = f_data[f_data["Symbol"].astype(str).str.upper() == ticker_filter]
+        f_data = f_data[f_data["Dollars"] >= min_notional]
+        if not f_data.empty:
+            unique_syms = f_data["Symbol"].unique()
+            if min_mkt_cap > 0:
+                valid_mc = [s for s in unique_syms if get_market_cap(s) >= min_mkt_cap]
+                f_data = f_data[f_data["Symbol"].isin(valid_mc)]
+                unique_syms = f_data["Symbol"].unique()
+            if ema_filter == "Yes":
+                valid_ema = [s for s in unique_syms if is_above_ema21(s)]
+                f_data = f_data[f_data["Symbol"].isin(valid_ema)]
+        return f_data
 
-    def get_ranked_pivot(data, order_type, columns):
-        subset = data[data["Order Type"] == order_type].copy()
-        if subset.empty:
-            return pd.DataFrame(columns=columns)
-        
-        sym_rank = subset.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
-        piv = subset.groupby(["Symbol", "Strike", "Expiry"]).agg({
-            "Contracts": "sum",
-            "Dollars": "sum"
-        }).reset_index()
+    df_cb_filtered = apply_filters(df_cb_solo)
+    df_ps_filtered = apply_filters(df_ps_solo)
+    df_rr_filtered = apply_filters(df_rr)
+
+    def get_ranked_pivot(data):
+        if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry", "Contracts", "Dollars"])
+        sym_rank = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
+        piv = data.groupby(["Symbol", "Strike", "Expiry"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index()
         piv = piv.merge(sym_rank, on="Symbol")
-        
-        piv["Contracts"] = pd.to_numeric(piv["Contracts"], errors='coerce').fillna(0)
-        piv["Dollars"] = pd.to_numeric(piv["Dollars"], errors='coerce').fillna(0.0)
-        piv["Expiry"] = pd.to_datetime(piv["Expiry"]).dt.strftime("%d %b %y")
-        
+        piv["Expiry_Fmt"] = pd.to_datetime(piv["Expiry"]).dt.strftime("%d %b %y")
         piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
-        
         piv["Symbol_Display"] = piv["Symbol"]
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
-        
-        final_df = piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
-        return final_df[columns]
+        res = piv.rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})
+        return res[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
 
-    std_cols = ["Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
-
-    # Side-by-side layout using three columns
+    # Side-by-side layout
     col1, col2, col3 = st.columns(3)
 
-    # 1. Calls Bought Table
     with col1:
         st.subheader("Calls Bought")
-        df_cb = get_ranked_pivot(f, "Calls Bought", std_cols)
-        if not df_cb.empty:
-            st.dataframe(
-                df_cb.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"})
-                .map(highlight_expiry, subset=["Expiry"]),
-                use_container_width=True, # Forced container width with small fixed config prevents horizontal scroll
-                hide_index=True,
-                height=get_table_height(df_cb, max_rows=30),
-                column_config=COLUMN_CONFIG_PIVOT
-            )
+        tbl_cb = get_ranked_pivot(df_cb_filtered)
+        if not tbl_cb.empty:
+            st.dataframe(tbl_cb.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).map(highlight_expiry, subset=["Expiry_Table"]),
+                         use_container_width=True, hide_index=True, height=get_table_height(tbl_cb),
+                         column_config=COLUMN_CONFIG_PIVOT)
         else:
-            st.info("No Calls Bought.")
+            st.info("None matching.")
 
-    # 2. Puts Sold Table
     with col2:
         st.subheader("Puts Sold")
-        df_ps = get_ranked_pivot(f, "Puts Sold", std_cols)
-        if not df_ps.empty:
-            st.dataframe(
-                df_ps.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"})
-                .map(highlight_expiry, subset=["Expiry"]),
-                use_container_width=True,
-                hide_index=True,
-                height=get_table_height(df_ps, max_rows=30),
-                column_config=COLUMN_CONFIG_PIVOT
-            )
+        tbl_ps = get_ranked_pivot(df_ps_filtered)
+        if not tbl_ps.empty:
+            st.dataframe(tbl_ps.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).map(highlight_expiry, subset=["Expiry_Table"]),
+                         use_container_width=True, hide_index=True, height=get_table_height(tbl_ps),
+                         column_config=COLUMN_CONFIG_PIVOT)
         else:
-            st.info("No Puts Sold.")
+            st.info("None matching.")
 
-    # 3. Risk Reversals Table
     with col3:
         st.subheader("Risk Reversals")
-        rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
-        rr_data = rr_data[rr_data["Order Type"] == "Risk Reversals"]
-        
-        if not rr_data.empty:
-            sym_rank_rr = rr_data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
-            rr_pivot = rr_data.groupby(["Symbol", "Order Type", "Strike", "Expiry"]).agg({
-                "Contracts": "sum",
-                "Dollars": "sum"
-            }).reset_index()
-            
-            rr_pivot = rr_pivot.merge(sym_rank_rr, on="Symbol")
-            rr_pivot["Contracts"] = pd.to_numeric(rr_pivot["Contracts"], errors='coerce').fillna(0)
-            rr_pivot["Dollars"] = pd.to_numeric(rr_pivot["Dollars"], errors='coerce').fillna(0.0)
-            rr_pivot["Expiry"] = pd.to_datetime(rr_pivot["Expiry"]).dt.strftime("%d %b %y")
-            
-            rr_pivot = rr_pivot.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
-            
-            rr_pivot["Symbol_Display"] = rr_pivot["Symbol"]
-            rr_pivot.loc[rr_pivot["Symbol"] == rr_pivot["Symbol"].shift(1), "Symbol_Display"] = ""
-            rr_final = rr_pivot.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
-            
-            rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
-            st.dataframe(
-                rr_final[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"})
-                .map(highlight_expiry, subset=["Expiry"]),
-                use_container_width=True,
-                hide_index=True,
-                height=get_table_height(rr_final, max_rows=30),
-                column_config=COLUMN_CONFIG_PIVOT
-            )
+        tbl_rr = get_ranked_pivot(df_rr_filtered)
+        if not tbl_rr.empty:
+            st.dataframe(tbl_rr.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).map(highlight_expiry, subset=["Expiry_Table"]),
+                         use_container_width=True, hide_index=True, height=get_table_height(tbl_rr),
+                         column_config=COLUMN_CONFIG_PIVOT)
         else:
-            st.info("No Risk Reversals.")
+            st.info("None matching.")
 
 
 # --- 4. MAIN EXECUTION ---
 if st.session_state["authentication_status"]:
-    st.set_page_config(page_title="Trading Toolbox", layout="wide")
+    st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
     
     st.markdown("""
     <style>
