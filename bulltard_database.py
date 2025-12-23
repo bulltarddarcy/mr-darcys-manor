@@ -8,6 +8,9 @@ from datetime import date, timedelta, datetime
 import yfinance as yf
 import math
 import streamlit_authenticator as stauth
+import os
+import glob
+import streamlit.components.v1 as components
 
 # --- 1. AUTHENTICATION SETUP ---
 credentials = {
@@ -382,7 +385,10 @@ def run_strike_zones_app(df):
         except: return None, None, None, None, None
 
     spot, ema8, ema21, sma200, history = get_stock_indicators(ticker)
-    if spot is None: spot = st.number_input("Manual Current Price", value=100.0)
+    
+    if spot is None:
+        st.warning(f"Could not fetch current price for {ticker}. Indicators will not be accurate.")
+        spot = 100.0
 
     def pct_from_spot(x):
         if x is None or np.isnan(x): return "—"
@@ -473,6 +479,11 @@ def run_pivot_tables_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
+    
+    if d_range.empty:
+        st.info("No data found for the selected date range.")
+        return
+
     order_type_col = "Order Type" if "Order Type" in d_range.columns else "Order type"
     cb_pool, ps_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy(), d_range[d_range[order_type_col] == "Puts Sold"].copy()
     keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
@@ -519,9 +530,25 @@ def run_pivot_tables_app(df):
         st.subheader("Risk Reversals"); tbl = get_p(df_rr_f, True)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT); st.caption("⚠️ RR Table reflects date range only")
 
+def run_rsi_divergences_app():
+    """Display the latest RSI Divergence HTML report from the local filesystem."""
+    st.title("📈 RSI Divergences")
+    search_path = os.path.join("dashboards", "divergences", "*.html")
+    files = glob.glob(search_path)
+    if not files:
+        st.warning("No RSI Divergence reports found in `dashboards/divergences`.")
+        return
+    latest_file = max(files, key=os.path.getmtime)
+    try:
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        st.caption(f"Showing report: {os.path.basename(latest_file)}")
+        components.html(html_content, height=1200, scrolling=True)
+    except Exception as e:
+        st.error(f"Error loading report: {e}")
+
 # --- 4. MAIN EXECUTION ---
 if st.session_state["authentication_status"]:
-    # Process incoming navigation params (e.g. from Rankings hyperlinks)
     if "tool" in st.query_params or "ticker" in st.query_params:
         st.session_state["app_choice_internal"] = st.query_params.get("tool")
         st.session_state["db_ticker"] = st.query_params.get("ticker")
@@ -553,23 +580,26 @@ if st.session_state["authentication_status"]:
     .color-dot { width: 14px; height: 14px; border-radius: 3px; }
     </style>""", unsafe_allow_html=True)
     
-    with st.sidebar:
-        st.header("Select Tool")
-        tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones"]
-        default_tool_idx = 0
-        if "app_choice_internal" in st.session_state:
-            try: default_tool_idx = tools.index(st.session_state["app_choice_internal"])
-            except: pass
-            del st.session_state["app_choice_internal"]
-        app_choice = st.selectbox("Select Tool", tools, index=default_tool_idx, label_visibility="collapsed")
-        
     try:
         sheet_url = st.secrets["GSHEET_URL"]
         df_global = load_and_clean_data(sheet_url)
+        last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
+
+        with st.sidebar:
+            st.markdown(f"**Last Updated:** {last_updated_date}")
+            st.header("Select Tool")
+            tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
+            default_tool_idx = 0
+            if "app_choice_internal" in st.session_state:
+                try: default_tool_idx = tools.index(st.session_state["app_choice_internal"])
+                except: pass
+                del st.session_state["app_choice_internal"]
+            app_choice = st.selectbox("Select Tool", tools, index=default_tool_idx, label_visibility="collapsed")
         
         if app_choice == "Options Database": run_options_database_app(df_global)
         elif app_choice == "Rankings": run_rankings_app(df_global)
         elif app_choice == "Pivot Tables": run_pivot_tables_app(df_global)
+        elif app_choice == "RSI Divergences": run_rsi_divergences_app()
         else: run_strike_zones_app(df_global)
             
         with st.sidebar:
@@ -578,7 +608,6 @@ if st.session_state["authentication_status"]:
                 st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
                 st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
                 st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
-            
             st.markdown('<div style="margin-top: 6rem;"></div>', unsafe_allow_html=True)
             authenticator.logout('Logout', 'sidebar')
             
