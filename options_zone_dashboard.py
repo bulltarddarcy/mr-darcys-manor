@@ -45,6 +45,12 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
                          .str.replace("$", "", regex=False)
                          .str.replace(",", "", regex=False))
         df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
+
+    if "Contracts" in df.columns:
+        # Fixed: Removed commas from contracts to ensure numeric conversion doesn't fail/return 0
+        df["Contracts"] = (df["Contracts"].astype(str)
+                           .str.replace(",", "", regex=False))
+        df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(0)
     
     if "Trade Date" in df.columns:
         df["Trade Date"] = pd.to_datetime(df["Trade Date"], errors="coerce")
