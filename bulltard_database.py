@@ -249,8 +249,11 @@ def run_strike_zones_app(df):
     with c4: exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
     st.markdown('</div>', unsafe_allow_html=True)
     with st.sidebar:
-        view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"])
-        width_mode = st.radio("Select Sizing", ["Auto", "Fixed"])
+        st.markdown("**View Mode**")
+        view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], label_visibility="collapsed")
+        
+        st.markdown("**Zone Width**")
+        width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], label_visibility="collapsed")
         fixed_size_choice = 10
         if width_mode == "Fixed": fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
         
