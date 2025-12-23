@@ -32,7 +32,7 @@ authenticator = stauth.Authenticate(
 
 authenticator.login(location='main')
 
-# --- 2. GLOBAL DATA LOADING ---
+# --- 2. GLOBAL DATA LOADING & UTILITIES ---
 @st.cache_data(show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
     df = pd.read_csv(url)
@@ -47,7 +47,6 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
 
     if "Contracts" in df.columns:
-        # Fixed: Removed commas from contracts to ensure numeric conversion doesn't fail/return 0
         df["Contracts"] = (df["Contracts"].astype(str)
                            .str.replace(",", "", regex=False))
         df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(0)
@@ -66,6 +65,17 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         
     return df
 
+@st.cache_data(ttl=3600)
+def get_market_cap(symbol: str) -> float:
+    """Fetch market cap for a ticker using yfinance."""
+    try:
+        t = yf.Ticker(symbol)
+        # Using info.get is the standard way to retrieve marketCap
+        mc = t.info.get('marketCap', 0)
+        return float(mc) if mc else 0.0
+    except:
+        return 0.0
+
 # --- 3. APP MODULES ---
 
 def run_strike_zones_app(df):
@@ -78,10 +88,8 @@ def run_strike_zones_app(df):
     with c1:
         ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
     with c2:
-        # Default to blank (None) as requested
         td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
     with c3:
-        # Default to blank (None) as requested
         td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
     with c4:
         exp_range_default = (date.today() + timedelta(days=365))
@@ -114,7 +122,6 @@ def run_strike_zones_app(df):
     # ---------- Filters ----------
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
     
-    # Apply trade date filters only if they are not "blank" (None)
     if td_start:
         f = f[f["Trade Date"].dt.date >= td_start]
     if td_end:
@@ -238,7 +245,6 @@ def run_strike_zones_app(df):
     if show_table:
         st.markdown("### Data Table")
         display_used = used.copy()
-        # Formatting dates for the table
         display_used["Trade Date"] = display_used["Trade Date"].dt.strftime("%d %b %y")
         display_used["Expiry"] = pd.to_datetime(display_used["Expiry"]).dt.strftime("%d %b %y")
         st.dataframe(display_used, use_container_width=True)
@@ -248,28 +254,29 @@ def run_pivot_tables_app(df):
     """Analyzes exposure using Pivot Tables across defined order types"""
     st.title("💼 Pivot Tables")
     
-    # yesterday as a date object
     yesterday = date.today() - timedelta(days=1)
 
     # ---------- Inputs ----------
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4, gap="medium")
+    c1, c2, c3, c4, c5 = st.columns(5, gap="small")
     with c1:
-        # Default to yesterday as requested
         td_start = st.date_input("Trade Start Date", value=yesterday, key="pv_start")
     with c2:
-        # Default to yesterday as requested
         td_end = st.date_input("Trade End Date", value=yesterday, key="pv_end")
     with c3:
-        ticker_filter = st.text_input("Ticker (leave blank for all)", value="", key="pv_ticker").strip().upper()
+        ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
     with c4:
         notional_choices = {"0M": 0, "5M": 5_000_000, "10M": 10_000_000, "50M": 50_000_000, "100M": 100_000_000}
         min_notional_label = st.selectbox("Min Notional", options=list(notional_choices.keys()), index=1, key="pv_notional")
         min_notional = notional_choices[min_notional_label]
+    with c5:
+        # Market Cap Filter
+        mkt_cap_choices = {"0B": 0, "100B": 100e9, "200B": 200e9, "500B": 500e9, "1T": 1e12}
+        min_mkt_cap_label = st.selectbox("Mkt Cap Min", options=list(mkt_cap_choices.keys()), index=1, key="pv_mkt_cap")
+        min_mkt_cap = mkt_cap_choices[min_mkt_cap_label]
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ---------- Global Filtering ----------
-    # Pivot tables use mandatory yesterday default filters
     f = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     
     if ticker_filter:
@@ -277,35 +284,33 @@ def run_pivot_tables_app(df):
     
     f = f[f["Dollars"] >= min_notional]
 
+    # Apply Market Cap Filter (Fetch caps for active symbols)
+    if not f.empty and min_mkt_cap > 0:
+        unique_syms = f["Symbol"].unique()
+        # Filter symbols meeting mkt cap threshold
+        valid_syms = [s for s in unique_syms if get_market_cap(s) >= min_mkt_cap]
+        f = f[f["Symbol"].isin(valid_syms)]
+
     def get_ranked_pivot(data, order_type, columns):
         subset = data[data["Order Type"] == order_type].copy()
         if subset.empty:
             return pd.DataFrame(columns=columns)
         
-        # 1. aggregate at Symbol level to find 'Total Rank'
         sym_rank = subset.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
-        
-        # 2. Perform main aggregation
         piv = subset.groupby(["Symbol", "Strike", "Expiry"]).agg({
             "Contracts": "sum",
             "Dollars": "sum"
         }).reset_index()
-        
-        # 3. Join rank data to main pivot
         piv = piv.merge(sym_rank, on="Symbol")
         
-        # 4. Standardize types and format Expiry to 02 Jan 30
         piv["Contracts"] = pd.to_numeric(piv["Contracts"], errors='coerce').fillna(0)
         piv["Dollars"] = pd.to_numeric(piv["Dollars"], errors='coerce').fillna(0.0)
         piv["Expiry"] = pd.to_datetime(piv["Expiry"]).dt.strftime("%d %b %y")
         
-        # 5. SORT: By Total Symbol Vol (Desc), then by Strike Dollars (Desc)
         piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
         
-        # 6. CLEAR REDUNDANT SYMBOLS (Leave rows below the first empty)
         piv["Symbol_Display"] = piv["Symbol"]
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
-        
         piv = piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
         return piv[columns]
 
@@ -327,7 +332,7 @@ def run_pivot_tables_app(df):
     else:
         st.info("No Puts Sold found matching these filters.")
 
-    # 3. Risk Reversals Table
+    # 3. Risk Reversals Table (Date Filter only)
     st.subheader("Risk Reversals")
     rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     rr_data = rr_data[rr_data["Order Type"] == "Risk Reversals"]
@@ -344,10 +349,8 @@ def run_pivot_tables_app(df):
         rr_pivot["Dollars"] = pd.to_numeric(rr_pivot["Dollars"], errors='coerce').fillna(0.0)
         rr_pivot["Expiry"] = pd.to_datetime(rr_pivot["Expiry"]).dt.strftime("%d %b %y")
         
-        # Sort
         rr_pivot = rr_pivot.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
         
-        # Clear redundant symbols for RR table
         rr_pivot["Symbol_Display"] = rr_pivot["Symbol"]
         rr_pivot.loc[rr_pivot["Symbol"] == rr_pivot["Symbol"].shift(1), "Symbol_Display"] = ""
         rr_pivot = rr_pivot.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
