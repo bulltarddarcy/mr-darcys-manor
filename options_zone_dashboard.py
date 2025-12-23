@@ -157,7 +157,11 @@ def run_options_database_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        db_ticker = st.text_input("Ticker", value="", key="db_ticker").strip().upper()
+        # Check if ticker was passed via query params (Rankings click)
+        default_ticker = st.session_state.get("db_ticker", "")
+        db_ticker = st.text_input("Ticker", value=default_ticker, key="db_ticker_input").strip().upper()
+        # Sync state if needed
+        st.session_state["db_ticker"] = db_ticker
     with c2:
         start_date = st.date_input("Trade Start Date", value=None, key="db_start")
     with c3:
@@ -227,7 +231,6 @@ def run_rankings_app(df):
     start_default = yesterday - timedelta(days=14)
 
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
-    # Using smaller column ratios to shrink date input boxes
     c1, c2, c3, c_pad = st.columns([1.2, 1.2, 0.8, 3], gap="small")
     with c1:
         rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
@@ -247,38 +250,42 @@ def run_rankings_app(df):
         st.warning("No data found matching these dates.")
         return
 
-    # Filter for relevant types only
     target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
     f_filtered = f[f["Order Type"].isin(target_types)].copy()
 
     # Get Last Trade per symbol
     last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
     
-    # Get component counts (size() counts the number of trades/rows)
+    # Get component counts
     counts = f_filtered.groupby(["Symbol", "Order Type"]).size().unstack(fill_value=0)
     for col in target_types:
         if col not in counts.columns:
             counts[col] = 0
 
-    # Calculate Score and Trade Count (all based on count of trades)
     counts["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
     counts["Trade Count"] = counts["Calls Bought"] + counts["Puts Sold"] + counts["Puts Bought"]
     
-    # Final Table Assembly
     res = counts.reset_index().merge(last_trades, on="Symbol")
     res = res.rename(columns={"Trade Date": "Last Trade"})
     
-    # Define Column order and compact config
-    display_cols = ["Symbol", "Trade Count", "Last Trade", "Score"]
+    # Add hyperlink URL for LinkColumn
+    # We use a query param logic. When clicked, it refreshes the page with ?tool=Database&ticker=XYZ
+    res["Link"] = res["Symbol"].apply(lambda x: f"/?tool=Database&ticker={x}")
+
+    # Column configuration with LinkColumn and tighter widths
     rank_col_config = {
-        "Symbol": st.column_config.TextColumn("Symbol", width=60),
-        "Trade Count": st.column_config.NumberColumn("Trade Count", width=100),
-        "Last Trade": st.column_config.TextColumn("Last Trade", width=100),
-        "Score": st.column_config.NumberColumn("Score", width=60),
+        "Symbol": st.column_config.LinkColumn("Symbol", width=50, display_text=r"^(.*)$"),
+        "Trade Count": st.column_config.NumberColumn("Count", width=80),
+        "Last Trade": st.column_config.TextColumn("Last", width=85),
+        "Score": st.column_config.NumberColumn("Score", width=50),
+        "Link": None # Hidden helper column
     }
 
-    bull_df = res[display_cols].sort_values(by="Score", ascending=False).head(limit)
-    bear_df = res[display_cols].sort_values(by="Score", ascending=True).head(limit)
+    # Prep dataframes with Link instead of Symbol text
+    display_df = res[["Link", "Trade Count", "Last Trade", "Score"]].rename(columns={"Link": "Symbol"})
+
+    bull_df = display_df.sort_values(by="Score", ascending=False).head(limit)
+    bear_df = display_df.sort_values(by="Score", ascending=True).head(limit)
 
     col_left, col_right = st.columns(2)
 
@@ -337,7 +344,7 @@ def run_strike_zones_app(df):
     f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
     
     # Sort pool for data table by most recent first
-    edit_pool_raw = f[f["Order Type"].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
+    edit_pool_raw = f[f["Order type"].isin(["Calls Bought","Puts Sold","Puts Bought"]) if "Order type" in f else f["Order Type"].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
     if edit_pool_raw.empty:
         st.warning("No trades match current filters.")
         return
@@ -624,6 +631,14 @@ def run_pivot_tables_app(df):
 
 # --- 4. MAIN EXECUTION ---
 if st.session_state["authentication_status"]:
+    # Detect navigation parameters from Rankings links
+    params = st.query_params
+    if "tool" in params and "ticker" in params:
+        st.session_state["app_choice_internal"] = params["tool"]
+        st.session_state["db_ticker"] = params["ticker"]
+        # Clear params to avoid sticky behavior
+        st.query_params.clear()
+
     st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
     st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
     html,body,[class*="css"]{color:var(--text)!important;background-color:var(--bg)!important;}
@@ -670,8 +685,16 @@ if st.session_state["authentication_status"]:
     
     with st.sidebar:
         st.header("Select Tool")
-        # Navigation order: Options Database -> Rankings -> Pivot Tables -> Strike Zones
-        app_choice = st.selectbox("Select Tool", ["Options Database", "Rankings", "Pivot Tables", "Strike Zones"], label_visibility="collapsed")
+        
+        # Navigation logic with override for Rankings links
+        tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones"]
+        default_tool_idx = 0
+        if "app_choice_internal" in st.session_state:
+            try: default_tool_idx = tools.index(st.session_state["app_choice_internal"])
+            except: pass
+            del st.session_state["app_choice_internal"]
+
+        app_choice = st.selectbox("Select Tool", tools, index=default_tool_idx, label_visibility="collapsed")
         
     try:
         sheet_url = st.secrets["GSHEET_URL"]
@@ -695,6 +718,8 @@ if st.session_state["authentication_status"]:
                 st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
                 st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
             
+            # Spacer for Logout
+            st.markdown('<div style="margin-top: 3rem;"></div>', unsafe_allow_html=True)
             authenticator.logout('Logout', 'sidebar')
             
     except Exception as e:
