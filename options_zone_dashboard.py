@@ -10,8 +10,6 @@ import math
 import streamlit_authenticator as stauth
 
 # --- 1. AUTHENTICATION SETUP ---
-# In the latest version, we provide the plain text passwords in the dict
-# and the library handles the verification logic internally.
 credentials = {
     "usernames": {
         "admin": {
@@ -26,7 +24,6 @@ credentials = {
 }
 
 # Initialize authenticator
-# The newest version of the library handles the hashing logic automatically
 authenticator = stauth.Authenticate(
     credentials, 
     "options_dashboard_cookie", 
@@ -37,63 +34,42 @@ authenticator = stauth.Authenticate(
 # Render the login widget
 authenticator.login(location='main')
 
-# --- 2. DASHBOARD LOGIC ---
-if st.session_state["authentication_status"]:
-    authenticator.logout('Logout', 'sidebar')
-    
-    # Securely fetch the URL from Streamlit Secrets
-    try:
-        sheet_url = st.secrets["GSHEET_URL"]
-    except Exception:
-        st.error("Missing 'GSHEET_URL' in Streamlit Secrets. Please add it in your App Settings.")
-        st.stop()
+# --- 2. GLOBAL DATA LOADING ---
+@st.cache_data(show_spinner="Updating Data...")
+def load_and_clean_data(url: str) -> pd.DataFrame:
+    df = pd.read_csv(url)
+    want = ["Trade Date","Order Type","Symbol","Strike (Actual)","Expiry","Contracts","Dollars","Error"]
+    keep = [c for c in want if c in df.columns]
+    df = df[keep].copy()
+    if "Dollars" in df.columns:
+        df["Dollars"] = (df["Dollars"].astype(str)
+                         .str.replace(",", "", regex=False)
+                         .str.replace("$","", regex=False))
+        df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce")
+    if "Trade Date" in df.columns:
+        df["Trade Date"] = pd.to_datetime(df["Trade Date"], errors="coerce")
+    if "Expiry" in df.columns:
+        df["Expiry"] = pd.to_datetime(df["Expiry"], errors="coerce")
+    if "Strike (Actual)" in df.columns:
+        df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce")
+    if "Error" in df.columns:
+        df = df[~df["Error"].astype(str).str.upper().isin(["TRUE","1","YES"])]
+    return df
 
-    st.set_page_config(page_title="Options Strike Zones Dashboard", layout="wide")
+# --- 3. APP MODULES ---
 
-    # ---------- Styles ----------
-    st.markdown("""
-    <style>
-    :root{
-      --bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea;
-      --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;
-    }
-    html,body,[class*="css"]{color:var(--text)!important;background-color:var(--bg)!important;}
-    .block-container{padding-top:1.2rem;padding-bottom:1rem;}
-    .control-box{padding:14px 0; border-radius:10px;}
-    .zones-panel{padding:14px 0; border-radius:10px;}
-    .zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
-    .zone-label{width:220px;font-weight:700;color:#fff}
-    .zone-bar{height:22px;border-radius:6px;min-width:6px}
-    .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
-    .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
-    .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
-    .price-divider{position:relative;margin:16px 0 12px 0;text-align:center}
-    .price-divider .line{height:2px;background:var(--line);opacity:.9}
-    .price-badge{position:absolute;left:50%;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
-      border:1px solid #56b6ff;border-radius:16px;padding:6px 12px;font-weight:800;font-size:12px;letter-spacing:.3px;
-      box-shadow:0 2px 8px rgba(0,0,0,.35)}
-    .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
-    .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
-    .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
-    th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-    [data-testid="stSidebar"] .stMarkdown p { margin-bottom: 0px; }
-    [data-testid="stSidebar"] .stCheckbox { margin-bottom: -10px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # Static Title
+def run_strike_zones_app(df):
+    """Logic for the original Strike Zones Dashboard"""
     st.title("📊 Options Strike Zones Dashboard")
 
-    # ---------- Controls (4 Columns) ----------
+    # ---------- Controls ----------
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
         ticker = st.text_input("Ticker", value="AMZN").strip().upper()
     with c2:
-        # Default start date is 6 months ago to show recent trade history
         td_start = st.date_input("Trade Date (start)", value=date.today() - timedelta(days=180))
     with c3:
-        # Default end date is today
         td_end = st.date_input("Trade Date (end)", value=date.today())
     with c4:
         exp_end = st.date_input("Exp. Range (end)", value=date.today().replace(year=date.today().year+1))
@@ -123,49 +99,9 @@ if st.session_state["authentication_status"]:
         show_table       = st.checkbox("Show Strike Zone Table", value=True)
         show_raw         = st.checkbox("Show Trades Used Table", value=True)
 
-    # ---------- Load & clean ----------
-    @st.cache_data(show_spinner="Updating Data...")
-    def load_sheet(url: str) -> pd.DataFrame:
-        return pd.read_csv(url)
-
-    def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-        want = ["Trade Date","Order Type","Symbol","Strike (Actual)","Expiry","Contracts","Dollars","Error"]
-        keep = [c for c in want if c in df.columns]
-        df = df[keep].copy()
-        if "Dollars" in df.columns:
-            df["Dollars"] = (df["Dollars"].astype(str)
-                             .str.replace(",", "", regex=False)
-                             .str.replace("$","", regex=False))
-            df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce")
-        if "Trade Date" in df.columns:
-            df["Trade Date"] = pd.to_datetime(df["Trade Date"], errors="coerce")
-        if "Expiry" in df.columns:
-            df["Expiry"] = pd.to_datetime(df["Expiry"], errors="coerce")
-        if "Strike (Actual)" in df.columns:
-            df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce")
-        if "Error" in df.columns:
-            df = df[~df["Error"].astype(str).str.upper().isin(["TRUE","1","YES"])]
-        return df
-
-    try:
-        df_raw = load_sheet(sheet_url)
-        df = clean_dataframe(df_raw)
-    except Exception as e:
-        st.error(f"Error loading CSV from source: {e}")
-        st.stop()
-
-    required = ["Trade Date","Order Type","Symbol","Strike (Actual)","Expiry","Dollars"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        st.error(f"Source file missing columns: {missing}")
-        st.stop()
-
     # ---------- Filters ----------
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
-    
-    # Apply date inputs directly using the calendar picker values
     f = f[(f["Trade Date"].dt.date >= td_start) & (f["Trade Date"].dt.date <= td_end)]
-    
     today_val = date.today()
     f = f[(f["Expiry"].dt.date >= today_val) & (f["Expiry"].dt.date <= exp_end)]
     
@@ -178,9 +114,9 @@ if st.session_state["authentication_status"]:
     
     if used.empty:
         st.warning("No trades match current filters.")
-        st.stop()
+        return
 
-    # ---------- Indicators ----------
+    # ---------- Price & Indicators ----------
     @st.cache_data(ttl=300)
     def get_stock_indicators(sym: str):
         try:
@@ -285,7 +221,80 @@ if st.session_state["authentication_status"]:
         st.markdown("### Data Table")
         st.dataframe(used, use_container_width=True)
 
-# --- 3. LOGIN FEEDBACK ---
+
+def run_portfolio_app(df):
+    """Placeholder for a second app"""
+    st.title("💼 Portfolio Overview")
+    st.write("This app analyzes the broad exposure across all symbols in your Google Sheet.")
+    
+    # Simple summary stats
+    summary = df.groupby("Symbol").agg({
+        "Dollars": "sum",
+        "Contracts": "sum"
+    }).sort_values("Dollars", ascending=False)
+    
+    st.subheader("Total Exposure by Symbol")
+    st.bar_chart(summary["Dollars"])
+    st.dataframe(summary)
+
+
+# --- 4. MAIN EXECUTION ---
+if st.session_state["authentication_status"]:
+    # 1. Page Config & Global Styling
+    st.set_page_config(page_title="Trading Toolbox", layout="wide")
+    
+    st.markdown("""
+    <style>
+    :root{
+      --bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea;
+      --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;
+    }
+    html,body,[class*="css"]{color:var(--text)!important;background-color:var(--bg)!important;}
+    .block-container{padding-top:1.2rem;padding-bottom:1rem;}
+    .control-box{padding:14px 0; border-radius:10px;}
+    .zones-panel{padding:14px 0; border-radius:10px;}
+    .zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
+    .zone-label{width:220px;font-weight:700;color:#fff}
+    .zone-bar{height:22px;border-radius:6px;min-width:6px}
+    .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
+    .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
+    .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
+    .price-divider{position:relative;margin:16px 0 12px 0;text-align:center}
+    .price-divider .line{height:2px;background:var(--line);opacity:.9}
+    .price-badge{position:absolute;left:50%;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
+      border:1px solid #56b6ff;border-radius:16px;padding:6px 12px;font-weight:800;font-size:12px;letter-spacing:.3px;
+      box-shadow:0 2px 8px rgba(0,0,0,.35)}
+    .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
+    .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
+    .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
+    th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
+    [data-testid="stSidebar"] .stMarkdown p { margin-bottom: 0px; }
+    [data-testid="stSidebar"] .stCheckbox { margin-bottom: -10px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # 2. Sidebar Navigation
+    with st.sidebar:
+        st.header("Navigation")
+        app_choice = st.selectbox("Select Tool", ["Strike Zones", "Portfolio Overview"])
+        st.markdown("---")
+        authenticator.logout('Logout', 'sidebar')
+
+    # 3. Load Global Data
+    try:
+        sheet_url = st.secrets["GSHEET_URL"]
+        df = load_and_clean_data(sheet_url)
+    except Exception as e:
+        st.error(f"Error initializing data: {e}")
+        st.stop()
+
+    # 4. Routing
+    if app_choice == "Strike Zones":
+        run_strike_zones_app(df)
+    elif app_choice == "Portfolio Overview":
+        run_portfolio_app(df)
+
+# --- 5. LOGIN FEEDBACK ---
 elif st.session_state["authentication_status"] is False:
     st.error('Username/password is incorrect')
 elif st.session_state["authentication_status"] is None:
