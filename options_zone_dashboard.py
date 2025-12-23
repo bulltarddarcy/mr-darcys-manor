@@ -227,6 +227,7 @@ def run_rankings_app(df):
     start_default = yesterday - timedelta(days=14)
 
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
+    # Using smaller column ratios to shrink date input boxes
     c1, c2, c3, c_pad = st.columns([1.5, 1.5, 1, 2], gap="small")
     with c1:
         rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
@@ -312,22 +313,17 @@ def run_strike_zones_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     with st.sidebar:
-        def compact_divider():
-            st.markdown('<hr style="margin: 1.0em 0; opacity: 0.15;">', unsafe_allow_html=True)
         st.markdown("**View Mode**")
         view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], label_visibility="collapsed")
-        compact_divider()
         st.markdown("**Zone Width**")
         width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], label_visibility="collapsed")
         fixed_size_choice = 10
         if width_mode == "Fixed":
             fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
-        compact_divider()
         st.markdown("**Include Order Types**")
         inc_calls_bought = st.checkbox("Calls Bought", value=True)
         inc_puts_sold    = st.checkbox("Puts Sold", value=True)
         inc_puts_bought  = st.checkbox("Puts Bought", value=True)
-        compact_divider()
         st.markdown("**Other Options**")
         hide_empty      = st.checkbox("Hide Empty Zones", value=True)
         show_table       = st.checkbox("Show Strike Zone Table", value=True)
@@ -446,11 +442,13 @@ def run_strike_zones_app(df):
                 for _, r in above.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
+                    # Added $ to graphic values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
                 for _, r in below.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
+                    # Added $ to graphic values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
             else:
@@ -465,6 +463,7 @@ def run_strike_zones_app(df):
                 for _, r in agg.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs_exp)*420))
+                    # Added $ to graphic values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
     with col_chart:
@@ -519,7 +518,8 @@ def run_pivot_tables_app(df):
         min_notional = notional_choices[min_notional_label]
     with c5:
         mkt_cap_choices = {"0B": 0, "100B": 100e9, "200B": 200e9, "500B": 500e9, "1T": 1e12}
-        min_mkt_cap_label = st.selectbox("Mkt Cap Min", options=list(mkt_cap_choices.keys()), index=1, key="pv_mkt_cap")
+        cap_keys = list(mkt_cap_choices.keys())
+        min_mkt_cap_label = st.selectbox("Mkt Cap Min", options=cap_keys, index=1, key="pv_mkt_cap")
         min_mkt_cap = mkt_cap_choices[min_mkt_cap_label]
     with c6:
         ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
@@ -676,7 +676,6 @@ if st.session_state["authentication_status"]:
         st.header("Select Tool")
         # Navigation order: Options Database -> Rankings -> Pivot Tables -> Strike Zones
         app_choice = st.selectbox("Select Tool", ["Options Database", "Rankings", "Pivot Tables", "Strike Zones"], label_visibility="collapsed")
-        st.markdown("---")
         
     try:
         sheet_url = st.secrets["GSHEET_URL"]
@@ -700,7 +699,6 @@ if st.session_state["authentication_status"]:
                 st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
                 st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
             
-            st.markdown("---")
             authenticator.logout('Logout', 'sidebar')
             
     except Exception as e:
