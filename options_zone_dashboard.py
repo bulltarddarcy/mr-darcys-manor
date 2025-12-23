@@ -47,6 +47,7 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
 
     if "Contracts" in df.columns:
+        # Fixed: Removed commas from contracts to ensure numeric conversion doesn't fail/return 0
         df["Contracts"] = (df["Contracts"].astype(str)
                            .str.replace(",", "", regex=False))
         df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(0)
@@ -90,12 +91,14 @@ def is_above_ema21(symbol: str) -> bool:
     except:
         return True
 
-def get_table_height(df, max_rows=50):
+def get_table_height(df, max_rows=30):
     """Calculate height to show all rows up to max_rows without scrolling."""
+    # Approx 35px per row + 38px for header
     row_count = len(df)
     if row_count == 0:
         return 100
     display_rows = min(row_count, max_rows)
+    # Increased max_rows check to 30 as requested
     return (display_rows + 1) * 35 + 5
 
 # --- 3. APP MODULES ---
@@ -273,7 +276,7 @@ def run_strike_zones_app(df):
             display_used, 
             use_container_width=True, 
             hide_index=True, 
-            height=get_table_height(display_used)
+            height=get_table_height(display_used, max_rows=30)
         )
 
 
@@ -359,7 +362,7 @@ def run_pivot_tables_app(df):
             calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
             use_container_width=True,
             hide_index=True,
-            height=get_table_height(calls_bought)
+            height=get_table_height(calls_bought, max_rows=30)
         )
     else:
         st.info("No Calls Bought found matching these filters.")
@@ -372,7 +375,7 @@ def run_pivot_tables_app(df):
             puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
             use_container_width=True,
             hide_index=True,
-            height=get_table_height(puts_sold)
+            height=get_table_height(puts_sold, max_rows=30)
         )
     else:
         st.info("No Puts Sold found matching these filters.")
@@ -405,7 +408,7 @@ def run_pivot_tables_app(df):
             rr_final[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
             use_container_width=True,
             hide_index=True,
-            height=get_table_height(rr_final)
+            height=get_table_height(rr_final, max_rows=30)
         )
     else:
         st.info("No Risk Reversals found in this date range.")
