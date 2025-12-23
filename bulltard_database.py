@@ -502,8 +502,8 @@ if st.session_state["authentication_status"]:
     .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
     th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-    .legend-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; margin-top: 25px; color: #ffffff; text-transform: uppercase; letter-spacing: 0.8px; opacity: 1.0; }
-    .legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 14px; color: #ffffff; }
+    .legend-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; margin-top: 25px; text-transform: uppercase; letter-spacing: 0.8px; }
+    .legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 14px; }
     .color-dot { width: 14px; height: 14px; border-radius: 3px; }
     </style>""", unsafe_allow_html=True)
     try:
