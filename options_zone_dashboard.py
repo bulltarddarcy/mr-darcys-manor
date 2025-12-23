@@ -201,7 +201,6 @@ def run_pivot_tables_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- RR Pairing Engine ---
-    # Processing the entire date range to find pairs
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     d_range['_original_idx'] = d_range.index
     
