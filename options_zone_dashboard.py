@@ -10,23 +10,37 @@ import math
 import streamlit_authenticator as stauth
 
 # --- 1. AUTHENTICATION SETUP ---
+# In a future update, you can move these credentials to st.secrets as well
 credentials = {
     "usernames": {
-        "admin": {"name": "admin", "password": "admindarcy"},
+        "admin": {"name": "admin", "password": "tape-curtain-phone"},
         "friend1": {"name": "mister", "password": "darcy"}
     }
 }
 
-authenticator = stauth.Authenticate(credentials, "cookie_name", "signature_key", 30)
-name, authentication_status, username = authenticator.login("main")
+# Initialize authenticator
+# Note: cookie_name and signature_key can be anything for a simple app
+authenticator = stauth.Authenticate(
+    credentials, 
+    "options_dashboard_cookie", 
+    "abcdef", 
+    cookie_expiry_days=30
+)
 
-# --- 2. THE DASHBOARD (Only runs if logged in) ---
-if authentication_status:
+# Render the login widget
+authenticator.login(location='main')
+
+# --- 2. DASHBOARD LOGIC ---
+if st.session_state["authentication_status"]:
+    # Add a logout button to the sidebar
     authenticator.logout('Logout', 'sidebar')
     
-    # This pulls the URL from the secure cloud settings
-    # Ensure you set this up in the Streamlit Cloud Settings!
-    DEFAULT_SHEET_CSV_URL = st.secrets["GSHEET_URL"]
+    # Securely fetch the URL from Streamlit Secrets
+    try:
+        DEFAULT_SHEET_CSV_URL = st.secrets["GSHEET_URL"]
+    except Exception:
+        st.error("Missing 'GSHEET_URL' in Streamlit Secrets. Please add it in the app settings.")
+        st.stop()
 
     st.set_page_config(page_title="Options Strike Zones Dashboard", layout="wide")
 
@@ -47,29 +61,261 @@ if authentication_status:
     .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
     .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
     .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
+
     .price-divider{position:relative;margin:16px 0 12px 0;text-align:center}
     .price-divider .line{height:2px;background:var(--line);opacity:.9}
     .price-badge{position:absolute;left:50%;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
       border:1px solid #56b6ff;border-radius:16px;padding:6px 12px;font-weight:800;font-size:12px;letter-spacing:.3px;
       box-shadow:0 2px 8px rgba(0,0,0,.35)}
+
     .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
     .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
+
     th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-    [data-testid="stSidebar"] .stMarkdown p { margin-bottom: 0px; }
-    [data-testid="stSidebar"] .stCheckbox { margin-bottom: -10px; }
+
+    /* Compact Sidebar Adjustments */
+    [data-testid="stSidebar"] .stMarkdown p {
+        margin-bottom: 0px;
+    }
+
+    /* Force checkboxes to have less bottom margin in the sidebar */
+    [data-testid="stSidebar"] .stCheckbox {
+        margin-bottom: -10px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-    st.title("📊 Options Strike Zones Dashboard")
+    st.title(f"📊 {st.session_state['name']}'s Options Dashboard")
 
-    # ---------- ALL REMAINING DASHBOARD CODE ----------
-    # (The rest of your script logic goes here, exactly as you wrote it)
-    
-    # ... [Rest of your code from 'c1, c2, c3...' down to the end] ...
-    # Make sure all the code below this is INDENTED to stay inside the 'if' block!
+    # ---------- Controls ----------
+    st.markdown('<div class="control-box">', unsafe_allow_html=True)
+    c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
+    with c1:
+        # Use a text input that defaults to the secret URL, or stays blank if preferred
+        sheet_url = st.text_input("Data Source", value=DEFAULT_SHEET_CSV_URL, type="password")
+    with c2:
+        ticker = st.text_input("Ticker", value="AMZN").strip().upper()
+    with c3:
+        td_start_txt = st.text_input("Trade Date (start)", value="", placeholder="YYYY-MM-DD")
+    with c4:
+        td_end_txt   = st.text_input("Trade Date (end)", value="", placeholder="YYYY-MM-DD")
+    with c5:
+        exp_end      = st.date_input("Exp. Range (end)", value=date.today().replace(year=date.today().year+1))
+    st.markdown('</div>', unsafe_allow_html=True)
 
-elif authentication_status == False:
+    # Sidebar
+    with st.sidebar:
+        st.header("Display Settings")
+        
+        def compact_divider():
+            st.markdown('<hr style="margin: 1.0em 0; opacity: 0.15;">', unsafe_allow_html=True)
+
+        st.markdown("**View Mode**")
+        view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], label_visibility="collapsed")
+        compact_divider()
+        
+        st.markdown("**Zone Width**")
+        width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], label_visibility="collapsed")
+        fixed_size_choice = 10
+        if width_mode == "Fixed":
+            fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
+        compact_divider()
+        
+        st.markdown("**Include Order Types**")
+        inc_calls_bought = st.checkbox("Calls Bought", value=True)
+        inc_puts_sold    = st.checkbox("Puts Sold", value=True)
+        inc_puts_bought  = st.checkbox("Puts Bought", value=True)
+        compact_divider()
+
+        st.markdown("**Other Options**")
+        hide_empty      = st.checkbox("Hide Empty Zones", value=True)
+        show_table       = st.checkbox("Show Strike Zone Table", value=True)
+        show_raw         = st.checkbox("Show Trades Used Table", value=True)
+
+    # ---------- Load & clean ----------
+    @st.cache_data(show_spinner="Updating Data...")
+    def load_sheet(url: str) -> pd.DataFrame:
+        return pd.read_csv(url)
+
+    def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+        want = ["Trade Date","Order Type","Symbol","Strike (Actual)","Expiry","Contracts","Dollars","Error"]
+        keep = [c for c in want if c in df.columns]
+        df = df[keep].copy()
+        if "Dollars" in df.columns:
+            df["Dollars"] = (df["Dollars"].astype(str)
+                             .str.replace(",", "", regex=False)
+                             .str.replace("$","", regex=False))
+            df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce")
+        if "Trade Date" in df.columns:
+            df["Trade Date"] = pd.to_datetime(df["Trade Date"], errors="coerce")
+        if "Expiry" in df.columns:
+            df["Expiry"] = pd.to_datetime(df["Expiry"], errors="coerce")
+        if "Strike (Actual)" in df.columns:
+            df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce")
+        if "Error" in df.columns:
+            df = df[~df["Error"].astype(str).str.upper().isin(["TRUE","1","YES"])]
+        return df
+
+    try:
+        df_raw = load_sheet(sheet_url)
+        df = clean_dataframe(df_raw)
+    except Exception as e:
+        st.error(f"Error loading CSV: {e}")
+        st.stop()
+
+    required = ["Trade Date","Order Type","Symbol","Strike (Actual)","Expiry","Dollars"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        st.error(f"Missing required columns in CSV: {missing}")
+        st.stop()
+
+    # ---------- Filters ----------
+    f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
+
+    def parse_date_txt(x: str):
+        x = (x or "").strip()
+        if not x: return None
+        try: return pd.to_datetime(x).date()
+        except: return None
+
+    td_start = parse_date_txt(td_start_txt)
+    td_end   = parse_date_txt(td_end_txt)
+
+    if td_start:
+        f = f[f["Trade Date"].dt.date >= td_start]
+    if td_end:
+        f = f[f["Trade Date"].dt.date <= td_end]
+
+    today_val = date.today()
+    f = f[(f["Expiry"].dt.date >= today_val) & (f["Expiry"].dt.date <= exp_end)]
+
+    f["Included"] = (
+        (f["Order Type"].eq("Calls Bought") & inc_calls_bought) |
+        (f["Order Type"].eq("Puts Sold") & inc_puts_sold) |
+        (f["Order Type"].eq("Puts Bought") & inc_puts_bought)
+    )
+    used = f[f["Included"] & f["Order Type"].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
+
+    if used.empty:
+        st.warning("No trades match current filters.")
+        st.stop()
+
+    # ---------- Price & Indicators ----------
+    @st.cache_data(ttl=300) # Cache price for 5 mins
+    def get_stock_indicators(sym: str):
+        try:
+            h = yf.Ticker(sym).history(period="2y", interval="1d")
+            if len(h) == 0: return None, None, None, None
+            close = h["Close"]
+            spot_val = float(close.iloc[-1])
+            ema8  = float(close.ewm(span=8, adjust=False).mean().iloc[-1])
+            ema21 = float(close.ewm(span=21, adjust=False).mean().iloc[-1])
+            sma200 = float(close.rolling(window=200).mean().iloc[-1]) if len(close) >= 200 else None
+            return spot_val, ema8, ema21, sma200
+        except: return None, None, None, None
+
+    spot, ema8, ema21, sma200 = get_stock_indicators(ticker)
+    if spot is None:
+        spot = st.number_input("Manual Current Price", value=100.0)
+
+    def pct_from_spot(x):
+        if x is None or np.isnan(x): return "—"
+        return f"{(x/spot-1)*100:+.1f}%"
+
+    badges = [f'<span class="price-badge-header">Price: ${spot:,.2f}</span>']
+    if ema8: badges.append(f'<span class="badge">EMA(8): ${ema8:,.2f} ({pct_from_spot(ema8)})</span>')
+    if ema21: badges.append(f'<span class="badge">EMA(21): ${ema21:,.2f} ({pct_from_spot(ema21)})</span>')
+    if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
+
+    st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
+
+    def sign_for(order_type: str) -> int:
+        if order_type in ("Calls Bought","Puts Sold"): return +1
+        if order_type == "Puts Bought": return -1
+        return 0
+
+    used["Signed Dollars"] = used.apply(lambda r: sign_for(r["Order Type"]) * (r["Dollars"] or 0.0), axis=1)
+
+    # ---------- Views ----------
+    if view_mode == "Price Zones":
+        strike_min = float(np.nanmin(used["Strike (Actual)"].values))
+        strike_max = float(np.nanmax(used["Strike (Actual)"].values))
+
+        if width_mode == "Auto":
+            rng = max(1e-9, strike_max - strike_min)
+            target_bucket = rng / 12.0
+            steps = [1, 2, 5, 10, 25, 50, 100]
+            zone_w = float(next((s for s in steps if s >= target_bucket), 100))
+        else:
+            zone_w = float(fixed_size_choice)
+
+        n_dn = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w))
+        n_up = int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
+        lower_edge = spot - n_dn * zone_w
+        upper_edge = spot + n_up * zone_w
+        total = max(1, n_dn + n_up)
+
+        def zone_index(x: float) -> int:
+            if x <= lower_edge: return 0
+            if x >= upper_edge: return total - 1
+            return int(math.floor((x - lower_edge) / zone_w))
+
+        used["ZoneIdx"] = used["Strike (Actual)"].apply(zone_index)
+        zs = []
+        for z in range(total):
+            zl = lower_edge + z*zone_w
+            zh = zl + zone_w
+            zs.append((z, zl, zh, (zl+zh)/2.0))
+        zone_df = pd.DataFrame(zs, columns=["ZoneIdx","Zone_Low","Zone_High","Zone_Center"])
+        agg = used.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
+        zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
+        
+        if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
+
+        st.subheader("Strike Zones")
+        st.markdown('<div class="zones-panel">', unsafe_allow_html=True)
+        
+        above = zs[zs["Zone_Center"] > spot].sort_values("Zone_Center", ascending=False)
+        below = zs[zs["Zone_Center"] < spot].sort_values("Zone_Center", ascending=False)
+
+        max_abs = float(np.abs(zs["Net_Dollars"]).max()) if not zs.empty else 1.0
+
+        for _, r in above.iterrows():
+            color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
+            w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
+            st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+
+        st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
+
+        for _, r in below.iterrows():
+            color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
+            w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
+            st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    else: # Expiry Buckets
+        e = used.copy()
+        e["DTE"] = (pd.to_datetime(e["Expiry"]).dt.date - date.today()).apply(lambda x: x.days)
+        bins = [0, 7, 30, 90, 180, 10000]
+        labels = ["0-7d", "8-30d", "31-90d", "91-180d", ">180d"]
+        e["Bucket"] = pd.cut(e["DTE"], bins=bins, labels=labels, include_lowest=True)
+        agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
+        
+        st.subheader("Expiry Buckets")
+        max_abs_exp = float(agg["Net_Dollars"].abs().max()) if not agg.empty else 1.0
+        for _, r in agg.iterrows():
+            color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
+            w = max(6, int((abs(r['Net_Dollars'])/max_abs_exp)*420))
+            st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+
+    # ---------- Tables ----------
+    if show_table:
+        st.markdown("### Data View")
+        st.dataframe(used, use_container_width=True)
+
+# --- 3. ERROR STATES ---
+elif st.session_state["authentication_status"] is False:
     st.error('Username/password is incorrect')
-elif authentication_status == None:
+elif st.session_state["authentication_status"] is None:
     st.warning('Please enter your username and password')
