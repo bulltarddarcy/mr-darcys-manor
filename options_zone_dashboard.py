@@ -174,6 +174,7 @@ def run_strike_zones_app(df):
     display_used = used.copy()
     display_used["Trade Date"] = display_used["Trade Date"].dt.strftime("%d %b %y")
     display_used["Expiry"] = pd.to_datetime(display_used["Expiry"]).dt.strftime("%d %b %y")
+    # Using format "${:,.0f}" to ensure commas are added to Dollars
     st.dataframe(display_used.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True, hide_index=True, height=get_table_height(display_used, max_rows=30))
 
 
@@ -200,6 +201,7 @@ def run_pivot_tables_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- RR Pairing Engine ---
+    # Processing the entire date range to find pairs
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     d_range['_original_idx'] = d_range.index
     
@@ -231,8 +233,8 @@ def run_pivot_tables_app(df):
         df_rr_matched['Expiry_DT'] = rr_matches['Expiry_DT']
         df_rr_matched['Contracts'] = rr_matches['Contracts']
         df_rr_matched['Dollars'] = rr_matches['Dollars_c'] + rr_matches['Dollars_p']
-        # Combine strikes for clear display
-        df_rr_matched['Strike'] = rr_matches['Strike_c'].apply(clean_strike_fmt) + "c/" + rr_matches['Strike_p'].apply(clean_strike_fmt) + "p"
+        # Combine strikes - removed the "c" and "p" suffixes as requested
+        df_rr_matched['Strike'] = rr_matches['Strike_c'].apply(clean_strike_fmt) + "/" + rr_matches['Strike_p'].apply(clean_strike_fmt)
         df_rr = df_rr_matched
 
     def apply_filters(data, exclude_filters=False):
