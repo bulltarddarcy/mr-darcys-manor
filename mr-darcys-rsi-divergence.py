@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import requests
 
 # --- Page Config ---
 st.set_page_config(
@@ -21,16 +22,21 @@ SIGNAL_LOOKBACK_PERIOD = 15
 
 # --- Link Processing Utility ---
 def get_direct_url(url):
-    """Converts a standard Google Drive share link to a direct download link."""
+    """Converts a standard Google Drive share link to a direct download link, handling large files."""
     if not url:
         return None
-    if "drive.google.com" in url and "id=" not in url:
-        try:
-            # Extract ID from /file/d/ID/view format
-            file_id = url.split('/')[-2] if '/file/d/' in url else url.split('/')[-1].split('?')[0]
-            return f"https://docs.google.com/uc?export=download&id={file_id}"
-        except:
-            return url
+    
+    file_id = None
+    if "/file/d/" in url:
+        file_id = url.split('/')[-2]
+    elif "id=" in url:
+        file_id = url.split('id=')[-1].split('&')[0]
+    
+    if file_id:
+        # Standard direct link might fail for files > 100MB due to virus scan warning.
+        # This format is more robust for large files.
+        return f"https://docs.google.com/uc?export=download&id={file_id}&confirm=t"
+    
     return url
 
 # --- Technical Indicator Logic (Reverted to match divergence_make_dashboard.py) ---
@@ -145,6 +151,7 @@ def load_large_data(url):
     try:
         direct_url = get_direct_url(url)
         if not direct_url:
+            st.error("Invalid URL generated.")
             return pd.DataFrame()
         
         dtype_dict = {
@@ -155,11 +162,27 @@ def load_large_data(url):
             'Low': 'float32', 
             'Volume': 'float32'
         }
-        df = pd.read_csv(direct_url, dtype=dtype_dict)
-        df['Date'] = pd.to_datetime(df['Date'])
+        
+        # We use requests to get the content first to avoid some drive handshake issues
+        response = requests.get(direct_url)
+        if response.status_code != 200:
+            st.error(f"Failed to fetch data from Drive. HTTP Status: {response.status_code}")
+            return pd.DataFrame()
+            
+        from io import BytesIO
+        df = pd.read_csv(BytesIO(response.content), dtype=dtype_dict)
+        
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'])
+        else:
+            # Fallback if the first column is the date but unnamed
+            df.rename(columns={df.columns[0]: 'Date'}, inplace=True)
+            df['Date'] = pd.to_datetime(df['Date'])
+            
         return df
     except Exception as e:
-        st.error(f"Error loading file. Verify your Streamlit Secrets and Drive permissions.")
+        st.error(f"Error loading file: {str(e)}")
+        st.info("Ensure your Google Drive file is shared as 'Anyone with the link' and your Streamlit Secret keys are correct.")
         return pd.DataFrame()
 
 # --- App UI ---
