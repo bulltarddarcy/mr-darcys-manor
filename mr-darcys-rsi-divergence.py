@@ -209,33 +209,47 @@ def load_large_data(url):
         
         df = pd.read_csv(io.BytesIO(response.content), dtype=dtype_dict)
         
-        # Standardize Columns immediately after loading (Matches prepare_data in original script)
-        # 1. Clean column names to handle casing and spaces
+        # Standardize Columns immediately after loading
+        # 1. Strip and Uppercase all columns for consistent matching
         df.columns = [col.strip().upper() for col in df.columns]
         
-        # 2. Identify and rename Ticker column robustly
-        ticker_col = next((col for col in df.columns if 'TICKER' in col or 'SYMBOL' in col), None)
-        if ticker_col:
-            df.rename(columns={ticker_col: 'Ticker'}, inplace=True)
+        # 2. Comprehensive Column Mapping to specific mixed-case required by the app
+        column_map = {
+            'TICKER': 'Ticker', 'SYMBOL': 'Ticker',
+            'OPEN': 'Open',
+            'HIGH': 'High',
+            'LOW': 'Low',
+            'CLOSE': 'Price', 'PRICE': 'Price',
+            'VOLUME': 'Volume', 'VOL': 'Volume',
+            'DATE': 'Date'
+        }
+        
+        rename_dict = {}
+        for col in df.columns:
+            if col in column_map:
+                rename_dict[col] = column_map[col]
+        
+        df.rename(columns=rename_dict, inplace=True)
+
+        # 3. Handle Ticker categorical conversion
+        if 'Ticker' in df.columns:
             df['Ticker'] = df['Ticker'].astype('category')
         else:
-            # If no ticker column, we can't group data properly
             st.error("Missing 'Ticker' or 'Symbol' column in dataset.")
             return pd.DataFrame()
         
-        # 3. Identify and rename Close to Price
-        close_col = next((col for col in df.columns if 'CLOSE' in col or 'PRICE' in col), None)
-        if close_col:
-            df.rename(columns={close_col: 'Price'}, inplace=True)
-        else:
+        # 4. Handle Price column validation
+        if 'Price' not in df.columns:
             st.error("Missing 'Close' or 'Price' column in dataset.")
             return pd.DataFrame()
 
-        # 4. Handle Date parsing
-        date_col = next((c for c in df.columns if 'DATE' in c), df.columns[0])
-        df[date_col] = pd.to_datetime(df[date_col])
-        if date_col != 'Date': 
-            df.rename(columns={date_col: 'Date'}, inplace=True)
+        # 5. Handle Date parsing
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'])
+        else:
+            # Fallback: assume first column is Date if 'DATE' wasn't matched
+            df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
+            df.rename(columns={df.columns[0]: 'Date'}, inplace=True)
             
         return df
     except Exception as e:
