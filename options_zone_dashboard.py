@@ -222,12 +222,11 @@ def run_rankings_app(df):
     """Rank symbols based on trade volume and sentiment logic with bullish/bearish split"""
     st.title("🏆 Rankings")
 
-    # Formula is (Calls Bought) + (Puts Sold) - (Puts Bought)
+    # Range logic
     yesterday = date.today() - timedelta(days=1)
     start_default = yesterday - timedelta(days=14)
 
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
-    # Using smaller column ratios to shrink date input boxes
     c1, c2, c3, c_pad = st.columns([1.5, 1.5, 1, 2], gap="small")
     with c1:
         rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
@@ -247,35 +246,52 @@ def run_rankings_app(df):
         st.warning("No data found matching these dates.")
         return
 
-    # Count occurrences per type per symbol
-    counts = f.groupby(["Symbol", "Order Type"]).size().unstack(fill_value=0)
+    # Filter for relevant types only
+    target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
+    f_filtered = f[f["Order Type"].isin(target_types)].copy()
+
+    # Get Last Trade per symbol
+    last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
     
-    # Ensure all required columns exist for the formula
-    for col in ["Calls Bought", "Puts Sold", "Puts Bought"]:
+    # Get component counts
+    counts = f_filtered.groupby(["Symbol", "Order Type"]).size().unstack(fill_value=0)
+    for col in target_types:
         if col not in counts.columns:
             counts[col] = 0
 
-    # Score calculation
+    # Calculate Score and Trade Count
     counts["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
+    counts["Trade Count"] = counts["Calls Bought"] + counts["Puts Sold"] + counts["Puts Bought"]
     
-    # Final Result Construction
-    res = counts[["Calls Bought", "Puts Sold", "Puts Bought", "Score"]].reset_index()
+    # Final Table Assembly
+    res = counts.reset_index().merge(last_trades, on="Symbol")
+    res = res.rename(columns={"Trade Date": "Last Trade"})
     
-    # Tables Construction
-    bull_df = res.sort_values(by="Score", ascending=False).head(limit)
-    bear_df = res.sort_values(by="Score", ascending=True).head(limit)
+    # Define Column order and compact config
+    display_cols = ["Symbol", "Trade Count", "Last Trade", "Score"]
+    rank_col_config = {
+        "Symbol": st.column_config.TextColumn("Symbol", width=70),
+        "Trade Count": st.column_config.NumberColumn("Count", width=90),
+        "Last Trade": st.column_config.TextColumn("Last", width=90),
+        "Score": st.column_config.NumberColumn("Score", width=70),
+    }
+
+    bull_df = res[display_cols].sort_values(by="Score", ascending=False).head(limit)
+    bear_df = res[display_cols].sort_values(by="Score", ascending=True).head(limit)
 
     col_left, col_right = st.columns(2)
 
     with col_left:
-        st.markdown("<h3 style='color: #71d28a; font-size: 1.2rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
-        st.caption("Top Score (High to Low)")
-        st.dataframe(bull_df, use_container_width=True, hide_index=True, height=get_table_height(bull_df))
+        st.markdown("<h3 style='color: #71d28a; font-size: 1.1rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
+        st.caption("Highest Sentiment Scores")
+        st.dataframe(bull_df, use_container_width=True, hide_index=True, 
+                     height=get_table_height(bull_df), column_config=rank_col_config)
 
     with col_right:
-        st.markdown("<h3 style='color: #f29ca0; font-size: 1.2rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
-        st.caption("Bottom Score (Low to High)")
-        st.dataframe(bear_df, use_container_width=True, hide_index=True, height=get_table_height(bear_df))
+        st.markdown("<h3 style='color: #f29ca0; font-size: 1.1rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
+        st.caption("Lowest Sentiment Scores")
+        st.dataframe(bear_df, use_container_width=True, hide_index=True, 
+                     height=get_table_height(bear_df), column_config=rank_col_config)
 
 def run_strike_zones_app(df):
     """Options Strike Zones with side-by-side charts and interactive inclusion logic"""
@@ -430,7 +446,6 @@ def run_strike_zones_app(df):
                 for _, r in above.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
-                    # Added $ to graphic values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
                 for _, r in below.iterrows():
