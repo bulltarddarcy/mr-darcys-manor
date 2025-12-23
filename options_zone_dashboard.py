@@ -101,6 +101,18 @@ def get_table_height(df, max_rows=30):
     # Increased max_rows check to 30 as requested
     return (display_rows + 1) * 35 + 5
 
+# Shared column configuration to keep widths small
+COLUMN_CONFIG = {
+    "Symbol": st.column_config.TextColumn(width="small"),
+    "Strike": st.column_config.TextColumn(width="small"),
+    "Expiry": st.column_config.TextColumn(width="medium"),
+    "Contracts": st.column_config.NumberColumn(width="small"),
+    "Dollars": st.column_config.NumberColumn(width="medium"),
+    "Trade Date": st.column_config.TextColumn(width="medium"),
+    "Order Type": st.column_config.TextColumn(width="medium"),
+    "Strike (Actual)": st.column_config.NumberColumn(width="small"),
+}
+
 # --- 3. APP MODULES ---
 
 def run_strike_zones_app(df):
@@ -274,9 +286,10 @@ def run_strike_zones_app(df):
         display_used["Expiry"] = pd.to_datetime(display_used["Expiry"]).dt.strftime("%d %b %y")
         st.dataframe(
             display_used, 
-            use_container_width=True, 
+            use_container_width=False, 
             hide_index=True, 
-            height=get_table_height(display_used, max_rows=30)
+            height=get_table_height(display_used, max_rows=30),
+            column_config=COLUMN_CONFIG
         )
 
 
@@ -360,9 +373,10 @@ def run_pivot_tables_app(df):
     if not calls_bought.empty:
         st.dataframe(
             calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
-            use_container_width=True,
+            use_container_width=False,
             hide_index=True,
-            height=get_table_height(calls_bought, max_rows=30)
+            height=get_table_height(calls_bought, max_rows=30),
+            column_config=COLUMN_CONFIG
         )
     else:
         st.info("No Calls Bought found matching these filters.")
@@ -373,9 +387,10 @@ def run_pivot_tables_app(df):
     if not puts_sold.empty:
         st.dataframe(
             puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
-            use_container_width=True,
+            use_container_width=False,
             hide_index=True,
-            height=get_table_height(puts_sold, max_rows=30)
+            height=get_table_height(puts_sold, max_rows=30),
+            column_config=COLUMN_CONFIG
         )
     else:
         st.info("No Puts Sold found matching these filters.")
@@ -406,9 +421,10 @@ def run_pivot_tables_app(df):
         rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
         st.dataframe(
             rr_final[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
-            use_container_width=True,
+            use_container_width=False,
             hide_index=True,
-            height=get_table_height(rr_final, max_rows=30)
+            height=get_table_height(rr_final, max_rows=30),
+            column_config=COLUMN_CONFIG
         )
     else:
         st.info("No Risk Reversals found in this date range.")
