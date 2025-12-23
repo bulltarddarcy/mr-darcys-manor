@@ -97,6 +97,10 @@ def find_divergences(df_timeframe, ticker):
             
     start_index = max(DIVERGENCE_LOOKBACK, len(df_timeframe) - SIGNAL_LOOKBACK_PERIOD)
     
+    # Track raw hits before consolidation
+    bullish_hits = []
+    bearish_hits = []
+
     for i in range(start_index, len(df_timeframe)):
         second_point = df_timeframe.iloc[i]
         lookback_df = df_timeframe.iloc[i - DIVERGENCE_LOOKBACK : i]
@@ -117,12 +121,13 @@ def find_divergences(df_timeframe, ticker):
             current_tags = list(tags)
             if second_point['Close'] >= second_point['EMA8']:
                 current_tags.append("EMA8")
-            divergences['bullish'].append({
+            bullish_hits.append({
                 'Ticker': ticker,
-                'Tags': " ".join(current_tags),
-                'First Date': first_point_low['Date'].strftime('%Y-%m-%d'),
-                'Signal Date': second_point['Date'].strftime('%Y-%m-%d'),
-                'RSI': f"{int(first_point_low['RSI'])} → {int(second_point['RSI'])}",
+                'Tags': current_tags,
+                'First Date': first_point_low['Date'],
+                'Signal Date': second_point['Date'],
+                'firstRSI': first_point_low['RSI'],
+                'secondRSI': second_point['RSI'],
                 'Price 1': round(float(first_point_low['Close']), 2),
                 'Price 2': round(float(second_point['Close']), 2)
             })
@@ -131,15 +136,54 @@ def find_divergences(df_timeframe, ticker):
             current_tags = list(tags)
             if second_point['Close'] <= second_point['EMA21']:
                 current_tags.append("EMA21")
-            divergences['bearish'].append({
+            bearish_hits.append({
                 'Ticker': ticker,
-                'Tags': " ".join(current_tags),
-                'First Date': first_point_high['Date'].strftime('%Y-%m-%d'),
-                'Signal Date': second_point['Date'].strftime('%Y-%m-%d'),
-                'RSI': f"{int(first_point_high['RSI'])} → {int(second_point['RSI'])}",
+                'Tags': current_tags,
+                'First Date': first_point_high['Date'],
+                'Signal Date': second_point['Date'],
+                'firstRSI': first_point_high['RSI'],
+                'secondRSI': second_point['RSI'],
                 'Price 1': round(float(first_point_high['Close']), 2),
                 'Price 2': round(float(second_point['Close']), 2)
             })
+    
+    # Consolidation Logic (Matches JavaScript consolidateSignals in original)
+    if bullish_hits:
+        # Collapse multiple bullish signals for this ticker into one
+        latest_bull = bullish_hits[-1] # Take the most recent hit
+        earliest_first_date = min([h['First Date'] for h in bullish_hits])
+        
+        # Combine unique tags from all hits in the period
+        all_tags = set()
+        for h in bullish_hits: all_tags.update(h['Tags'])
+        
+        divergences['bullish'].append({
+            'Ticker': ticker,
+            'Tags': " ".join(sorted(list(all_tags))),
+            'First Date': earliest_first_date.strftime('%Y-%m-%d'),
+            'Signal Date': latest_bull['Signal Date'].strftime('%Y-%m-%d'),
+            'RSI': f"{int(latest_bull['firstRSI'])} → {int(latest_bull['secondRSI'])}",
+            'Price 1': latest_bull['Price 1'],
+            'Price 2': latest_bull['Price 2']
+        })
+
+    if bearish_hits:
+        latest_bear = bearish_hits[-1]
+        earliest_first_date = min([h['First Date'] for h in bearish_hits])
+        
+        all_tags = set()
+        for h in bearish_hits: all_tags.update(h['Tags'])
+        
+        divergences['bearish'].append({
+            'Ticker': ticker,
+            'Tags': " ".join(sorted(list(all_tags))),
+            'First Date': earliest_first_date.strftime('%Y-%m-%d'),
+            'Signal Date': latest_bear['Signal Date'].strftime('%Y-%m-%d'),
+            'RSI': f"{int(latest_bear['firstRSI'])} → {int(latest_bear['secondRSI'])}",
+            'Price 1': latest_bear['Price 1'],
+            'Price 2': latest_bear['Price 2']
+        })
+
     return divergences
 
 # --- Data Loading ---
