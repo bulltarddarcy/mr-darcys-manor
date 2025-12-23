@@ -476,7 +476,7 @@ def run_pivot_tables_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
-    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    order_type_col = "Order Type" if "Order Type" in d_range.columns else "Order type"
     cb_pool, ps_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy(), d_range[d_range[order_type_col] == "Puts Sold"].copy()
     keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
     cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
