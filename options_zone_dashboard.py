@@ -133,10 +133,10 @@ def run_options_database_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        # Detect ticker passed from Rankings links via session state
+        # Detect ticker passed from session state (set by Rankings links)
         default_ticker = st.session_state.get("db_ticker", "")
         db_ticker = st.text_input("Ticker", value=default_ticker, key="db_ticker_input").strip().upper()
-        # Keep state in sync for return visits
+        # Keep state updated
         st.session_state["db_ticker"] = db_ticker
     with c2:
         start_date = st.date_input("Trade Start Date", value=None, key="db_start")
@@ -163,11 +163,13 @@ def run_options_database_app(df):
     if db_exp_end:
         f = f[f["Expiry_DT"].dt.date <= db_exp_end]
 
+    # Handle column casing
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
     allowed_types = []
     if inc_cb: allowed_types.append("Calls Bought")
     if inc_pb: allowed_types.append("Puts Bought")
     if inc_ps: allowed_types.append("Puts Sold")
-    f = f[f["Order Type"].isin(allowed_types)]
+    f = f[f[order_type_col].isin(allowed_types)]
 
     if f.empty:
         st.warning("No data found matching these filters.")
@@ -175,7 +177,7 @@ def run_options_database_app(df):
 
     f = f.sort_values(by=["Trade Date", "Symbol"], ascending=[False, True])
 
-    display_cols = ["Trade Date", "Order Type", "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
+    display_cols = ["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
     f_display = f[display_cols].copy()
     f_display["Trade Date"] = f_display["Trade Date"].dt.strftime("%d %b %y")
     f_display["Expiry"] = pd.to_datetime(f_display["Expiry"]).dt.strftime("%d %b %y")
@@ -191,14 +193,14 @@ def run_options_database_app(df):
     st.caption("⚠️ User should check OI to confirm trades are still open")
     st.dataframe(
         f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"})
-        .applymap(highlight_db_order_type, subset=["Order Type"]),
+        .applymap(highlight_db_order_type, subset=[order_type_col]),
         use_container_width=True,
         hide_index=True,
         height=get_table_height(f_display, max_rows=30)
     )
 
 def run_rankings_app(df):
-    """Rank symbols with HTML tables to support same-window navigation and Symbol-only link text"""
+    """Rank symbols based on trade count volume and sentiment score"""
     st.title("🏆 Rankings")
 
     yesterday = date.today() - timedelta(days=1)
@@ -222,16 +224,16 @@ def run_rankings_app(df):
         st.warning("No data found matching these dates.")
         return
 
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
     target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
-    f_filtered = f[f["Order Type"].isin(target_types)].copy()
+    f_filtered = f[f[order_type_col].isin(target_types)].copy()
     
     if f_filtered.empty:
         st.warning("No trades of the specified sentiment types found in this range.")
         return
 
     last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
-    # size() counts the number of trades (rows)
-    counts = f_filtered.groupby(["Symbol", "Order Type"]).size().unstack(fill_value=0)
+    counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
     
     for col in target_types:
         if col not in counts.columns: counts[col] = 0
@@ -246,42 +248,40 @@ def run_rankings_app(df):
     bear_df = res.sort_values(by=["Score", "Trade Count"], ascending=[True, False]).head(limit)
 
     def render_html_ranking_table(df, title, title_color, caption):
-        st.markdown(f"<h3 style='color: {title_color}; font-size: 1.1rem; margin-bottom: 0;'>{title}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<h3 style='color: {title_color}; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>{title}</h3>", unsafe_allow_html=True)
         st.caption(caption)
         
-        html = f"""
-        <style>
-            .rank-table {{ width: 100%; border-collapse: collapse; font-family: sans-serif; font-size: 13px; color: #e7e7ea; margin-top: 10px; }}
-            .rank-table th {{ text-align: left; padding: 10px 8px; border-bottom: 1px solid #3a3f45; background: #262730; color: #888; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }}
-            .rank-table td {{ padding: 10px 8px; border-bottom: 1px solid #3a3f45; }}
-            .rank-table tr:hover {{ background: #2b2d33; }}
-            .rank-link {{ color: #66b7ff; text-decoration: none; font-weight: 600; }}
-            .rank-link:hover {{ text-decoration: underline; }}
-        </style>
-        <table class="rank-table">
-            <thead>
+        table_rows = ""
+        for _, row in df.iterrows():
+            # Use relative URL parameters to avoid host redirection issues
+            url = f"?tool=Options+Database&ticker={row['Symbol']}"
+            table_rows += f"""
                 <tr>
-                    <th style="width: 25%;">Symbol</th>
-                    <th style="width: 20%;">Trade Count</th>
-                    <th style="width: 35%;">Last Trade</th>
-                    <th style="width: 20%;">Score</th>
+                    <td style="padding: 10px 8px; border-bottom: 1px solid #3a3f45;">
+                        <a href="{url}" target="_self" style="color: #66b7ff; text-decoration: none; font-weight: 600;">{row['Symbol']}</a>
+                    </td>
+                    <td style="padding: 10px 8px; border-bottom: 1px solid #3a3f45;">{row['Trade Count']}</td>
+                    <td style="padding: 10px 8px; border-bottom: 1px solid #3a3f45;">{row['Last Trade']}</td>
+                    <td style="padding: 10px 8px; border-bottom: 1px solid #3a3f45;">{row['Score']}</td>
+                </tr>
+            """
+
+        html_table = f"""
+        <table style="width: 100%; border-collapse: collapse; color: #e7e7ea; font-family: sans-serif; font-size: 13px; margin-top: 10px;">
+            <thead>
+                <tr style="background: #262730; color: #888; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px;">
+                    <th style="text-align: left; padding: 10px 8px; border-bottom: 1px solid #3a3f45;">Symbol</th>
+                    <th style="text-align: left; padding: 10px 8px; border-bottom: 1px solid #3a3f45;">Count</th>
+                    <th style="text-align: left; padding: 10px 8px; border-bottom: 1px solid #3a3f45;">Last Trade</th>
+                    <th style="text-align: left; padding: 10px 8px; border-bottom: 1px solid #3a3f45;">Score</th>
                 </tr>
             </thead>
             <tbody>
+                {table_rows}
+            </tbody>
+        </table>
         """
-        for _, row in df.iterrows():
-            # Use relative URL parameters to avoid "broken" redirects in hosted environments
-            url = f"?tool=Options%20Database&ticker={row['Symbol']}"
-            html += f"""
-                <tr>
-                    <td><a href="{url}" target="_self" class="rank-link">{row['Symbol']}</a></td>
-                    <td>{row['Trade Count']}</td>
-                    <td>{row['Last Trade']}</td>
-                    <td>{row['Score']}</td>
-                </tr>
-            """
-        html += "</tbody></table>"
-        st.markdown(html, unsafe_allow_html=True)
+        st.markdown(html_table, unsafe_allow_html=True)
 
     col_left, col_right = st.columns(2, gap="large")
     with col_left:
@@ -329,7 +329,6 @@ def run_strike_zones_app(df):
     today_val = date.today()
     f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
     
-    # Standardize column naming check
     order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
     edit_pool_raw = f[f[order_type_col].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
     
@@ -346,7 +345,7 @@ def run_strike_zones_app(df):
     if len(st.session_state[state_key]) != len(edit_pool): st.session_state[state_key] = [True] * len(edit_pool)
 
     edit_pool["Included"] = st.session_state[state_key]
-    cols_to_show = ["Trade Date Display", "Order Type", "Symbol", "Strike", "Expiry Display", "Contracts", "Dollars", "Included"]
+    cols_to_show = ["Trade Date Display", order_type_col, "Symbol", "Strike", "Expiry Display", "Contracts", "Dollars", "Included"]
     used = edit_pool[edit_pool["Included"] == True].copy()
 
     @st.cache_data(ttl=300)
@@ -381,29 +380,19 @@ def run_strike_zones_app(df):
     with col_bars:
         if used.empty: st.info("No trades included.")
         else:
-            def sign_for(order_type: str) -> int:
-                if order_type in ("Calls Bought","Puts Sold"): return +1
-                if order_type == "Puts Bought": return -1
-                return 0
-            used["Signed Dollars"] = used.apply(lambda r: sign_for(r["Order Type"]) * (r["Dollars"] or 0.0), axis=1)
+            used["Signed Dollars"] = used.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
 
             if view_mode == "Price Zones":
-                strike_min = float(np.nanmin(used["Strike (Actual)"].values))
-                strike_max = float(np.nanmax(used["Strike (Actual)"].values))
+                strike_min, strike_max = float(np.nanmin(used["Strike (Actual)"].values)), float(np.nanmax(used["Strike (Actual)"].values))
                 if width_mode == "Auto":
                     zone_w = float(next((s for s in [1, 2, 5, 10, 25, 50, 100] if s >= (max(1e-9, strike_max - strike_min) / 12.0)), 100))
                 else: zone_w = float(fixed_size_choice)
                 
                 n_dn, n_up = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w)), int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
-                lower_edge, upper_edge = spot - n_dn * zone_w, spot + n_up * zone_w
+                lower_edge = spot - n_dn * zone_w
                 total = max(1, n_dn + n_up)
                 
-                def zone_index(x: float) -> int:
-                    if x <= lower_edge: return 0
-                    if x >= upper_edge: return total - 1
-                    return int(math.floor((x - lower_edge) / zone_w))
-                    
-                used["ZoneIdx"] = used["Strike (Actual)"].apply(zone_index)
+                used["ZoneIdx"] = used["Strike (Actual)"].apply(lambda x: min(total - 1, max(0, int(math.floor((x - lower_edge) / zone_w)))))
                 agg = used.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
                 zone_df = pd.DataFrame([(z, lower_edge + z*zone_w, lower_edge + (z+1)*zone_w) for z in range(total)], columns=["ZoneIdx","Zone_Low","Zone_High"])
                 zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
@@ -411,13 +400,15 @@ def run_strike_zones_app(df):
                 
                 st.subheader("Strike Zones")
                 st.markdown('<div class="zones-panel">', unsafe_allow_html=True)
-                for _, r in zs[zs["Zone_Low"] + (zone_w/2) > spot].sort_values("ZoneIdx", ascending=False).iterrows():
-                    color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                    st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
+                    if r["Zone_Low"] + (zone_w/2) > spot:
+                        color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
+                        st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
-                for _, r in zs[zs["Zone_Low"] + (zone_w/2) < spot].sort_values("ZoneIdx", ascending=False).iterrows():
-                    color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                    st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
+                    if r["Zone_Low"] + (zone_w/2) < spot:
+                        color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
+                        st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
             else:
                 e = used.copy()
@@ -438,7 +429,7 @@ def run_strike_zones_app(df):
         if not edited_df.equals(edit_pool[cols_to_show]): st.session_state[state_key] = edited_df["Included"].tolist(); st.rerun()
 
 def run_pivot_tables_app(df):
-    """exposure analysis with split rows and robust RR pairing"""
+    """Exposure analysis with split rows and robust RR pairing"""
     st.title("🎯 Pivot Tables")
     yesterday = date.today() - timedelta(days=1)
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
@@ -452,7 +443,8 @@ def run_pivot_tables_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
-    cb_pool, ps_pool = d_range[d_range["Order Type"] == "Calls Bought"].copy(), d_range[d_range["Order Type"] == "Puts Sold"].copy()
+    order_type_col = "Order Type" if "Order Type" in d_range.columns else "Order type"
+    cb_pool, ps_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy(), d_range[d_range[order_type_col] == "Puts Sold"].copy()
     keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
     cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
     rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
@@ -500,12 +492,15 @@ def run_pivot_tables_app(df):
 # --- 4. MAIN EXECUTION ---
 if st.session_state["authentication_status"]:
     # Handle direct navigation and ticker passing via query params
-    # We read this here to update the internal state before the tool is rendered.
     params = st.query_params
     if "tool" in params:
-        st.session_state["app_choice_internal"] = params["tool"]
+        st.session_state["app_choice_internal"] = params.get("tool")
     if "ticker" in params:
-        st.session_state["db_ticker"] = params["ticker"]
+        st.session_state["db_ticker"] = params.get("ticker")
+    
+    # Consume query params only once
+    if "tool" in params or "ticker" in params:
+        st.query_params.clear()
 
     st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
     st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
@@ -536,16 +531,11 @@ if st.session_state["authentication_status"]:
     with st.sidebar:
         st.header("Select Tool")
         tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones"]
-        # Determine selection from URL if present
         default_tool_idx = 0
         if "app_choice_internal" in st.session_state:
-            try: 
-                default_tool_idx = tools.index(st.session_state["app_choice_internal"])
-            except: 
-                pass
-            # Consume the internal state once
+            try: default_tool_idx = tools.index(st.session_state["app_choice_internal"])
+            except: pass
             del st.session_state["app_choice_internal"]
-        
         app_choice = st.selectbox("Select Tool", tools, index=default_tool_idx, label_visibility="collapsed")
         
     try:
