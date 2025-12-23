@@ -1,2 +1,6 @@
 streamlit
-st-gsheets-connection
+pandas
+numpy
+yfinance
+streamlit-authenticator
+pyyaml
