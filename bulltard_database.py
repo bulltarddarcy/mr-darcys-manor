@@ -424,16 +424,17 @@ def run_strike_zones_app(df):
     if show_table:
         st.subheader("Data Table")
         
-        # Prepare display copy with parenthetical negative dollar formatting
+        # Prepare display copy with parenthetical negative dollar formatting and comma separated qty
         df_for_editor = edit_pool[cols_to_show].copy()
         df_for_editor["Dollars"] = df_for_editor["Dollars"].apply(lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}")
+        df_for_editor["Contracts"] = df_for_editor["Contracts"].apply(lambda x: f"{x:,.0f}")
         
         edited_df = st.data_editor(
             df_for_editor, 
             column_config={
                 "Trade Date Display": "Trade Date", 
                 "Expiry Display": "Expiry", 
-                "Contracts": st.column_config.NumberColumn("Qty", format="%,.0f"), 
+                "Contracts": st.column_config.TextColumn("Qty", width=80), 
                 "Dollars": st.column_config.TextColumn("Dollars", width=110), 
                 "Included": st.column_config.CheckboxColumn(default=True)
             }, 
