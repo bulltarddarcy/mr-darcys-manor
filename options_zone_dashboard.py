@@ -163,7 +163,6 @@ def run_options_database_app(df):
                 if k in st.session_state: del st.session_state[k]
             st.rerun()
 
-    # Filtering logic
     f = df.copy()
     if db_ticker:
         f = f[f["Symbol"].astype(str).str.upper().eq(db_ticker)]
@@ -219,6 +218,7 @@ def run_strike_zones_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
+        # Use session state to handle manual overrides or resets
         ticker = st.text_input("Ticker", value=st.session_state.get("sz_ticker", "AMZN"), key="sz_ticker").strip().upper()
     with c2:
         td_start = st.date_input("Trade Date (start)", value=st.session_state.get("sz_start", None), key="sz_start")
@@ -251,15 +251,15 @@ def run_strike_zones_app(df):
         
         st.markdown("---")
         if st.button("Reset All Defaults", use_container_width=True):
-            # To force widgets to reset, we update their session state keys explicitly
-            st.session_state["sz_ticker"] = "AMZN"
-            st.session_state["sz_start"] = None
-            st.session_state["sz_end"] = None
-            st.session_state["sz_exp"] = exp_range_default
+            # Deleting keys instead of setting them fixes the "cannot be modified" instantiation error
+            for key in ["sz_ticker", "sz_start", "sz_end", "sz_exp"]:
+                if key in st.session_state:
+                    del st.session_state[key]
             
             # Clear the specific inclusion state key for this ticker
             inc_key = f"sz_include_{ticker}"
-            if inc_key in st.session_state: del st.session_state[inc_key]
+            if inc_key in st.session_state: 
+                del st.session_state[inc_key]
             
             st.rerun()
 
@@ -271,10 +271,14 @@ def run_strike_zones_app(df):
     today_val = date.today()
     f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
     
-    edit_pool = f[f["Order Type"].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
-    if edit_pool.empty:
+    # 2. PREPARE EDITABLE TABLE DATA
+    edit_pool_raw = f[f["Order Type"].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
+    if edit_pool_raw.empty:
         st.warning("No trades match current filters.")
         return
+
+    # Sort by most recent Trades first for the data table
+    edit_pool = edit_pool_raw.sort_values(by="Trade Date", ascending=False).copy()
 
     edit_pool["Trade Date Display"] = edit_pool["Trade Date"].dt.strftime("%d %b %y")
     edit_pool["Expiry Display"] = edit_pool["Expiry_DT"].dt.strftime("%d %b %y")
@@ -377,11 +381,15 @@ def run_strike_zones_app(df):
                 for _, r in above.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
+                    # Added $ symbol to dollar values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                
                 st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
+                
                 for _, r in below.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
+                    # Added $ symbol to dollar values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
             else:
@@ -396,6 +404,7 @@ def run_strike_zones_app(df):
                 for _, r in agg.iterrows():
                     color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
                     w = max(6, int((abs(r['Net_Dollars'])/max_abs_exp)*420))
+                    # Added $ symbol to dollar values
                     st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
     with col_chart:
@@ -415,8 +424,8 @@ def run_strike_zones_app(df):
             "Symbol": st.column_config.TextColumn("Symbol"),
             "Strike": st.column_config.TextColumn("Strike"),
             "Expiry Display": st.column_config.TextColumn("Expiry"),
-            "Contracts": st.column_config.NumberColumn("Contracts", format="%,d"),
-            "Dollars": st.column_config.NumberColumn("Dollars", format="$%,.0f"),
+            "Contracts": st.column_config.NumberColumn("Contracts", format="%,d"), # Added comma separator
+            "Dollars": st.column_config.NumberColumn("Dollars", format="$%,.0f"),   # Added comma separator
             "Included": st.column_config.CheckboxColumn("Included", default=True)
         }
         edited_df = st.data_editor(
@@ -607,7 +616,7 @@ if st.session_state["authentication_status"]:
             st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
             st.markdown("---")
             if st.button("Reset All Defaults", use_container_width=True, key="pv_reset_btn"):
-                # Reset pivot table session states explicitly
+                # Use explicit keys to reset filters visually
                 st.session_state["pv_start"] = yesterday
                 st.session_state["pv_end"] = yesterday
                 st.session_state["pv_ticker"] = ""
