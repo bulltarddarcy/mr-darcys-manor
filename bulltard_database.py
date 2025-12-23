@@ -432,8 +432,8 @@ def run_pivot_tables_app(df):
     with c2: td_end = st.date_input("Trade End Date", value=yesterday, key="pv_end")
     with c3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
     with c4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=1, key="pv_notional")]
-    with c5: min_mkt_cap = {"0B": 0, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
-    with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
+    with c5: min_mkt_cap = {"0B": 0, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "100B", "200B", "500B", "1T"], index=1, key="pv_mkt_cap")]
+    with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=1, key="pv_ema_filter")
     st.markdown('</div>', unsafe_allow_html=True)
 
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
@@ -524,7 +524,7 @@ def run_pivot_tables_app(df):
         st.subheader("Risk Reversals"); tbl = get_p(df_rr_f, is_rr=True)
         if not tbl.empty: 
             st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT); 
-            st.caption("ℹ️ This table reflects date and ticker filters only, bypassing dollar/mkt cap requirements.")
+            st.caption("ℹ️ This table reflects the Date filters only.")
         else: st.caption("No matched RR pairs found.")
 
 def run_rsi_divergences_app():
@@ -598,14 +598,4 @@ if st.session_state["authentication_status"]:
         else: run_strike_zones_app(df_global)
             
         with st.sidebar:
-            if app_choice == "Pivot Tables":
-                st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
-                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
-                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
-                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
-            st.markdown('<div style="margin-top: 6rem;"></div>', unsafe_allow_html=True)
-            authenticator.logout('Logout', 'sidebar')
-    except Exception as e:
-        st.error(f"Error: {e}")
-elif st.session_state["authentication_status"] is False: st.error('Incorrect password')
-elif st.session_state["authentication_status"] is None: st.warning('Please login')
+            if app_choice == "Pivot
