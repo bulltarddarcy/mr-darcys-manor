@@ -280,6 +280,7 @@ def run_strike_zones_app(df):
             w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
             st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
             
+        # Spot Divider - Constrained to bar area (232px offset + 420px max bar width)
         st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
         
         for _, r in below.iterrows():
@@ -427,11 +428,14 @@ if st.session_state["authentication_status"]:
     .zone-bar{height:22px;border-radius:6px;min-width:6px}
     .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
     .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
-    .price-divider{position:relative;margin:16px 0 12px 0;text-align:center}
-    .price-divider .line{height:2px;background:var(--line);opacity:.9}
-    .price-badge{position:absolute;left:50%;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
+    
+    /* Updated Spot Divider CSS - Constrained Width */
+    .price-divider{position:relative;margin:16px 0 12px 0;height:2px;}
+    .price-divider .line{height:2px;background:var(--line);opacity:.9;width:420px;margin-left:232px;}
+    .price-badge{position:absolute;left:442px;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
       border:1px solid #56b6ff;border-radius:16px;padding:6px 12px;font-weight:800;font-size:12px;letter-spacing:.3px;
-      box-shadow:0 2px 8px rgba(0,0,0,.35)}
+      box-shadow:0 2px 8px rgba(0,0,0,.35); white-space: nowrap;}
+      
     .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
     .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
