@@ -206,9 +206,10 @@ def run_options_database_app(df):
     )
 
 def run_rankings_app(df):
-    """Rank symbols based on sentiment logic with custom HTML for same-window hyperlinks"""
+    """Rank symbols based on sentiment logic using standard stable tables"""
     st.title("🏆 Rankings")
 
+    # Range logic
     yesterday = date.today() - timedelta(days=1)
     start_default = yesterday - timedelta(days=14)
 
@@ -238,72 +239,58 @@ def run_rankings_app(df):
         st.warning("No trades of the specified sentiment types found in this range.")
         return
 
-    # Calculate Score (Trade Count based) and Tiebreaker (Financial Dollars)
+    # Calculate Score components (Trade Counts)
     counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
+    # Calculate Dollar components (Financial sum)
     dollars = f_filtered.groupby(["Symbol", order_type_col])["Dollars"].sum().unstack(fill_value=0)
+    # Get Last Trade
     last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
     
     for col in target_types:
         if col not in counts.columns: counts[col] = 0
         if col not in dollars.columns: dollars[col] = 0
 
+    # Score calculation (Trade Count based: 1+1-1)
     scores_df = pd.DataFrame(index=counts.index)
     scores_df["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
     scores_df["Trade Count"] = counts["Calls Bought"] + counts["Puts Sold"] + counts["Puts Bought"]
+    
+    # Dollars calculation (Tiebreaker: $+$ - $)
     scores_df["Dollars"] = dollars["Calls Bought"] + dollars["Puts Sold"] - dollars["Puts Bought"]
     
+    # Merge and final table assembly
     res = scores_df.reset_index().merge(last_trades, on="Symbol")
     res = res.rename(columns={"Trade Date": "Last Trade"})
     
-    bull_df = res.sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
-    bear_df = res.sort_values(by=["Score", "Dollars"], ascending=[True, False]).head(limit)
+    # Reorder columns: Symbol, Trade Count, Last Trade, Dollars, Score
+    display_cols = ["Symbol", "Trade Count", "Last Trade", "Dollars", "Score"]
+    
+    # Compact column widths based on content length + buffer
+    rank_col_config = {
+        "Symbol": st.column_config.TextColumn("Symbol", width=65),
+        "Trade Count": st.column_config.NumberColumn("Trade Count", width=95),
+        "Last Trade": st.column_config.TextColumn("Last Trade", width=90),
+        "Dollars": st.column_config.NumberColumn("Dollars", format="$%,.0f", width=110),
+        "Score": st.column_config.NumberColumn("Score", width=60),
+    }
 
-    def render_html_ranking_table(df, title, title_color, caption):
-        st.markdown(f"<h3 style='color: {title_color}; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>{title}</h3>", unsafe_allow_html=True)
-        st.caption(caption)
-        
-        table_rows = ""
-        for _, row in df.iterrows():
-            # Targets current window via relative param reload
-            url = f"?tool=Options+Database&ticker={row['Symbol']}"
-            formatted_dollars = f"${row['Dollars']:,.0f}"
-            table_rows += f"""
-                <tr>
-                    <td style="padding: 8px; border-bottom: 1px solid #3a3f45;">
-                        <a href="{url}" target="_self" style="color: #66b7ff; text-decoration: none; font-weight: 600;">{row['Symbol']}</a>
-                    </td>
-                    <td style="padding: 8px; border-bottom: 1px solid #3a3f45; text-align: center;">{row['Trade Count']}</td>
-                    <td style="padding: 8px; border-bottom: 1px solid #3a3f45; text-align: center;">{row['Last Trade']}</td>
-                    <td style="padding: 8px; border-bottom: 1px solid #3a3f45; text-align: right;">{formatted_dollars}</td>
-                    <td style="padding: 8px; border-bottom: 1px solid #3a3f45; text-align: center;">{row['Score']}</td>
-                </tr>
-            """
-
-        html_table = f"""
-        <table style="width: 360px; border-collapse: collapse; color: #e7e7ea; font-family: sans-serif; font-size: 13px; margin-top: 10px;">
-            <thead>
-                <tr style="background: #262730; color: #888; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px;">
-                    <th style="text-align: left; padding: 8px; border-bottom: 1px solid #3a3f45; width: 70px;">Symbol</th>
-                    <th style="text-align: center; padding: 8px; border-bottom: 1px solid #3a3f45; width: 50px;">Count</th>
-                    <th style="text-align: center; padding: 8px; border-bottom: 1px solid #3a3f45; width: 90px;">Last Trade</th>
-                    <th style="text-align: right; padding: 8px; border-bottom: 1px solid #3a3f45; width: 90px;">Dollars</th>
-                    <th style="text-align: center; padding: 8px; border-bottom: 1px solid #3a3f45; width: 50px;">Score</th>
-                </tr>
-            </thead>
-            <tbody>
-                {table_rows}
-            </tbody>
-        </table>
-        """
-        st.markdown(html_table, unsafe_allow_html=True)
+    # Sorting Bullish: Score desc, then Dollars desc
+    bull_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
+    # Sorting Bearish: Score asc, then Dollars asc
+    bear_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[True, True]).head(limit)
 
     st.caption("Ranking tables vary from Bulltard's as he does not exclude expired trades and these do. Tickers with the same score are sorted in descending order based on Dollars.")
 
     col_left, col_right = st.columns(2, gap="large")
     with col_left:
-        render_html_ranking_table(bull_df, "Bullish Rankings", "#71d28a", "Highest Sentiment Scores & Dollars")
+        st.markdown("<h3 style='color: #71d28a; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
+        st.caption("Highest Sentiment Scores & Dollars")
+        st.dataframe(bull_df, use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bull_df))
+
     with col_right:
-        render_html_ranking_table(bear_df, "Bearish Rankings", "#f29ca0", "Lowest Sentiment Scores & Dollars")
+        st.markdown("<h3 style='color: #f29ca0; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
+        st.caption("Lowest Sentiment Scores & Dollars")
+        st.dataframe(bear_df, use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bear_df))
 
 def run_strike_zones_app(df):
     """Options Strike Zones with side-by-side charts and interactive inclusion logic"""
