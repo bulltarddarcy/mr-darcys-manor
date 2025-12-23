@@ -133,9 +133,10 @@ def run_options_database_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        # Ticker input, check if passed from Rankings links
+        # Detect ticker passed from Rankings links via session state
         default_ticker = st.session_state.get("db_ticker", "")
         db_ticker = st.text_input("Ticker", value=default_ticker, key="db_ticker_input").strip().upper()
+        # Keep state in sync for return visits
         st.session_state["db_ticker"] = db_ticker
     with c2:
         start_date = st.date_input("Trade Start Date", value=None, key="db_start")
@@ -214,10 +215,8 @@ def run_rankings_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     f = df.copy()
-    if rank_start:
-        f = f[f["Trade Date"].dt.date >= rank_start]
-    if rank_end:
-        f = f[f["Trade Date"].dt.date <= rank_end]
+    if rank_start: f = f[f["Trade Date"].dt.date >= rank_start]
+    if rank_end: f = f[f["Trade Date"].dt.date <= rank_end]
 
     if f.empty:
         st.warning("No data found matching these dates.")
@@ -231,6 +230,7 @@ def run_rankings_app(df):
         return
 
     last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
+    # size() counts the number of trades (rows)
     counts = f_filtered.groupby(["Symbol", "Order Type"]).size().unstack(fill_value=0)
     
     for col in target_types:
@@ -262,7 +262,7 @@ def run_rankings_app(df):
             <thead>
                 <tr>
                     <th style="width: 25%;">Symbol</th>
-                    <th style="width: 20%;">Count</th>
+                    <th style="width: 20%;">Trade Count</th>
                     <th style="width: 35%;">Last Trade</th>
                     <th style="width: 20%;">Score</th>
                 </tr>
@@ -270,7 +270,8 @@ def run_rankings_app(df):
             <tbody>
         """
         for _, row in df.iterrows():
-            url = f"/?tool=Options%20Database&ticker={row['Symbol']}"
+            # Use relative URL parameters to avoid "broken" redirects in hosted environments
+            url = f"?tool=Options%20Database&ticker={row['Symbol']}"
             html += f"""
                 <tr>
                     <td><a href="{url}" target="_self" class="rank-link">{row['Symbol']}</a></td>
@@ -328,7 +329,10 @@ def run_strike_zones_app(df):
     today_val = date.today()
     f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
     
-    edit_pool_raw = f[f["Order Type"].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
+    # Standardize column naming check
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    edit_pool_raw = f[f[order_type_col].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
+    
     if edit_pool_raw.empty:
         st.warning("No trades match current filters.")
         return
@@ -412,7 +416,7 @@ def run_strike_zones_app(df):
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
                 for _, r in zs[zs["Zone_Low"] + (zone_w/2) < spot].sort_values("ZoneIdx", ascending=False).iterrows():
-                    color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max_abs if 'max_abs' in locals() else abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
+                    color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
                     st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">${r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
             else:
@@ -452,7 +456,6 @@ def run_pivot_tables_app(df):
     keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
     cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
     rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
-    df_cb_solo, df_ps_solo = cb_pool[~cb_pool.index.isin(rr_matches.index)], ps_pool[~ps_pool.index.isin(rr_matches.index)]
     
     rr_rows = []
     for idx, row in rr_matches.iterrows():
@@ -470,7 +473,7 @@ def run_pivot_tables_app(df):
             if not f.empty and ema_filter == "Yes": f = f[f["Symbol"].isin([s for s in f["Symbol"].unique() if is_above_ema21(s)])]
         return f
 
-    df_cb_f, df_ps_f, df_rr_f = apply_f(df_cb_solo), apply_f(df_ps_solo), apply_f(df_rr, True)
+    df_cb_f, df_ps_f, df_rr_f = apply_f(cb_pool), apply_f(ps_pool), apply_f(df_rr, True)
 
     def get_p(data, is_rr=False):
         if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
@@ -497,11 +500,12 @@ def run_pivot_tables_app(df):
 # --- 4. MAIN EXECUTION ---
 if st.session_state["authentication_status"]:
     # Handle direct navigation and ticker passing via query params
+    # We read this here to update the internal state before the tool is rendered.
     params = st.query_params
-    if "tool" in params and "ticker" in params:
+    if "tool" in params:
         st.session_state["app_choice_internal"] = params["tool"]
+    if "ticker" in params:
         st.session_state["db_ticker"] = params["ticker"]
-        st.query_params.clear()
 
     st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
     st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
@@ -532,11 +536,16 @@ if st.session_state["authentication_status"]:
     with st.sidebar:
         st.header("Select Tool")
         tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones"]
+        # Determine selection from URL if present
         default_tool_idx = 0
         if "app_choice_internal" in st.session_state:
-            try: default_tool_idx = tools.index(st.session_state["app_choice_internal"])
-            except: pass
+            try: 
+                default_tool_idx = tools.index(st.session_state["app_choice_internal"])
+            except: 
+                pass
+            # Consume the internal state once
             del st.session_state["app_choice_internal"]
+        
         app_choice = st.selectbox("Select Tool", tools, index=default_tool_idx, label_visibility="collapsed")
         
     try:
