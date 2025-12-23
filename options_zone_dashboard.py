@@ -36,12 +36,14 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=30
 )
 
+# Render the login widget
 authenticator.login(location='main')
 
 # --- 2. DASHBOARD LOGIC ---
 if st.session_state["authentication_status"]:
     authenticator.logout('Logout', 'sidebar')
     
+    # Securely fetch the URL from Streamlit Secrets
     try:
         sheet_url = st.secrets["GSHEET_URL"]
     except Exception:
@@ -81,6 +83,7 @@ if st.session_state["authentication_status"]:
     </style>
     """, unsafe_allow_html=True)
 
+    # Static Title
     st.title("📊 Options Strike Zones Dashboard")
 
     # ---------- Controls (4 Columns) ----------
@@ -150,7 +153,7 @@ if st.session_state["authentication_status"]:
         df_raw = load_sheet(sheet_url)
         df = clean_dataframe(df_raw)
     except Exception as e:
-        st.error(f"Error loading CSV: {e}")
+        st.error(f"Error loading CSV from source: {e}")
         st.stop()
 
     required = ["Trade Date","Order Type","Symbol","Strike (Actual)","Expiry","Dollars"]
@@ -162,7 +165,7 @@ if st.session_state["authentication_status"]:
     # ---------- Filters ----------
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
     
-    # Apply date inputs directly
+    # Apply date inputs directly using the calendar picker values
     f = f[(f["Trade Date"].dt.date >= td_start) & (f["Trade Date"].dt.date <= td_end)]
     
     today_val = date.today()
