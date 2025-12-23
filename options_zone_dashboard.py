@@ -47,7 +47,6 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
 
     if "Contracts" in df.columns:
-        # Fixed: Removed commas from contracts to ensure numeric conversion doesn't fail/return 0
         df["Contracts"] = (df["Contracts"].astype(str)
                            .str.replace(",", "", regex=False))
         df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(0)
@@ -83,7 +82,7 @@ def is_above_ema21(symbol: str) -> bool:
         ticker = yf.Ticker(symbol)
         h = ticker.history(period="60d")
         if len(h) < 21:
-            return True # Not enough data, include it by default
+            return True 
         ema21 = h["Close"].ewm(span=21, adjust=False).mean()
         latest_price = h["Close"].iloc[-1]
         latest_ema = ema21.iloc[-1]
@@ -93,7 +92,6 @@ def is_above_ema21(symbol: str) -> bool:
 
 def get_table_height(df, max_rows=30):
     """Calculate height to show all rows up to max_rows without scrolling."""
-    # Approx 35px per row + 38px for header
     row_count = len(df)
     if row_count == 0:
         return 100
@@ -101,33 +99,40 @@ def get_table_height(df, max_rows=30):
     return (display_rows + 1) * 35 + 5
 
 def highlight_expiry(val):
-    """Highlights Expiry column based on urgency."""
+    """Highlights Expiry based on which Friday it falls on with user-defined colors."""
     try:
-        # Assuming format 'DD MMM YY'
         expiry_date = datetime.strptime(val, "%d %b %y").date()
         today = date.today()
-        days_diff = (expiry_date - today).days
         
-        if days_diff < 0:
-            return "" # Past date
-        elif days_diff <= 7:
-            return "background-color: #9c2a2a; color: white; font-weight: bold;" # Urgent
-        elif days_diff <= 30:
-            return "background-color: #8c6a03; color: white; font-weight: bold;" # Warning
+        # Calculate reference Fridays
+        this_fri = today + timedelta(days=(4 - today.weekday()) % 7)
+        next_fri = this_fri + timedelta(days=7)
+        two_fri = this_fri + timedelta(days=14)
+        
+        if expiry_date < today:
+            return "" 
+        
+        if expiry_date == this_fri:
+            # This Friday (Green)
+            return "background-color: #2d5a27; color: white;" 
+        elif expiry_date == next_fri:
+            # Next Friday (Orange)
+            return "background-color: #8c5e03; color: white;" 
+        elif expiry_date == two_fri:
+            # Two Fridays from now (Red)
+            return "background-color: #7d3c3c; color: white;" 
         return ""
     except:
         return ""
 
-# Updated column configuration with better widths
-COLUMN_CONFIG = {
-    "Symbol": st.column_config.TextColumn(width="medium"),
-    "Strike": st.column_config.TextColumn(width="medium"),
-    "Expiry": st.column_config.TextColumn(width="medium"),
-    "Contracts": st.column_config.NumberColumn(width="medium"),
-    "Dollars": st.column_config.NumberColumn(width="medium"),
-    "Trade Date": st.column_config.TextColumn(width="medium"),
-    "Order Type": st.column_config.TextColumn(width="medium"),
-    "Strike (Actual)": st.column_config.NumberColumn(width="medium"),
+# Optimized column widths
+COLUMN_CONFIG_PIVOT = {
+    "Symbol": st.column_config.TextColumn("Symbol", width=90),
+    "Strike": st.column_config.TextColumn("Strike", width=90),
+    "Expiry": st.column_config.TextColumn("Expiry", width=110),
+    "Contracts": st.column_config.NumberColumn("Contracts", width=100),
+    "Dollars": st.column_config.NumberColumn("Dollars", width=130),
+    "Order Type": st.column_config.TextColumn("Order Type", width=120),
 }
 
 # --- 3. APP MODULES ---
@@ -301,18 +306,18 @@ def run_strike_zones_app(df):
         display_used = used.copy()
         display_used["Trade Date"] = display_used["Trade Date"].dt.strftime("%d %b %y")
         display_used["Expiry"] = pd.to_datetime(display_used["Expiry"]).dt.strftime("%d %b %y")
+        
         st.dataframe(
             display_used, 
-            use_container_width=False, 
+            use_container_width=True, 
             hide_index=True, 
-            height=get_table_height(display_used, max_rows=30),
-            column_config=COLUMN_CONFIG
+            height=get_table_height(display_used, max_rows=30)
         )
 
 
 def run_pivot_tables_app(df):
     """Analyzes exposure using Pivot Tables across defined order types"""
-    st.title("💼 Pivot Tables")
+    st.title("📈 Pivot Tables")
     
     yesterday = date.today() - timedelta(days=1)
 
@@ -347,13 +352,11 @@ def run_pivot_tables_app(df):
 
     if not f.empty:
         unique_syms = f["Symbol"].unique()
-        # Market Cap Filter
         if min_mkt_cap > 0:
             valid_mc_syms = [s for s in unique_syms if get_market_cap(s) >= min_mkt_cap]
             f = f[f["Symbol"].isin(valid_mc_syms)]
             unique_syms = f["Symbol"].unique()
             
-        # Over 21 Day EMA Filter
         if ema_filter == "Yes":
             valid_ema_syms = [s for s in unique_syms if is_above_ema21(s)]
             f = f[f["Symbol"].isin(valid_ema_syms)]
@@ -384,10 +387,9 @@ def run_pivot_tables_app(df):
 
     std_cols = ["Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
 
-    # 3-column layout as requested
+    # Layout: Three columns for side-by-side view
     col1, col2, col3 = st.columns(3)
 
-    # 1. Calls Bought Table
     with col1:
         st.subheader("Calls Bought")
         df_cb = get_ranked_pivot(f, "Calls Bought", std_cols)
@@ -398,12 +400,11 @@ def run_pivot_tables_app(df):
                 use_container_width=False,
                 hide_index=True,
                 height=get_table_height(df_cb, max_rows=30),
-                column_config=COLUMN_CONFIG
+                column_config=COLUMN_CONFIG_PIVOT
             )
         else:
             st.info("No Calls Bought found.")
 
-    # 2. Puts Sold Table
     with col2:
         st.subheader("Puts Sold")
         df_ps = get_ranked_pivot(f, "Puts Sold", std_cols)
@@ -414,12 +415,11 @@ def run_pivot_tables_app(df):
                 use_container_width=False,
                 hide_index=True,
                 height=get_table_height(df_ps, max_rows=30),
-                column_config=COLUMN_CONFIG
+                column_config=COLUMN_CONFIG_PIVOT
             )
         else:
             st.info("No Puts Sold found.")
 
-    # 3. Risk Reversals Table
     with col3:
         st.subheader("Risk Reversals")
         rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
@@ -450,7 +450,7 @@ def run_pivot_tables_app(df):
                 use_container_width=False,
                 hide_index=True,
                 height=get_table_height(rr_final, max_rows=30),
-                column_config=COLUMN_CONFIG
+                column_config=COLUMN_CONFIG_PIVOT
             )
         else:
             st.info("No Risk Reversals found.")
