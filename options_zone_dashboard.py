@@ -267,11 +267,11 @@ def run_rankings_app(df):
     
     # Compact column widths
     rank_col_config = {
-        "Symbol": st.column_config.TextColumn("Sym", width=55),
-        "Trade Count": st.column_config.NumberColumn("Qty", width=55),
-        "Last Trade": st.column_config.TextColumn("Last", width=80),
-        "Dollars": st.column_config.NumberColumn("Dollars", format="$%,.0f", width=100),
-        "Score": st.column_config.NumberColumn("Score", width=55),
+        "Symbol": st.column_config.TextColumn("Sym", width=40),
+        "Trade Count": st.column_config.NumberColumn("Qty", width=40),
+        "Last Trade": st.column_config.TextColumn("Last", width=70),
+        "Dollars": st.column_config.NumberColumn("Dollars", width=90),
+        "Score": st.column_config.NumberColumn("Score", width=40),
     }
 
     # Sorting Bullish: Score desc, then Dollars desc
@@ -285,12 +285,24 @@ def run_rankings_app(df):
     with col_left:
         st.markdown("<h3 style='color: #71d28a; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
         st.caption("Highest Sentiment Scores & Dollars")
-        st.dataframe(bull_df, use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bull_df))
+        st.dataframe(
+            bull_df.style.format({"Dollars": "${:,.0f}", "Trade Count": "{:,.0f}"}),
+            use_container_width=True, 
+            hide_index=True, 
+            column_config=rank_col_config, 
+            height=get_table_height(bull_df)
+        )
 
     with col_right:
         st.markdown("<h3 style='color: #f29ca0; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
         st.caption("Lowest Sentiment Scores & Dollars")
-        st.dataframe(bear_df, use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bear_df))
+        st.dataframe(
+            bear_df.style.format({"Dollars": "${:,.0f}", "Trade Count": "{:,.0f}"}),
+            use_container_width=True, 
+            hide_index=True, 
+            column_config=rank_col_config, 
+            height=get_table_height(bear_df)
+        )
 
 def run_strike_zones_app(df):
     """Options Strike Zones with interactive inclusion logic"""
@@ -427,8 +439,8 @@ def run_strike_zones_app(df):
             column_config={
                 "Trade Date Display": "Trade Date", 
                 "Expiry Display": "Expiry", 
-                "Contracts": st.column_config.NumberColumn(format="%,d"), 
-                "Dollars": st.column_config.NumberColumn(format="$%,.0f"), 
+                "Contracts": st.column_config.NumberColumn("Qty", format="%d"), 
+                "Dollars": st.column_config.NumberColumn("Dollars", format="$ %d"), 
                 "Included": st.column_config.CheckboxColumn(default=True)
             }, 
             use_container_width=True, 
@@ -508,7 +520,7 @@ if st.session_state["authentication_status"]:
 
     st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
     st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
-    html,body,[class*="css"]{color:var(--text)!important;background-color:var(--bg)!important;}
+    html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg)!important;}
     .block-container{padding-top:1.2rem;padding-bottom:1rem;}
     .control-box{padding:14px 0; border-radius:10px;}
     .zones-panel{padding:14px 0; border-radius:10px;}
