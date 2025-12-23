@@ -147,7 +147,7 @@ def find_divergences(df_timeframe, ticker):
                 'Price 2': round(float(second_point['Price']), 2)
             })
 
-        # Standard Bearish
+        # Standard Bearish (logic looks for second_point['Price'] > lookback_df['Price'].max())
         if second_point['RSI'] < first_point_high['RSI'] and second_point['Price'] > lookback_df['Price'].max():
             current_tags = list(tags)
             if second_point['Price'] <= second_point['EMA21']:
