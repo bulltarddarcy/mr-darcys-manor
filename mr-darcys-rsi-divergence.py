@@ -131,8 +131,9 @@ def load_large_data(url):
 st.title("📉 RSI Divergences Live")
 
 # Pull URLs exclusively from Secrets
+# Renamed "Divergences" to "Darcy's List" as requested
 PRESETS = {
-    "Divergences": st.secrets.get("URL_DIVERGENCES"),
+    "Darcy's List": st.secrets.get("URL_DIVERGENCES"),
     "Midcap": st.secrets.get("URL_MIDCAP"),
     "S&P 500": st.secrets.get("URL_SP500")
 }
@@ -145,17 +146,12 @@ if not AVAILABLE_DATASETS:
 
 st.sidebar.header("Data Configuration")
 
-# Dataset Toggle (Max 1 can be chosen)
-selected_dataset = None
-for dataset_name in AVAILABLE_DATASETS.keys():
-    if st.sidebar.toggle(dataset_name, value=(dataset_name == list(AVAILABLE_DATASETS.keys())[0])):
-        selected_dataset = dataset_name
-        # Break logic to ensure only one is selected if multiple are somehow toggled manually
-        break
-
-if not selected_dataset:
-    st.info("Please toggle a dataset in the sidebar to begin.")
-    st.stop()
+# Dataset Selection (Radio button replaces toggles for cleaner max-1 choice)
+selected_dataset = st.sidebar.radio(
+    "Select Dataset", 
+    list(AVAILABLE_DATASETS.keys()),
+    index=0
+)
 
 # RSI Divergence Length (Timeframe)
 timeframe = st.sidebar.radio("RSI Divergence Length", ["Daily", "Weekly"], index=0)
