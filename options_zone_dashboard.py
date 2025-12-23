@@ -105,21 +105,14 @@ def highlight_expiry(val):
     try:
         expiry_date = datetime.strptime(val, "%d %b %y").date()
         today = date.today()
-        
-        # Calculate reference Fridays
         this_fri = today + timedelta(days=(4 - today.weekday()) % 7)
         next_fri = this_fri + timedelta(days=7)
         two_fri = this_fri + timedelta(days=14)
         
-        if expiry_date < today:
-            return "" 
-        
-        if expiry_date == this_fri:
-            return "background-color: #2d5a27; color: white;" 
-        elif expiry_date == next_fri:
-            return "background-color: #8c5e03; color: white;" 
-        elif expiry_date == two_fri:
-            return "background-color: #7d3c3c; color: white;" 
+        if expiry_date < today: return "" 
+        if expiry_date == this_fri: return "background-color: #2d5a27; color: white;" 
+        elif expiry_date == next_fri: return "background-color: #8c5e03; color: white;" 
+        elif expiry_date == two_fri: return "background-color: #7d3c3c; color: white;" 
         return ""
     except:
         return ""
@@ -131,7 +124,7 @@ def clean_strike_fmt(val):
     except:
         return str(val)
 
-# Shrunk column widths for side-by-side pivot tables
+# Column widths for side-by-side tables
 COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
@@ -143,7 +136,7 @@ COLUMN_CONFIG_PIVOT = {
 # --- 3. APP MODULES ---
 
 def run_strike_zones_app(df):
-    """Full Options Strike Zones logic restored"""
+    """Restored full Options Strike Zones logic with interactive inclusion logic"""
     st.title("📊 Options Strike Zones Dashboard")
 
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
@@ -160,7 +153,7 @@ def run_strike_zones_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     with st.sidebar:
-        st.header("Display Settings")
+        # Header removed as requested
         def compact_divider():
             st.markdown('<hr style="margin: 1.0em 0; opacity: 0.15;">', unsafe_allow_html=True)
         st.markdown("**View Mode**")
@@ -179,28 +172,48 @@ def run_strike_zones_app(df):
         compact_divider()
         st.markdown("**Other Options**")
         hide_empty      = st.checkbox("Hide Empty Zones", value=True)
-        show_table       = st.checkbox("Show Strike Zone Table", value=True)
 
+    # 1. INITIAL FILTERING
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
-    
     if td_start:
         f = f[f["Trade Date"].dt.date >= td_start]
     if td_end:
         f = f[f["Trade Date"].dt.date <= td_end]
-        
     today_val = date.today()
     f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
     
-    f["Included"] = (
-        (f["Order Type"].eq("Calls Bought") & inc_calls_bought) |
-        (f["Order Type"].eq("Puts Sold") & inc_puts_sold) |
-        (f["Order Type"].eq("Puts Bought") & inc_puts_bought)
-    )
-    used = f[f["Included"] & f["Order Type"].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
-    
-    if used.empty:
+    # 2. PREPARE EDITABLE TABLE DATA
+    # Create the display subset for the editor
+    edit_pool = f[f["Order Type"].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
+    if edit_pool.empty:
         st.warning("No trades match current filters.")
         return
+
+    # Formatted display columns
+    edit_pool["Trade Date Display"] = edit_pool["Trade Date"].dt.strftime("%d %b %y")
+    edit_pool["Expiry Display"] = edit_pool["Expiry_DT"].dt.strftime("%d %b %y")
+    
+    # Check session state for existing exclusions to persist state
+    state_key = f"sz_include_{ticker}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = [True] * len(edit_pool)
+    
+    # Ensure length matches if filters changed
+    if len(st.session_state[state_key]) != len(edit_pool):
+        st.session_state[state_key] = [True] * len(edit_pool)
+
+    edit_pool["Included"] = st.session_state[state_key]
+
+    # Display columns requested by user
+    cols_to_show = ["Trade Date Display", "Order Type", "Symbol", "Strike", "Expiry Display", "Contracts", "Dollars", "Included"]
+    
+    # Render table at the bottom later but we need its output NOW for the charts above
+    # We use a placeholder logic or session state to handle this
+    
+    # 3. CHART CALCULATION
+    # Get active rows based on the "Included" column
+    active_mask = edit_pool["Included"] == True
+    used = edit_pool[active_mask].copy()
 
     @st.cache_data(ttl=300)
     def get_stock_indicators(sym: str):
@@ -229,85 +242,108 @@ def run_strike_zones_app(df):
     if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
     st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
 
-    def sign_for(order_type: str) -> int:
-        if order_type in ("Calls Bought","Puts Sold"): return +1
-        if order_type == "Puts Bought": return -1
-        return 0
-    used["Signed Dollars"] = used.apply(lambda r: sign_for(r["Order Type"]) * (r["Dollars"] or 0.0), axis=1)
-
-    if view_mode == "Price Zones":
-        strike_min = float(np.nanmin(used["Strike (Actual)"].values))
-        strike_max = float(np.nanmax(used["Strike (Actual)"].values))
-        if width_mode == "Auto":
-            rng = max(1e-9, strike_max - strike_min)
-            target_bucket = rng / 12.0
-            steps = [1, 2, 5, 10, 25, 50, 100]
-            zone_w = float(next((s for s in steps if s >= target_bucket), 100))
-        else:
-            zone_w = float(fixed_size_choice)
-        
-        n_dn = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w))
-        n_up = int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
-        lower_edge = spot - n_dn * zone_w
-        upper_edge = spot + n_up * zone_w
-        total = max(1, n_dn + n_up)
-        
-        def zone_index(x: float) -> int:
-            if x <= lower_edge: return 0
-            if x >= upper_edge: return total - 1
-            return int(math.floor((x - lower_edge) / zone_w))
-            
-        used["ZoneIdx"] = used["Strike (Actual)"].apply(zone_index)
-        zs_list = []
-        for z in range(total):
-            zl = lower_edge + z*zone_w
-            zh = zl + zone_w
-            zs_list.append((z, zl, zh, (zl+zh)/2.0))
-        zone_df = pd.DataFrame(zs_list, columns=["ZoneIdx","Zone_Low","Zone_High","Zone_Center"])
-        agg = used.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
-        zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
-        
-        if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
-        
-        st.subheader("Strike Zones")
-        st.markdown('<div class="zones-panel">', unsafe_allow_html=True)
-        above = zs[zs["Zone_Center"] > spot].sort_values("Zone_Center", ascending=False)
-        below = zs[zs["Zone_Center"] < spot].sort_values("Zone_Center", ascending=False)
-        max_abs = float(np.abs(zs["Net_Dollars"]).max()) if not zs.empty else 1.0
-        
-        for _, r in above.iterrows():
-            color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
-            w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
-            st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-            
-        # Spot Divider - Constrained to bar area (232px offset + 420px max bar width)
-        st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
-        
-        for _, r in below.iterrows():
-            color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
-            w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
-            st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+    if used.empty:
+        st.info("No trades currently included. Check 'Included' in table below.")
     else:
-        e = used.copy()
-        e["DTE"] = (pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days)
-        bins = [0, 7, 30, 90, 180, 10000]
-        labels = ["0-7d", "8-30d", "31-90d", "91-180d", ">180d"]
-        e["Bucket"] = pd.cut(e["DTE"], bins=bins, labels=labels, include_lowest=True)
-        agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
-        st.subheader("Expiry Buckets")
-        max_abs_exp = float(agg["Net_Dollars"].abs().max()) if not agg.empty else 1.0
-        for _, r in agg.iterrows():
-            color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
-            w = max(6, int((abs(r['Net_Dollars'])/max_abs_exp)*420))
-            st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+        def sign_for(order_type: str) -> int:
+            if order_type in ("Calls Bought","Puts Sold"): return +1
+            if order_type == "Puts Bought": return -1
+            return 0
+        used["Signed Dollars"] = used.apply(lambda r: sign_for(r["Order Type"]) * (r["Dollars"] or 0.0), axis=1)
 
-    if show_table:
-        st.subheader("Data Table")
-        display_used = used.copy()
-        display_used["Trade Date"] = display_used["Trade Date"].dt.strftime("%d %b %y")
-        display_used["Expiry"] = pd.to_datetime(display_used["Expiry"]).dt.strftime("%d %b %y")
-        st.dataframe(display_used.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True, hide_index=True, height=get_table_height(display_used, max_rows=30))
+        if view_mode == "Price Zones":
+            strike_min = float(np.nanmin(used["Strike (Actual)"].values))
+            strike_max = float(np.nanmax(used["Strike (Actual)"].values))
+            if width_mode == "Auto":
+                rng = max(1e-9, strike_max - strike_min)
+                target_bucket = rng / 12.0
+                steps = [1, 2, 5, 10, 25, 50, 100]
+                zone_w = float(next((s for s in steps if s >= target_bucket), 100))
+            else:
+                zone_w = float(fixed_size_choice)
+            
+            n_dn = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w))
+            n_up = int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
+            lower_edge = spot - n_dn * zone_w
+            upper_edge = spot + n_up * zone_w
+            total = max(1, n_dn + n_up)
+            
+            def zone_index(x: float) -> int:
+                if x <= lower_edge: return 0
+                if x >= upper_edge: return total - 1
+                return int(math.floor((x - lower_edge) / zone_w))
+                
+            used["ZoneIdx"] = used["Strike (Actual)"].apply(zone_index)
+            zs_list = []
+            for z in range(total):
+                zl = lower_edge + z*zone_w
+                zh = zl + zone_w
+                zs_list.append((z, zl, zh, (zl+zh)/2.0))
+            zone_df = pd.DataFrame(zs_list, columns=["ZoneIdx","Zone_Low","Zone_High","Zone_Center"])
+            agg = used.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
+            zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
+            
+            if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
+            
+            st.subheader("Strike Zones")
+            st.markdown('<div class="zones-panel">', unsafe_allow_html=True)
+            above = zs[zs["Zone_Center"] > spot].sort_values("Zone_Center", ascending=False)
+            below = zs[zs["Zone_Center"] < spot].sort_values("Zone_Center", ascending=False)
+            max_abs = float(np.abs(zs["Net_Dollars"]).max()) if not zs.empty else 1.0
+            
+            for _, r in above.iterrows():
+                color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
+                w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
+                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="price-divider"><div class="line"></div><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
+            for _, r in below.iterrows():
+                color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
+                w = max(6, int((abs(r['Net_Dollars'])/max_abs)*420))
+                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            e = used.copy()
+            e["DTE"] = (pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days)
+            bins = [0, 7, 30, 90, 180, 10000]
+            labels = ["0-7d", "8-30d", "31-90d", "91-180d", ">180d"]
+            e["Bucket"] = pd.cut(e["DTE"], bins=bins, labels=labels, include_lowest=True)
+            agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
+            st.subheader("Expiry Buckets")
+            max_abs_exp = float(agg["Net_Dollars"].abs().max()) if not agg.empty else 1.0
+            for _, r in agg.iterrows():
+                color = "zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"
+                w = max(6, int((abs(r['Net_Dollars'])/max_abs_exp)*420))
+                st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+
+    # 4. DATA TABLE EDITOR
+    st.subheader("Data Table")
+    st.caption("Tip: Uncheck 'Included' to exclude a trade from calculations and charts above.")
+    
+    # Configure columns
+    column_config = {
+        "Trade Date Display": st.column_config.TextColumn("Trade Date"),
+        "Order Type": st.column_config.TextColumn("Order Type"),
+        "Symbol": st.column_config.TextColumn("Symbol"),
+        "Strike": st.column_config.TextColumn("Strike"),
+        "Expiry Display": st.column_config.TextColumn("Expiry"),
+        "Contracts": st.column_config.NumberColumn("Contracts", format="%d"),
+        "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
+        "Included": st.column_config.CheckboxColumn("Included", default=True)
+    }
+
+    # Display and capture edits
+    edited_df = st.data_editor(
+        edit_pool[cols_to_show],
+        column_config=column_config,
+        use_container_width=True,
+        hide_index=True,
+        key="strike_zones_editor"
+    )
+
+    # Update session state when edited
+    if not edited_df.equals(edit_pool[cols_to_show]):
+        st.session_state[state_key] = edited_df["Included"].tolist()
+        st.rerun()
 
 
 def run_pivot_tables_app(df):
@@ -359,7 +395,6 @@ def run_pivot_tables_app(df):
         df_rr_matched['Expiry_DT'] = rr_matches['Expiry_DT']
         df_rr_matched['Contracts'] = rr_matches['Contracts']
         df_rr_matched['Dollars'] = rr_matches['Dollars_c'] + rr_matches['Dollars_p']
-        # Combine strikes - removed the "c" and "p" suffixes and used " & " as separator
         df_rr_matched['Strike'] = rr_matches['Strike_c'].apply(clean_strike_fmt) + " & " + rr_matches['Strike_p'].apply(clean_strike_fmt)
         df_rr = df_rr_matched
 
@@ -428,11 +463,11 @@ if st.session_state["authentication_status"]:
     .zone-bar{height:22px;border-radius:6px;min-width:6px}
     .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
     .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
+    .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
     
-    /* Updated Spot Divider CSS - Constrained Width */
     .price-divider{position:relative;margin:16px 0 12px 0;height:2px;}
-    .price-divider .line{height:2px;background:var(--line);opacity:.9;width:420px;margin-left:232px;}
-    .price-badge{position:absolute;left:442px;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
+    .price-divider .line{height:2px;background:var(--line);opacity:.9;width:652px;margin-left:232px;}
+    .price-badge{position:absolute;left:558px;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
       border:1px solid #56b6ff;border-radius:16px;padding:6px 12px;font-weight:800;font-size:12px;letter-spacing:.3px;
       box-shadow:0 2px 8px rgba(0,0,0,.35); white-space: nowrap;}
       
@@ -441,17 +476,7 @@ if st.session_state["authentication_status"]:
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
     th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
     
-    /* Clean text-based legend styling */
-    .legend-title { 
-        font-size: 14px; 
-        font-weight: 700; 
-        margin-bottom: 12px; 
-        margin-top: 25px; 
-        color: var(--text); 
-        text-transform: uppercase; 
-        letter-spacing: 0.8px;
-        opacity: 0.9;
-    }
+    .legend-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; margin-top: 25px; color: var(--text); text-transform: uppercase; letter-spacing: 0.8px; opacity: 0.9; }
     .legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 14px; color: var(--text); }
     .color-dot { width: 14px; height: 14px; border-radius: 3px; }
     </style>""", unsafe_allow_html=True)
@@ -463,7 +488,6 @@ if st.session_state["authentication_status"]:
         st.markdown("---")
         authenticator.logout('Logout', 'sidebar')
         
-        # Expiry Legend only visible in Pivot Tables view, placed below Logout
         if app_choice == "Pivot Tables":
             st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
             st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
