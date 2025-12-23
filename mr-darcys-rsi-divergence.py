@@ -49,8 +49,20 @@ def calculate_ema(series, period):
     return series.ewm(span=period, adjust=False).mean().round(2)
 
 @st.cache_data
-def process_ticker_indicators(df):
+def process_ticker_indicators(df, timeframe='Daily'):
     df = df.copy()
+    
+    # Resample if Weekly is selected
+    if timeframe == 'Weekly':
+        df = df.resample('W-FRI', on='Date').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum',
+            'Ticker': 'first'
+        }).reset_index().dropna()
+
     df['RSI'] = calculate_rsi(df['Close'], RSI_PERIOD)
     df['EMA8'] = calculate_ema(df['Close'], EMA_PERIOD) 
     df['EMA21'] = calculate_ema(df['Close'], EMA21_PERIOD)
@@ -119,14 +131,12 @@ def load_large_data(url):
 st.title("📉 RSI Divergences Live")
 
 # Pull URLs exclusively from Secrets
-# Keys expected: URL_DIVERGENCES, URL_MIDCAP, URL_SP500
 PRESETS = {
     "Divergences": st.secrets.get("URL_DIVERGENCES"),
     "Midcap": st.secrets.get("URL_MIDCAP"),
     "S&P 500": st.secrets.get("URL_SP500")
 }
 
-# Remove entries that aren't configured in secrets
 AVAILABLE_DATASETS = {k: v for k, v in PRESETS.items() if v is not None}
 
 if not AVAILABLE_DATASETS:
@@ -134,9 +144,23 @@ if not AVAILABLE_DATASETS:
     st.stop()
 
 st.sidebar.header("Data Configuration")
-dataset_choice = st.sidebar.selectbox("Choose Dataset", list(AVAILABLE_DATASETS.keys()))
 
-final_url = AVAILABLE_DATASETS[dataset_choice]
+# Dataset Toggle (Max 1 can be chosen)
+selected_dataset = None
+for dataset_name in AVAILABLE_DATASETS.keys():
+    if st.sidebar.toggle(dataset_name, value=(dataset_name == list(AVAILABLE_DATASETS.keys())[0])):
+        selected_dataset = dataset_name
+        # Break logic to ensure only one is selected if multiple are somehow toggled manually
+        break
+
+if not selected_dataset:
+    st.info("Please toggle a dataset in the sidebar to begin.")
+    st.stop()
+
+# RSI Divergence Length (Timeframe)
+timeframe = st.sidebar.radio("RSI Divergence Length", ["Daily", "Weekly"], index=0)
+
+final_url = AVAILABLE_DATASETS[selected_dataset]
 
 if final_url:
     raw_df = load_large_data(final_url)
@@ -146,14 +170,15 @@ if final_url:
         view_mode = st.sidebar.radio("View Mode", ["Summary Dashboard", "Ticker Detail"])
         
         if view_mode == "Summary Dashboard":
-            st.header(f"System-Wide Scanner: {dataset_choice}")
+            st.header(f"System-Wide Scanner: {selected_dataset} ({timeframe})")
             all_bullish, all_bearish = [], []
             unique_tickers = raw_df['Ticker'].unique()
             
             scan_progress = st.progress(0)
             for idx, ticker in enumerate(unique_tickers):
                 t_df = raw_df[raw_df['Ticker'] == ticker].sort_values('Date')
-                t_df = process_ticker_indicators(t_df)
+                # Apply indicators and optional resampling
+                t_df = process_ticker_indicators(t_df, timeframe)
                 divs = find_divergences(t_df, ticker)
                 all_bullish.extend(divs['bullish'])
                 all_bearish.extend(divs['bearish'])
@@ -173,9 +198,9 @@ if final_url:
             ticker_list = sorted(raw_df['Ticker'].unique())
             selected_ticker = st.sidebar.selectbox("Select Ticker", ticker_list)
             ticker_df = raw_df[raw_df['Ticker'] == selected_ticker].sort_values('Date')
-            ticker_df = process_ticker_indicators(ticker_df)
+            ticker_df = process_ticker_indicators(ticker_df, timeframe)
             
-            st.subheader(f"Analysis: {selected_ticker}")
+            st.subheader(f"Analysis: {selected_ticker} ({timeframe})")
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['Close'], name="Price", line=dict(color='white')))
             fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['EMA8'], name="EMA 8", line=dict(color='cyan', dash='dot')))
@@ -187,7 +212,7 @@ if final_url:
             fig_rsi.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['RSI'], name="RSI", line=dict(color='yellow')))
             fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
             fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
-            fig_rsi.update_layout(height=300, title="RSI", template="plotly_dark")
+            fig_rsi.update_layout(height=300, title=f"RSI ({timeframe})", template="plotly_dark")
             st.plotly_chart(fig_rsi, use_container_width=True)
     else:
         st.warning("Data not accessible. Verify Streamlit Secrets match your Google Drive permissions.")
