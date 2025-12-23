@@ -40,6 +40,11 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
     keep = [c for c in want if c in df.columns]
     df = df[keep].copy()
     
+    # Strip whitespace from categorical columns
+    for col in ["Order Type", "Symbol", "Strike", "Expiry"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+    
     if "Dollars" in df.columns:
         df["Dollars"] = (df["Dollars"].astype(str)
                          .str.replace("$", "", regex=False)
@@ -47,7 +52,6 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
 
     if "Contracts" in df.columns:
-        # Fixed: Removed commas from contracts to ensure numeric conversion doesn't fail/return 0
         df["Contracts"] = (df["Contracts"].astype(str)
                            .str.replace(",", "", regex=False))
         df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(0)
@@ -120,7 +124,17 @@ def highlight_expiry(val):
     except:
         return ""
 
-# Optimized column widths to prevent horizontal scroll while showing enough info
+def clean_strike_fmt(val):
+    """Removes .0 from strikes for cleaner pairing display."""
+    try:
+        f = float(val)
+        if f == int(f):
+            return str(int(f))
+        return str(f)
+    except:
+        return str(val)
+
+# Optimized column widths
 COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
@@ -333,15 +347,17 @@ def run_pivot_tables_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- 1. Identify Risk Reversals ---
-    # We use all data in the date range to find pairs, then filter the resulting lists.
+    # We use all data in the date range to find pairs
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     d_range['_original_idx'] = d_range.index
     
     cb_pool = d_range[d_range["Order Type"] == "Calls Bought"].copy()
     ps_pool = d_range[d_range["Order Type"] == "Puts Sold"].copy()
     
-    # Matching logic: same date, symbol, expiry, contracts
-    match_keys = ['Trade Date', 'Symbol', 'Expiry', 'Contracts']
+    # Matching logic: same date, symbol, expiry date, contracts
+    # Use Expiry_DT for consistency against formatting differences in the CSV
+    match_keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
+    
     cb_pool['occ'] = cb_pool.groupby(match_keys).cumcount()
     ps_pool['occ'] = ps_pool.groupby(match_keys).cumcount()
     
@@ -363,10 +379,15 @@ def run_pivot_tables_app(df):
     if not rr_matches.empty:
         df_rr['Symbol'] = rr_matches['Symbol']
         df_rr['Trade Date'] = rr_matches['Trade Date']
-        df_rr['Expiry'] = rr_matches['Expiry']
+        df_rr['Expiry'] = rr_matches['Expiry_c'] # Use the string for grouping
+        df_rr['Expiry_DT'] = rr_matches['Expiry_DT']
         df_rr['Contracts'] = rr_matches['Contracts']
         df_rr['Dollars'] = rr_matches['Dollars_c'] + rr_matches['Dollars_p']
-        df_rr['Strike'] = rr_matches['Strike_c'].astype(str) + "c/" + rr_matches['Strike_p'].astype(str) + "p"
+        
+        # Format strikes to remove .0 decimals
+        s_c = rr_matches['Strike_c'].apply(clean_strike_fmt)
+        s_p = rr_matches['Strike_p'].apply(clean_strike_fmt)
+        df_rr['Strike'] = s_c + "c/" + s_p + "p"
         df_rr['Order Type'] = "Risk Reversal"
 
     def apply_filters(data):
@@ -391,17 +412,16 @@ def run_pivot_tables_app(df):
     df_rr_filtered = apply_filters(df_rr)
 
     def get_ranked_pivot(data):
-        # Guard clause returning a correctly structured DataFrame to avoid styler KeyError
         if data.empty: 
             return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
             
         sym_rank = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
-        piv = data.groupby(["Symbol", "Strike", "Expiry"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index()
+        # Ensure Expiry grouping handles different formatting by using standardized DT internally
+        piv = data.groupby(["Symbol", "Strike", "Expiry_DT"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index()
         piv = piv.merge(sym_rank, on="Symbol")
-        piv["Expiry_Fmt"] = pd.to_datetime(piv["Expiry"]).dt.strftime("%d %b %y")
+        piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
         piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
         
-        # Avoid duplicate column names by modifying in place or dropping correctly
         piv["Symbol_Display"] = piv["Symbol"]
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
         
