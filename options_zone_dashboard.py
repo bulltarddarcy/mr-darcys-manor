@@ -124,22 +124,6 @@ def clean_strike_fmt(val):
     except:
         return str(val)
 
-# Reset Callbacks to prevent Session State modification errors
-def reset_sz_callback():
-    for k in ["sz_ticker", "sz_start", "sz_end", "sz_exp"]:
-        if k in st.session_state: del st.session_state[k]
-    # Clear specific ticker inclusion logic
-    to_del = [key for key in st.session_state.keys() if key.startswith("sz_include_")]
-    for key in to_del: del st.session_state[key]
-
-def reset_db_callback():
-    for k in ["db_start", "db_end", "db_exp", "db_ticker", "db_inc_cb", "db_inc_pb", "db_inc_ps"]:
-        if k in st.session_state: del st.session_state[k]
-
-def reset_pv_callback():
-    for k in ["pv_start", "pv_end", "pv_ticker", "pv_notional", "pv_mkt_cap", "pv_ema_filter"]:
-        if k in st.session_state: del st.session_state[k]
-
 COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
@@ -157,7 +141,7 @@ def run_options_database_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        db_ticker = st.text_input("Ticker/Symbol", value="", key="db_ticker").strip().upper()
+        db_ticker = st.text_input("Ticker", value="", key="db_ticker").strip().upper()
     with c2:
         start_date = st.date_input("Trade Start Date", value=None, key="db_start")
     with c3:
@@ -172,9 +156,6 @@ def run_options_database_app(df):
         inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
         inc_pb = st.checkbox("Puts Bought", value=True, key="db_inc_pb")
         inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
-        
-        st.markdown("---")
-        st.button("Reset All Defaults", use_container_width=True, key="db_reset_btn", on_click=reset_db_callback)
 
     f = df.copy()
     if db_ticker:
@@ -221,6 +202,58 @@ def run_options_database_app(df):
         height=get_table_height(f_display, max_rows=30)
     )
 
+def run_rankings_app(df):
+    """Rank symbols based on trade volume and sentiment logic"""
+    st.title("🏆 Rankings")
+
+    # Formula is (Calls Bought) + (Puts Sold) - (Puts Bought)
+    # Default range: 2 weeks before yesterday to yesterday
+    yesterday = date.today() - timedelta(days=1)
+    start_default = yesterday - timedelta(days=14)
+
+    st.markdown('<div class="control-box">', unsafe_allow_html=True)
+    c1, c2 = st.columns(2, gap="medium")
+    with c1:
+        rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
+    with c2:
+        rank_end = st.date_input("Trade End Date", value=yesterday, key="rank_end")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    f = df.copy()
+    if rank_start:
+        f = f[f["Trade Date"].dt.date >= rank_start]
+    if rank_end:
+        f = f[f["Trade Date"].dt.date <= rank_end]
+
+    if f.empty:
+        st.warning("No data found matching these dates.")
+        return
+
+    # Count occurrences per type per symbol
+    # We pivot to get one row per symbol
+    counts = f.groupby(["Symbol", "Order Type"]).size().unstack(fill_value=0)
+    
+    # Ensure all required columns exist
+    for col in ["Calls Bought", "Puts Sold", "Puts Bought"]:
+        if col not in counts.columns:
+            counts[col] = 0
+
+    # Calculate Score
+    counts["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
+    
+    # Sort and display
+    res = counts[["Calls Bought", "Puts Sold", "Puts Bought", "Score"]].sort_values(by="Score", ascending=False).reset_index()
+    
+    st.subheader("Symbol Sentiment Rankings")
+    st.caption("Score = (Calls Bought) + (Puts Sold) - (Puts Bought)")
+    
+    st.dataframe(
+        res,
+        use_container_width=True,
+        hide_index=True,
+        height=get_table_height(res, max_rows=30)
+    )
+
 def run_strike_zones_app(df):
     """Options Strike Zones with side-by-side charts and interactive inclusion logic"""
     st.title("📊 Options Strike Zones")
@@ -259,9 +292,6 @@ def run_strike_zones_app(df):
         st.markdown("**Other Options**")
         hide_empty      = st.checkbox("Hide Empty Zones", value=True)
         show_table       = st.checkbox("Show Strike Zone Table", value=True)
-        
-        st.markdown("---")
-        st.button("Reset All Defaults", use_container_width=True, key="sz_reset_btn", on_click=reset_sz_callback)
 
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
     if td_start:
@@ -415,8 +445,8 @@ def run_strike_zones_app(df):
             "Symbol": st.column_config.TextColumn("Symbol"),
             "Strike": st.column_config.TextColumn("Strike"),
             "Expiry Display": st.column_config.TextColumn("Expiry"),
-            "Contracts": st.column_config.NumberColumn("Contracts", format="%,d"), # Added comma separator
-            "Dollars": st.column_config.NumberColumn("Dollars", format="$%,.0f"),   # Added comma separator
+            "Contracts": st.column_config.NumberColumn("Contracts", format="%,d"), 
+            "Dollars": st.column_config.NumberColumn("Dollars", format="$%,.0f"),   
             "Included": st.column_config.CheckboxColumn("Included", default=True)
         }
         edited_df = st.data_editor(
@@ -451,8 +481,7 @@ def run_pivot_tables_app(df):
         min_notional = notional_choices[min_notional_label]
     with c5:
         mkt_cap_choices = {"0B": 0, "100B": 100e9, "200B": 200e9, "500B": 500e9, "1T": 1e12}
-        cap_keys = list(mkt_cap_choices.keys())
-        min_mkt_cap_label = st.selectbox("Mkt Cap Min", options=cap_keys, index=1, key="pv_mkt_cap")
+        min_mkt_cap_label = st.selectbox("Mkt Cap Min", options=list(mkt_cap_choices.keys()), index=1, key="pv_mkt_cap")
         min_mkt_cap = mkt_cap_choices[min_mkt_cap_label]
     with c6:
         ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
@@ -588,25 +617,36 @@ if st.session_state["authentication_status"]:
     </style>""", unsafe_allow_html=True)
     
     with st.sidebar:
-        st.header("Navigation")
-        app_choice = st.selectbox("Select Tool", ["Strike Zones", "Pivot Tables", "Options Database"])
+        st.header("Select Tool")
+        # Navigation order: Options Database -> Rankings -> Pivot Tables -> Strike Zones
+        app_choice = st.selectbox("Select Tool", ["Options Database", "Rankings", "Pivot Tables", "Strike Zones"], label_visibility="collapsed")
         st.markdown("---")
-        authenticator.logout('Logout', 'sidebar')
-        
-        if app_choice == "Pivot Tables":
-            st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
-            st.markdown("---")
-            st.button("Reset All Defaults", use_container_width=True, key="pv_reset_btn", on_click=reset_pv_callback)
         
     try:
         sheet_url = st.secrets["GSHEET_URL"]
         df_global = load_and_clean_data(sheet_url)
-        if app_choice == "Strike Zones": run_strike_zones_app(df_global)
-        elif app_choice == "Options Database": run_options_database_app(df_global)
-        else: run_pivot_tables_app(df_global)
+        
+        # Tool logic
+        if app_choice == "Options Database": 
+            run_options_database_app(df_global)
+        elif app_choice == "Rankings":
+            run_rankings_app(df_global)
+        elif app_choice == "Pivot Tables": 
+            run_pivot_tables_app(df_global)
+        else: # Strike Zones
+            run_strike_zones_app(df_global)
+            
+        # Add Expiry Legend and Logout at the very end of the sidebar
+        with st.sidebar:
+            if app_choice == "Pivot Tables":
+                st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
+                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
+                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
+                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
+            
+            st.markdown("---")
+            authenticator.logout('Logout', 'sidebar')
+            
     except Exception as e:
         st.error(f"Error: {e}")
 elif st.session_state["authentication_status"] is False: st.error('Incorrect password')
