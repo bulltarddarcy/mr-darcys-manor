@@ -98,19 +98,36 @@ def get_table_height(df, max_rows=30):
     if row_count == 0:
         return 100
     display_rows = min(row_count, max_rows)
-    # Increased max_rows check to 30 as requested
     return (display_rows + 1) * 35 + 5
 
-# Shared column configuration standardized to 'small' for all columns
+def highlight_expiry(val):
+    """Highlights Expiry column based on urgency."""
+    try:
+        # Assuming format 'DD MMM YY'
+        expiry_date = datetime.strptime(val, "%d %b %y").date()
+        today = date.today()
+        days_diff = (expiry_date - today).days
+        
+        if days_diff < 0:
+            return "" # Past date
+        elif days_diff <= 7:
+            return "background-color: #9c2a2a; color: white; font-weight: bold;" # Urgent
+        elif days_diff <= 30:
+            return "background-color: #8c6a03; color: white; font-weight: bold;" # Warning
+        return ""
+    except:
+        return ""
+
+# Updated column configuration with better widths
 COLUMN_CONFIG = {
-    "Symbol": st.column_config.TextColumn(width="small"),
-    "Strike": st.column_config.TextColumn(width="small"),
-    "Expiry": st.column_config.TextColumn(width="small"),
-    "Contracts": st.column_config.NumberColumn(width="small"),
-    "Dollars": st.column_config.NumberColumn(width="small"),
-    "Trade Date": st.column_config.TextColumn(width="small"),
-    "Order Type": st.column_config.TextColumn(width="small"),
-    "Strike (Actual)": st.column_config.NumberColumn(width="small"),
+    "Symbol": st.column_config.TextColumn(width="medium"),
+    "Strike": st.column_config.TextColumn(width="medium"),
+    "Expiry": st.column_config.TextColumn(width="medium"),
+    "Contracts": st.column_config.NumberColumn(width="medium"),
+    "Dollars": st.column_config.NumberColumn(width="medium"),
+    "Trade Date": st.column_config.TextColumn(width="medium"),
+    "Order Type": st.column_config.TextColumn(width="medium"),
+    "Strike (Actual)": st.column_config.NumberColumn(width="medium"),
 }
 
 # --- 3. APP MODULES ---
@@ -367,78 +384,76 @@ def run_pivot_tables_app(df):
 
     std_cols = ["Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
 
-    # Side-by-side layout for Calls Bought and Puts Sold
-    col_left, col_right = st.columns(2)
+    # 3-column layout as requested
+    col1, col2, col3 = st.columns(3)
 
     # 1. Calls Bought Table
-    with col_left:
+    with col1:
         st.subheader("Calls Bought")
-        calls_bought = get_ranked_pivot(f, "Calls Bought", std_cols)
-        if not calls_bought.empty:
+        df_cb = get_ranked_pivot(f, "Calls Bought", std_cols)
+        if not df_cb.empty:
             st.dataframe(
-                calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
-                # Disabled container width to prevent 'gigantic' columns
+                df_cb.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"})
+                .map(highlight_expiry, subset=["Expiry"]),
                 use_container_width=False,
                 hide_index=True,
-                height=get_table_height(calls_bought, max_rows=30),
+                height=get_table_height(df_cb, max_rows=30),
                 column_config=COLUMN_CONFIG
             )
         else:
-            st.info("No Calls Bought matching filters.")
+            st.info("No Calls Bought found.")
 
     # 2. Puts Sold Table
-    with col_right:
+    with col2:
         st.subheader("Puts Sold")
-        puts_sold = get_ranked_pivot(f, "Puts Sold", std_cols)
-        if not puts_sold.empty:
+        df_ps = get_ranked_pivot(f, "Puts Sold", std_cols)
+        if not df_ps.empty:
             st.dataframe(
-                puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
-                # Disabled container width to prevent 'gigantic' columns
+                df_ps.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"})
+                .map(highlight_expiry, subset=["Expiry"]),
                 use_container_width=False,
                 hide_index=True,
-                height=get_table_height(puts_sold, max_rows=30),
+                height=get_table_height(df_ps, max_rows=30),
                 column_config=COLUMN_CONFIG
             )
         else:
-            st.info("No Puts Sold matching filters.")
+            st.info("No Puts Sold found.")
 
-    # 3. Risk Reversals Table (Date Filter only) - Keeps full width logic but config-constrained
-    st.subheader("Risk Reversals")
-    rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
-    rr_data = rr_data[rr_data["Order Type"] == "Risk Reversals"]
-    
-    if not rr_data.empty:
-        sym_rank_rr = rr_data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
-        rr_pivot = rr_data.groupby(["Symbol", "Order Type", "Strike", "Expiry"]).agg({
-            "Contracts": "sum",
-            "Dollars": "sum"
-        }).reset_index()
+    # 3. Risk Reversals Table
+    with col3:
+        st.subheader("Risk Reversals")
+        rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
+        rr_data = rr_data[rr_data["Order Type"] == "Risk Reversals"]
         
-        rr_pivot = rr_pivot.merge(sym_rank_rr, on="Symbol")
-        rr_pivot["Contracts"] = pd.to_numeric(rr_pivot["Contracts"], errors='coerce').fillna(0)
-        rr_pivot["Dollars"] = pd.to_numeric(rr_pivot["Dollars"], errors='coerce').fillna(0.0)
-        rr_pivot["Expiry"] = pd.to_datetime(rr_pivot["Expiry"]).dt.strftime("%d %b %y")
-        
-        rr_pivot = rr_pivot.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
-        
-        rr_pivot["Symbol_Display"] = rr_pivot["Symbol"]
-        rr_pivot.loc[rr_pivot["Symbol"] == rr_pivot["Symbol"].shift(1), "Symbol_Display"] = ""
-        rr_final = rr_pivot.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
-        
-        # Define local RR config to match standardized 'small' widths
-        rr_config = COLUMN_CONFIG.copy()
-        rr_config["Order Type"] = st.column_config.TextColumn(width="small")
-
-        rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
-        st.dataframe(
-            rr_final[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
-            use_container_width=False,
-            hide_index=True,
-            height=get_table_height(rr_final, max_rows=30),
-            column_config=rr_config
-        )
-    else:
-        st.info("No Risk Reversals found in this date range.")
+        if not rr_data.empty:
+            sym_rank_rr = rr_data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
+            rr_pivot = rr_data.groupby(["Symbol", "Order Type", "Strike", "Expiry"]).agg({
+                "Contracts": "sum",
+                "Dollars": "sum"
+            }).reset_index()
+            
+            rr_pivot = rr_pivot.merge(sym_rank_rr, on="Symbol")
+            rr_pivot["Contracts"] = pd.to_numeric(rr_pivot["Contracts"], errors='coerce').fillna(0)
+            rr_pivot["Dollars"] = pd.to_numeric(rr_pivot["Dollars"], errors='coerce').fillna(0.0)
+            rr_pivot["Expiry"] = pd.to_datetime(rr_pivot["Expiry"]).dt.strftime("%d %b %y")
+            
+            rr_pivot = rr_pivot.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
+            
+            rr_pivot["Symbol_Display"] = rr_pivot["Symbol"]
+            rr_pivot.loc[rr_pivot["Symbol"] == rr_pivot["Symbol"].shift(1), "Symbol_Display"] = ""
+            rr_final = rr_pivot.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
+            
+            rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
+            st.dataframe(
+                rr_final[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"})
+                .map(highlight_expiry, subset=["Expiry"]),
+                use_container_width=False,
+                hide_index=True,
+                height=get_table_height(rr_final, max_rows=30),
+                column_config=COLUMN_CONFIG
+            )
+        else:
+            st.info("No Risk Reversals found.")
 
 
 # --- 4. MAIN EXECUTION ---
