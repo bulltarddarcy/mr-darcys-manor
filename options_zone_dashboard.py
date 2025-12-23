@@ -393,7 +393,7 @@ def run_pivot_tables_app(df):
                 'Expiry_DT': row['Expiry_DT'],
                 'Contracts': row['Contracts'],
                 'Dollars': row['Dollars_c'],
-                'Strike': f"{clean_strike_fmt(row['Strike_c'])} (C)",
+                'Strike': clean_strike_fmt(row['Strike_c']),
                 'Pair_ID': idx,
                 'Pair_Side': 0 # Call is first
             })
@@ -404,7 +404,7 @@ def run_pivot_tables_app(df):
                 'Expiry_DT': row['Expiry_DT'],
                 'Contracts': row['Contracts'],
                 'Dollars': row['Dollars_p'],
-                'Strike': f"{clean_strike_fmt(row['Strike_p'])} (P)",
+                'Strike': clean_strike_fmt(row['Strike_p']),
                 'Pair_ID': idx,
                 'Pair_Side': 1 # Put is second
             })
@@ -470,7 +470,7 @@ def run_pivot_tables_app(df):
         tbl = get_ranked_pivot(df_rr_f, is_rr=True)
         if not tbl.empty: 
             st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-            st.caption("⚠️ RR Table reflects date range only (ignores Ticker, Min Dollars, Mkt Cap, and EMA filters). Pairs are shown as Call row over Put row.")
+            st.caption("⚠️ RR Table reflects date range only (ie, ignores all other inputs)")
         else: st.info("None.")
 
 # --- 4. MAIN EXECUTION ---
@@ -489,7 +489,7 @@ if st.session_state["authentication_status"]:
     .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
     .price-divider{position:relative;margin:16px 0 12px 0;height:2px;}
     .price-divider .line{height:2px;background:var(--line);opacity:.9;width:652px;margin-left:112px;}
-    .price-badge{position:absolute;left:412px;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
+    .price-badge{position:absolute;left:438px;transform:translate(-50%,-50%);top:0;background:#2b3a45;color:#bfe7ff;
       border:1px solid #56b6ff;border-radius:16px;padding:6px 12px;font-weight:800;font-size:12px;letter-spacing:.3px;
       box-shadow:0 2px 8px rgba(0,0,0,.35); white-space: nowrap;}
     .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
@@ -511,7 +511,7 @@ if st.session_state["authentication_status"]:
             st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
             st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
             st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays from now</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
             st.markdown("---")
             if st.button("Reset All Defaults", use_container_width=True, key="pv_reset"):
                 for k in ["pv_start", "pv_end", "pv_ticker", "pv_notional", "pv_mkt_cap", "pv_ema_filter"]:
