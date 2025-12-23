@@ -33,24 +33,11 @@ def get_drive_file_id(url):
     return None
 
 def download_large_drive_file(file_id):
-    """Downloads large files from Drive by bypassing the virus scan warning."""
-    base_url = "https://docs.google.com/uc?export=download"
+    """Downloads files from Drive, attempting to bypass the virus scan warning for large files."""
+    # Use the confirm=t parameter which is a common bypass for the virus scan warning
+    base_url = f"https://docs.google.com/uc?export=download&id={file_id}&confirm=t"
     session = requests.Session()
-    
-    # First request to check for the 'confirm' token
-    response = session.get(base_url, params={'id': file_id}, stream=True)
-    
-    token = None
-    for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
-            token = value
-            break
-            
-    if token:
-        # Second request with the confirmation token
-        params = {'id': file_id, 'confirm': token}
-        response = session.get(base_url, params=params, stream=True)
-        
+    response = session.get(base_url, stream=True)
     return response
 
 # --- Technical Indicator Logic (Matches divergence_make_dashboard.py) ---
@@ -141,7 +128,7 @@ def find_divergences(df_timeframe, ticker):
 
 # --- Data Loading ---
 
-@st.cache_data(ttl=3600, show_spinner="Loading large dataset...")
+@st.cache_data(ttl=3600, show_spinner="Loading dataset...")
 def load_large_data(url):
     file_id = get_drive_file_id(url)
     if not file_id:
@@ -159,13 +146,19 @@ def load_large_data(url):
             'High': 'float32', 'Low': 'float32', 'Volume': 'float32'
         }
         
-        # Use io.BytesIO to read the binary content directly into pandas
+        # Read directly from response content
         df = pd.read_csv(io.BytesIO(response.content), dtype=dtype_dict)
         
-        # Handle Date parsing
-        date_col = next((c for c in df.columns if 'date' in c.lower()), df.columns[0])
-        df[date_col] = pd.to_datetime(df[date_col])
-        if date_col != 'Date': df.rename(columns={date_col: 'Date'}, inplace=True)
+        # Determine date column name
+        date_col = next((c for c in df.columns if 'date' in c.lower()), None)
+        if date_col:
+            df[date_col] = pd.to_datetime(df[date_col])
+            if date_col != 'Date': 
+                df.rename(columns={date_col: 'Date'}, inplace=True)
+        else:
+            # Assume first column is date
+            df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
+            df.rename(columns={df.columns[0]: 'Date'}, inplace=True)
             
         return df
     except Exception as e:
@@ -257,6 +250,6 @@ if final_url:
             fig_rsi.update_layout(height=300, title=f"RSI ({timeframe})", template="plotly_dark")
             st.plotly_chart(fig_rsi, use_container_width=True)
     else:
-        st.warning("Data load failed. Check Drive permissions or Secrets configuration.")
+        st.warning("Data load failed. Please check Drive permissions (Viewer) or ensure Secrets contain correct links.")
 else:
     st.info("Select a dataset to begin.")
