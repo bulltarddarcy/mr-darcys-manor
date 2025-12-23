@@ -174,7 +174,6 @@ def run_strike_zones_app(df):
     display_used = used.copy()
     display_used["Trade Date"] = display_used["Trade Date"].dt.strftime("%d %b %y")
     display_used["Expiry"] = pd.to_datetime(display_used["Expiry"]).dt.strftime("%d %b %y")
-    # Using format "${:,.0f}" to ensure commas are added to Dollars
     st.dataframe(display_used.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True, hide_index=True, height=get_table_height(display_used, max_rows=30))
 
 
@@ -201,7 +200,6 @@ def run_pivot_tables_app(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- RR Pairing Engine ---
-    # Processing the entire date range to find pairs
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     d_range['_original_idx'] = d_range.index
     
@@ -233,8 +231,8 @@ def run_pivot_tables_app(df):
         df_rr_matched['Expiry_DT'] = rr_matches['Expiry_DT']
         df_rr_matched['Contracts'] = rr_matches['Contracts']
         df_rr_matched['Dollars'] = rr_matches['Dollars_c'] + rr_matches['Dollars_p']
-        # Combine strikes - removed the "c" and "p" suffixes and used " & " as separator
-        df_rr_matched['Strike'] = rr_matches['Strike_c'].apply(clean_strike_fmt) + " & " + rr_matches['Strike_p'].apply(clean_strike_fmt)
+        # Combine strikes for clear display
+        df_rr_matched['Strike'] = rr_matches['Strike_c'].apply(clean_strike_fmt) + "c/" + rr_matches['Strike_p'].apply(clean_strike_fmt) + "p"
         df_rr = df_rr_matched
 
     def apply_filters(data, exclude_filters=False):
@@ -299,9 +297,7 @@ def run_pivot_tables_app(df):
     with col3:
         st.subheader("Risk Reversals")
         tbl = get_ranked_pivot(df_rr_f)
-        if not tbl.empty: 
-            st.dataframe(tbl.style.format(currency_format).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-            st.caption("⚠️ RR Table reflects date range only (ignores Ticker, Min Dollars, Mkt Cap, and EMA filters).")
+        if not tbl.empty: st.dataframe(tbl.style.format(currency_format).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
         else: st.info("None.")
 
 # --- 4. MAIN EXECUTION ---
@@ -312,24 +308,13 @@ if st.session_state["authentication_status"]:
     .block-container{padding-top:1.2rem;padding-bottom:1rem;}
     .control-box{padding:14px 0; border-radius:10px;}
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
+    .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
     th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-    .legend-box { padding: 10px; border: 1px solid #3a3f45; border-radius: 8px; margin-top: 20px; font-size: 13px; }
-    .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
-    .color-dot { width: 12px; height: 12px; border-radius: 50%; }
     </style>""", unsafe_allow_html=True)
     with st.sidebar:
         st.header("Navigation")
         app_choice = st.selectbox("Select Tool", ["Strike Zones", "Pivot Tables"])
-        
-        st.markdown('<div class="legend-box"><strong>Expiry Legend</strong>', unsafe_allow_html=True)
-        st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
-        st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
-        st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays from now</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        st.markdown("---")
         authenticator.logout('Logout', 'sidebar')
-        
     try:
         sheet_url = st.secrets["GSHEET_URL"]
         df_global = load_and_clean_data(sheet_url)
