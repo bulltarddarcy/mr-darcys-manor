@@ -98,6 +98,16 @@ def get_table_height(df, max_rows=50):
     display_rows = min(row_count, max_rows)
     return (display_rows + 1) * 35 + 5
 
+def apply_custom_styling(styler, df):
+    """Removes horizontal borders for rows with empty Symbols (grouped tickers)."""
+    def style_borders(row):
+        # If Symbol is empty, remove the top border to visually group it with the above row
+        if row["Symbol"] == "":
+            return ["border-top: none !important"] * len(row)
+        return [""] * len(row)
+    
+    return styler.apply(style_borders, axis=1)
+
 # --- 3. APP MODULES ---
 
 def run_strike_zones_app(df):
@@ -301,7 +311,6 @@ def run_pivot_tables_app(df):
         min_mkt_cap_label = st.selectbox("Mkt Cap Min", options=list(mkt_cap_choices.keys()), index=1, key="pv_mkt_cap")
         min_mkt_cap = mkt_cap_choices[min_mkt_cap_label]
     with c6:
-        # Added Over 21 Day EMA filter
         ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -346,8 +355,9 @@ def run_pivot_tables_app(df):
         
         piv["Symbol_Display"] = piv["Symbol"]
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
-        piv = piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
-        return piv[columns]
+        
+        final_df = piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
+        return final_df[columns]
 
     std_cols = ["Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
 
@@ -355,8 +365,12 @@ def run_pivot_tables_app(df):
     st.subheader("Calls Bought")
     calls_bought = get_ranked_pivot(f, "Calls Bought", std_cols)
     if not calls_bought.empty:
+        styled_calls = apply_custom_styling(
+            calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}),
+            calls_bought
+        )
         st.dataframe(
-            calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+            styled_calls, 
             use_container_width=True,
             hide_index=True,
             height=get_table_height(calls_bought)
@@ -368,8 +382,12 @@ def run_pivot_tables_app(df):
     st.subheader("Puts Sold")
     puts_sold = get_ranked_pivot(f, "Puts Sold", std_cols)
     if not puts_sold.empty:
+        styled_puts = apply_custom_styling(
+            puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}),
+            puts_sold
+        )
         st.dataframe(
-            puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+            styled_puts, 
             use_container_width=True,
             hide_index=True,
             height=get_table_height(puts_sold)
@@ -377,7 +395,7 @@ def run_pivot_tables_app(df):
     else:
         st.info("No Puts Sold found matching these filters.")
 
-    # 3. Risk Reversals Table (Date Filter only)
+    # 3. Risk Reversals Table
     st.subheader("Risk Reversals")
     rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     rr_data = rr_data[rr_data["Order Type"] == "Risk Reversals"]
@@ -398,14 +416,18 @@ def run_pivot_tables_app(df):
         
         rr_pivot["Symbol_Display"] = rr_pivot["Symbol"]
         rr_pivot.loc[rr_pivot["Symbol"] == rr_pivot["Symbol"].shift(1), "Symbol_Display"] = ""
-        rr_pivot = rr_pivot.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
+        rr_final = rr_pivot.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
         
         rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
+        styled_rr = apply_custom_styling(
+            rr_final[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}),
+            rr_final
+        )
         st.dataframe(
-            rr_pivot[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+            styled_rr, 
             use_container_width=True,
             hide_index=True,
-            height=get_table_height(rr_pivot)
+            height=get_table_height(rr_final)
         )
     else:
         st.info("No Risk Reversals found in this date range.")
