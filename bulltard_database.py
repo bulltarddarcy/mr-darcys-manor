@@ -85,6 +85,7 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
 def get_market_cap(symbol: str) -> float:
     try:
         t = yf.Ticker(symbol)
+        # Fallback to info, then try basic stats if info fails
         mc = t.info.get('marketCap', 0)
         return float(mc) if mc else 0.0
     except:
@@ -430,7 +431,7 @@ def run_pivot_tables_app(df):
     with c1: td_start = st.date_input("Trade Start Date", value=yesterday, key="pv_start")
     with c2: td_end = st.date_input("Trade End Date", value=yesterday, key="pv_end")
     with c3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
-    with c4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=0, key="pv_notional")]
+    with c4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=1, key="pv_notional")]
     with c5: min_mkt_cap = {"0B": 0, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
     with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -466,20 +467,37 @@ def run_pivot_tables_app(df):
         cb_pool = filter_out_matches(cb_pool, rr_matches)
         ps_pool = filter_out_matches(ps_pool, rr_matches)
 
-    def apply_f(data, is_rr=False):
+    def apply_f(data, bypass_quant=False):
         if data.empty: return data
         f = data.copy()
-        if ticker_filter: f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
+        
+        # Ticker Filter always applies
+        if ticker_filter: 
+            f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
+        
+        # Skip quantitative filters if requested (for RR)
+        if bypass_quant:
+            return f
+            
+        # Apply quantitative filters
         f = f[f["Dollars"] >= min_notional]
+        
         if not f.empty and min_mkt_cap > 0:
-            valid_symbols = [s for s in f["Symbol"].unique() if get_market_cap(s) >= min_mkt_cap]
+            # Re-fetch or use cached market cap; ensure comparison is float to float
+            valid_symbols = [s for s in f["Symbol"].unique() if get_market_cap(s) >= float(min_mkt_cap)]
             f = f[f["Symbol"].isin(valid_symbols)]
+            
         if not f.empty and ema_filter == "Yes":
             valid_ema_symbols = [s for s in f["Symbol"].unique() if is_above_ema21(s)]
             f = f[f["Symbol"].isin(valid_ema_symbols)]
+            
         return f
 
-    df_cb_f, df_ps_f, df_rr_f = apply_f(cb_pool), apply_f(ps_pool), apply_f(df_rr, is_rr=True)
+    # CB and PS get the full filters
+    df_cb_f = apply_f(cb_pool, bypass_quant=False)
+    df_ps_f = apply_f(ps_pool, bypass_quant=False)
+    # RR table only gets Date and Ticker filters
+    df_rr_f = apply_f(df_rr, bypass_quant=True)
 
     def get_p(data, is_rr=False):
         if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
@@ -504,7 +522,9 @@ def run_pivot_tables_app(df):
         else: st.caption("No individual puts found.")
     with col3:
         st.subheader("Risk Reversals"); tbl = get_p(df_rr_f, is_rr=True)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT); st.caption("⚠️ RR Table reflects date range only")
+        if not tbl.empty: 
+            st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT); 
+            st.caption("ℹ️ This table reflects date and ticker filters only, bypassing dollar/mkt cap requirements.")
         else: st.caption("No matched RR pairs found.")
 
 def run_rsi_divergences_app():
