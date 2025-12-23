@@ -47,6 +47,7 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
 
     if "Contracts" in df.columns:
+        # Fixed: Removed commas from contracts to ensure numeric conversion doesn't fail/return 0
         df["Contracts"] = (df["Contracts"].astype(str)
                            .str.replace(",", "", regex=False))
         df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(0)
@@ -123,7 +124,7 @@ def highlight_expiry(val):
 COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
-    "Expiry": st.column_config.TextColumn("Exp", width=90),
+    "Expiry_Table": st.column_config.TextColumn("Exp", width=90),
     "Contracts": st.column_config.NumberColumn("Qty", width=60),
     "Dollars": st.column_config.NumberColumn("Dollars", width=90, format="$%d"),
 }
@@ -340,7 +341,6 @@ def run_pivot_tables_app(df):
     ps_pool = d_range[d_range["Order Type"] == "Puts Sold"].copy()
     
     # Matching logic: same date, symbol, expiry, contracts
-    # Use cumcount to handle multiple identical trades in a day
     match_keys = ['Trade Date', 'Symbol', 'Expiry', 'Contracts']
     cb_pool['occ'] = cb_pool.groupby(match_keys).cumcount()
     ps_pool['occ'] = ps_pool.groupby(match_keys).cumcount()
@@ -391,15 +391,24 @@ def run_pivot_tables_app(df):
     df_rr_filtered = apply_filters(df_rr)
 
     def get_ranked_pivot(data):
-        if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry", "Contracts", "Dollars"])
+        # Guard clause returning a correctly structured DataFrame to avoid styler KeyError
+        if data.empty: 
+            return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
+            
         sym_rank = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
         piv = data.groupby(["Symbol", "Strike", "Expiry"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index()
         piv = piv.merge(sym_rank, on="Symbol")
         piv["Expiry_Fmt"] = pd.to_datetime(piv["Expiry"]).dt.strftime("%d %b %y")
         piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
+        
+        # Avoid duplicate column names by modifying in place or dropping correctly
         piv["Symbol_Display"] = piv["Symbol"]
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
-        res = piv.rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})
+        
+        res = piv.drop(columns=["Symbol"]).rename(columns={
+            "Symbol_Display": "Symbol", 
+            "Expiry_Fmt": "Expiry_Table"
+        })
         return res[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
 
     # Side-by-side layout
@@ -409,7 +418,7 @@ def run_pivot_tables_app(df):
         st.subheader("Calls Bought")
         tbl_cb = get_ranked_pivot(df_cb_filtered)
         if not tbl_cb.empty:
-            st.dataframe(tbl_cb.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).map(highlight_expiry, subset=["Expiry_Table"]),
+            st.dataframe(tbl_cb.style.format({"Dollars": "{:,.0f}", "Contracts": "{:,.0f}"}).map(highlight_expiry, subset=["Expiry_Table"]),
                          use_container_width=True, hide_index=True, height=get_table_height(tbl_cb),
                          column_config=COLUMN_CONFIG_PIVOT)
         else:
@@ -419,7 +428,7 @@ def run_pivot_tables_app(df):
         st.subheader("Puts Sold")
         tbl_ps = get_ranked_pivot(df_ps_filtered)
         if not tbl_ps.empty:
-            st.dataframe(tbl_ps.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).map(highlight_expiry, subset=["Expiry_Table"]),
+            st.dataframe(tbl_ps.style.format({"Dollars": "{:,.0f}", "Contracts": "{:,.0f}"}).map(highlight_expiry, subset=["Expiry_Table"]),
                          use_container_width=True, hide_index=True, height=get_table_height(tbl_ps),
                          column_config=COLUMN_CONFIG_PIVOT)
         else:
@@ -429,7 +438,7 @@ def run_pivot_tables_app(df):
         st.subheader("Risk Reversals")
         tbl_rr = get_ranked_pivot(df_rr_filtered)
         if not tbl_rr.empty:
-            st.dataframe(tbl_rr.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).map(highlight_expiry, subset=["Expiry_Table"]),
+            st.dataframe(tbl_rr.style.format({"Dollars": "{:,.0f}", "Contracts": "{:,.0f}"}).map(highlight_expiry, subset=["Expiry_Table"]),
                          use_container_width=True, hide_index=True, height=get_table_height(tbl_rr),
                          column_config=COLUMN_CONFIG_PIVOT)
         else:
