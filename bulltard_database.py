@@ -377,7 +377,9 @@ def run_strike_zones_app(df):
     if used.empty: st.info("No trades included.")
     else:
         used["Signed Dollars"] = used.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
-        fmt_neg = lambda x: f"-${abs(x):,.0f}" if x < 0 else f"${x:,.0f}"
+        
+        # Formatting function for parenthetical negatives in bar labels
+        fmt_neg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
 
         if view_mode == "Price Zones":
             strike_min, strike_max = float(np.nanmin(used["Strike (Actual)"].values)), float(np.nanmax(used["Strike (Actual)"].values))
@@ -421,8 +423,29 @@ def run_strike_zones_app(df):
 
     if show_table:
         st.subheader("Data Table")
-        edited_df = st.data_editor(edit_pool[cols_to_show], column_config={"Trade Date Display": "Trade Date", "Expiry Display": "Expiry", "Contracts": st.column_config.NumberColumn("Qty", format="%,.0f"), "Dollars": st.column_config.NumberColumn("Dollars", format="$ %,.0f"), "Included": st.column_config.CheckboxColumn(default=True)}, use_container_width=True, hide_index=True, key="strike_zones_editor")
-        if not edited_df.equals(edit_pool[cols_to_show]): st.session_state[state_key] = edited_df["Included"].tolist(); st.rerun()
+        
+        # Prepare display copy with parenthetical negative dollar formatting
+        df_for_editor = edit_pool[cols_to_show].copy()
+        df_for_editor["Dollars"] = df_for_editor["Dollars"].apply(lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}")
+        
+        edited_df = st.data_editor(
+            df_for_editor, 
+            column_config={
+                "Trade Date Display": "Trade Date", 
+                "Expiry Display": "Expiry", 
+                "Contracts": st.column_config.NumberColumn("Qty", format="%,.0f"), 
+                "Dollars": st.column_config.TextColumn("Dollars", width=110), 
+                "Included": st.column_config.CheckboxColumn(default=True)
+            }, 
+            use_container_width=True, 
+            hide_index=True, 
+            key="strike_zones_editor"
+        )
+        
+        # Comparison logic remains same but checks against the edited_df's "Included" column
+        if not edited_df["Included"].equals(df_for_editor["Included"]): 
+            st.session_state[state_key] = edited_df["Included"].tolist()
+            st.rerun()
 
 def run_pivot_tables_app(df):
     """Exposure analysis with split rows and robust RR pairing"""
