@@ -38,22 +38,30 @@ authenticator.login(location='main')
 @st.cache_data(show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
     df = pd.read_csv(url)
-    want = ["Trade Date","Order Type","Symbol","Strike (Actual)","Expiry","Contracts","Dollars","Error"]
+    # Adding 'Strike' and 'Expiry' for the Pivot Tables app display
+    want = ["Trade Date","Order Type","Symbol","Strike (Actual)","Strike","Expiry","Contracts","Dollars","Error"]
     keep = [c for c in want if c in df.columns]
     df = df[keep].copy()
+    
     if "Dollars" in df.columns:
         df["Dollars"] = (df["Dollars"].astype(str)
                          .str.replace(",", "", regex=False)
                          .str.replace("$","", regex=False))
         df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce")
+    
     if "Trade Date" in df.columns:
         df["Trade Date"] = pd.to_datetime(df["Trade Date"], errors="coerce")
+    
     if "Expiry" in df.columns:
-        df["Expiry"] = pd.to_datetime(df["Expiry"], errors="coerce")
+        # We keep both the datetime version for filtering and the raw string for the pivot tables
+        df["Expiry_DT"] = pd.to_datetime(df["Expiry"], errors="coerce")
+        
     if "Strike (Actual)" in df.columns:
         df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce")
+        
     if "Error" in df.columns:
         df = df[~df["Error"].astype(str).str.upper().isin(["TRUE","1","YES"])]
+        
     return df
 
 # --- 3. APP MODULES ---
@@ -66,13 +74,13 @@ def run_strike_zones_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        ticker = st.text_input("Ticker", value="AMZN").strip().upper()
+        ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
     with c2:
-        td_start = st.date_input("Trade Date (start)", value=date.today() - timedelta(days=180))
+        td_start = st.date_input("Trade Date (start)", value=date.today() - timedelta(days=180), key="sz_start")
     with c3:
-        td_end = st.date_input("Trade Date (end)", value=date.today())
+        td_end = st.date_input("Trade Date (end)", value=date.today(), key="sz_end")
     with c4:
-        exp_end = st.date_input("Exp. Range (end)", value=date.today().replace(year=date.today().year+1))
+        exp_end = st.date_input("Exp. Range (end)", value=date.today().replace(year=date.today().year+1), key="sz_exp")
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Sidebar Settings
@@ -103,7 +111,7 @@ def run_strike_zones_app(df):
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
     f = f[(f["Trade Date"].dt.date >= td_start) & (f["Trade Date"].dt.date <= td_end)]
     today_val = date.today()
-    f = f[(f["Expiry"].dt.date >= today_val) & (f["Expiry"].dt.date <= exp_end)]
+    f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
     
     f["Included"] = (
         (f["Order Type"].eq("Calls Bought") & inc_calls_bought) |
@@ -205,7 +213,7 @@ def run_strike_zones_app(df):
         st.markdown('</div>', unsafe_allow_html=True)
     else:
         e = used.copy()
-        e["DTE"] = (pd.to_datetime(e["Expiry"]).dt.date - date.today()).apply(lambda x: x.days)
+        e["DTE"] = (pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days)
         bins = [0, 7, 30, 90, 180, 10000]
         labels = ["0-7d", "8-30d", "31-90d", "91-180d", ">180d"]
         e["Bucket"] = pd.cut(e["DTE"], bins=bins, labels=labels, include_lowest=True)
@@ -222,20 +230,81 @@ def run_strike_zones_app(df):
         st.dataframe(used, use_container_width=True)
 
 
-def run_portfolio_app(df):
-    """Placeholder for a second app"""
-    st.title("💼 Portfolio Overview")
-    st.write("This app analyzes the broad exposure across all symbols in your Google Sheet.")
+def run_pivot_tables_app(df):
+    """Analyzes exposure using Pivot Tables across defined order types"""
+    st.title("💼 Pivot Tables")
     
-    # Simple summary stats
-    summary = df.groupby("Symbol").agg({
-        "Dollars": "sum",
-        "Contracts": "sum"
-    }).sort_values("Dollars", ascending=False)
+    # ---------- Inputs ----------
+    st.markdown('<div class="control-box">', unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4, gap="medium")
+    with c1:
+        td_start = st.date_input("Trade Start Date", value=date.today() - timedelta(days=90), key="pv_start")
+    with c2:
+        td_end = st.date_input("Trade End Date", value=date.today(), key="pv_end")
+    with c3:
+        ticker_filter = st.text_input("Ticker (leave blank for all)", value="", key="pv_ticker").strip().upper()
+    with c4:
+        notional_choices = {"0M": 0, "5M": 5_000_000, "10M": 10_000_000, "50M": 50_000_000, "100M": 100_000_000}
+        min_notional_label = st.selectbox("Min Notional", options=list(notional_choices.keys()), index=1, key="pv_notional")
+        min_notional = notional_choices[min_notional_label]
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ---------- Global Filtering (for Calls Bought / Puts Sold) ----------
+    f = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     
-    st.subheader("Total Exposure by Symbol")
-    st.bar_chart(summary["Dollars"])
-    st.dataframe(summary)
+    # Ticker Filter
+    if ticker_filter:
+        f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
+    
+    # Notional Filter
+    f = f[f["Dollars"] >= min_notional]
+
+    def get_pivot(data, order_type, columns):
+        subset = data[data["Order Type"] == order_type].copy()
+        if subset.empty:
+            return pd.DataFrame(columns=columns)
+        # Grouping by Symbol, Strike (text), and Expiry (text)
+        piv = subset.groupby(["Symbol", "Strike", "Expiry"]).agg({
+            "Contracts": "sum",
+            "Dollars": "sum"
+        }).reset_index()
+        return piv[columns].sort_values(["Symbol", "Expiry"])
+
+    # Columns for standard tables
+    std_cols = ["Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
+
+    # 1. Calls Bought Table
+    st.subheader("Calls Bought")
+    calls_bought = get_pivot(f, "Calls Bought", std_cols)
+    if not calls_bought.empty:
+        st.dataframe(calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True)
+    else:
+        st.info("No Calls Bought found matching these filters.")
+
+    # 2. Puts Sold Table
+    st.subheader("Puts Sold")
+    puts_sold = get_pivot(f, "Puts Sold", std_cols)
+    if not puts_sold.empty:
+        st.dataframe(puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True)
+    else:
+        st.info("No Puts Sold found matching these filters.")
+
+    # 3. Risk Reversals Table (Special Exceptions)
+    # Ignores ticker and notional filters, only uses start/end dates
+    st.subheader("Risk Reversals")
+    rr_data = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
+    rr_data = rr_data[rr_data["Order Type"] == "Risk Reversals"]
+    
+    if not rr_data.empty:
+        # Grouping with Order Type included between Symbol and Strike
+        rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
+        rr_pivot = rr_data.groupby(["Symbol", "Order Type", "Strike", "Expiry"]).agg({
+            "Contracts": "sum",
+            "Dollars": "sum"
+        }).reset_index()
+        st.dataframe(rr_pivot[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True)
+    else:
+        st.info("No Risk Reversals found in this date range.")
 
 
 # --- 4. MAIN EXECUTION ---
@@ -276,23 +345,23 @@ if st.session_state["authentication_status"]:
     # 2. Sidebar Navigation
     with st.sidebar:
         st.header("Navigation")
-        app_choice = st.selectbox("Select Tool", ["Strike Zones", "Portfolio Overview"])
+        app_choice = st.selectbox("Select Tool", ["Strike Zones", "Pivot Tables"])
         st.markdown("---")
         authenticator.logout('Logout', 'sidebar')
 
     # 3. Load Global Data
     try:
         sheet_url = st.secrets["GSHEET_URL"]
-        df = load_and_clean_data(sheet_url)
+        df_global = load_and_clean_data(sheet_url)
     except Exception as e:
         st.error(f"Error initializing data: {e}")
         st.stop()
 
     # 4. Routing
     if app_choice == "Strike Zones":
-        run_strike_zones_app(df)
-    elif app_choice == "Portfolio Overview":
-        run_portfolio_app(df)
+        run_strike_zones_app(df_global)
+    elif app_choice == "Pivot Tables":
+        run_pivot_tables_app(df_global)
 
 # --- 5. LOGIN FEEDBACK ---
 elif st.session_state["authentication_status"] is False:
