@@ -70,11 +70,33 @@ def get_market_cap(symbol: str) -> float:
     """Fetch market cap for a ticker using yfinance."""
     try:
         t = yf.Ticker(symbol)
-        # Using info.get is the standard way to retrieve marketCap
         mc = t.info.get('marketCap', 0)
         return float(mc) if mc else 0.0
     except:
         return 0.0
+
+@st.cache_data(ttl=300)
+def is_above_ema21(symbol: str) -> bool:
+    """Check if the current price is above the 21-day EMA."""
+    try:
+        ticker = yf.Ticker(symbol)
+        h = ticker.history(period="60d")
+        if len(h) < 21:
+            return True # Not enough data, include it by default
+        ema21 = h["Close"].ewm(span=21, adjust=False).mean()
+        latest_price = h["Close"].iloc[-1]
+        latest_ema = ema21.iloc[-1]
+        return latest_price > latest_ema
+    except:
+        return True
+
+def get_table_height(df, max_rows=50):
+    """Calculate height to show all rows up to max_rows without scrolling."""
+    row_count = len(df)
+    if row_count == 0:
+        return 100
+    display_rows = min(row_count, max_rows)
+    return (display_rows + 1) * 35 + 5
 
 # --- 3. APP MODULES ---
 
@@ -243,11 +265,16 @@ def run_strike_zones_app(df):
             st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{r["Net_Dollars"]:,.0f} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
     if show_table:
-        st.markdown("### Data Table")
+        st.subheader("Data Table")
         display_used = used.copy()
         display_used["Trade Date"] = display_used["Trade Date"].dt.strftime("%d %b %y")
         display_used["Expiry"] = pd.to_datetime(display_used["Expiry"]).dt.strftime("%d %b %y")
-        st.dataframe(display_used, use_container_width=True)
+        st.dataframe(
+            display_used, 
+            use_container_width=True, 
+            hide_index=True, 
+            height=get_table_height(display_used)
+        )
 
 
 def run_pivot_tables_app(df):
@@ -258,7 +285,7 @@ def run_pivot_tables_app(df):
 
     # ---------- Inputs ----------
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
-    c1, c2, c3, c4, c5 = st.columns(5, gap="small")
+    c1, c2, c3, c4, c5, c6 = st.columns(6, gap="small")
     with c1:
         td_start = st.date_input("Trade Start Date", value=yesterday, key="pv_start")
     with c2:
@@ -267,13 +294,15 @@ def run_pivot_tables_app(df):
         ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
     with c4:
         notional_choices = {"0M": 0, "5M": 5_000_000, "10M": 10_000_000, "50M": 50_000_000, "100M": 100_000_000}
-        min_notional_label = st.selectbox("Min Notional", options=list(notional_choices.keys()), index=1, key="pv_notional")
+        min_notional_label = st.selectbox("Min Dollars", options=list(notional_choices.keys()), index=1, key="pv_notional")
         min_notional = notional_choices[min_notional_label]
     with c5:
-        # Market Cap Filter
         mkt_cap_choices = {"0B": 0, "100B": 100e9, "200B": 200e9, "500B": 500e9, "1T": 1e12}
         min_mkt_cap_label = st.selectbox("Mkt Cap Min", options=list(mkt_cap_choices.keys()), index=1, key="pv_mkt_cap")
         min_mkt_cap = mkt_cap_choices[min_mkt_cap_label]
+    with c6:
+        # Added Over 21 Day EMA filter
+        ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ---------- Global Filtering ----------
@@ -284,12 +313,18 @@ def run_pivot_tables_app(df):
     
     f = f[f["Dollars"] >= min_notional]
 
-    # Apply Market Cap Filter (Fetch caps for active symbols)
-    if not f.empty and min_mkt_cap > 0:
+    if not f.empty:
         unique_syms = f["Symbol"].unique()
-        # Filter symbols meeting mkt cap threshold
-        valid_syms = [s for s in unique_syms if get_market_cap(s) >= min_mkt_cap]
-        f = f[f["Symbol"].isin(valid_syms)]
+        # Market Cap Filter
+        if min_mkt_cap > 0:
+            valid_mc_syms = [s for s in unique_syms if get_market_cap(s) >= min_mkt_cap]
+            f = f[f["Symbol"].isin(valid_mc_syms)]
+            unique_syms = f["Symbol"].unique()
+            
+        # Over 21 Day EMA Filter
+        if ema_filter == "Yes":
+            valid_ema_syms = [s for s in unique_syms if is_above_ema21(s)]
+            f = f[f["Symbol"].isin(valid_ema_syms)]
 
     def get_ranked_pivot(data, order_type, columns):
         subset = data[data["Order Type"] == order_type].copy()
@@ -320,7 +355,12 @@ def run_pivot_tables_app(df):
     st.subheader("Calls Bought")
     calls_bought = get_ranked_pivot(f, "Calls Bought", std_cols)
     if not calls_bought.empty:
-        st.dataframe(calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True)
+        st.dataframe(
+            calls_bought.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+            use_container_width=True,
+            hide_index=True,
+            height=get_table_height(calls_bought)
+        )
     else:
         st.info("No Calls Bought found matching these filters.")
 
@@ -328,7 +368,12 @@ def run_pivot_tables_app(df):
     st.subheader("Puts Sold")
     puts_sold = get_ranked_pivot(f, "Puts Sold", std_cols)
     if not puts_sold.empty:
-        st.dataframe(puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True)
+        st.dataframe(
+            puts_sold.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+            use_container_width=True,
+            hide_index=True,
+            height=get_table_height(puts_sold)
+        )
     else:
         st.info("No Puts Sold found matching these filters.")
 
@@ -356,7 +401,12 @@ def run_pivot_tables_app(df):
         rr_pivot = rr_pivot.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol"})
         
         rr_cols = ["Symbol", "Order Type", "Strike", "Expiry", "Contracts", "Dollars"]
-        st.dataframe(rr_pivot[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True)
+        st.dataframe(
+            rr_pivot[rr_cols].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+            use_container_width=True,
+            hide_index=True,
+            height=get_table_height(rr_pivot)
+        )
     else:
         st.info("No Risk Reversals found in this date range.")
 
