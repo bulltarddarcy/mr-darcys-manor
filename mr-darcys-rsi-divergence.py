@@ -39,7 +39,7 @@ try:
     
     DATA_URL = get_gdrive_download_url(raw_url)
 except KeyError:
-    st.error("Secrets not found. Please ensure URL_DIVERGENCES and URL_SP500 are set.")
+    st.error("Secrets not found. Please ensure URL_DIVERGENCES and URL_SP500 are set in Streamlit Secrets.")
     st.stop()
 
 # --- Core Functions ---
@@ -54,7 +54,7 @@ def prepare_data(df):
     high_col = next((col for col in df.columns if 'HIGH' in col and 'W_' not in col), None)
     low_col = next((col for col in df.columns if 'LOW' in col and 'W_' not in col), None)
     
-    # Define Column Names
+    # Column Mappings
     d_rsi_col, d_ema8_col, d_ema21_col = 'RSI_14', 'EMA_8', 'EMA_21'
     w_close_col, w_vol_col, w_rsi_col = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
     w_ema8_col, w_ema21_col = 'W_EMA_8', 'W_EMA_21'
@@ -88,7 +88,7 @@ def prepare_data(df):
     return df_d, df_w
 
 def find_divergences(df_tf, ticker, timeframe):
-    """Detects RSI divergences using candle extremes."""
+    """Detects RSI divergences with formatted RSI and Prices ($0,000.00)."""
     divergences = []
     if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
 
@@ -109,8 +109,10 @@ def find_divergences(df_tf, ticker, timeframe):
                     divergences.append({
                         'Ticker': ticker, 'Type': 'Bullish', 'Timeframe': timeframe,
                         'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
-                        'P1 RSI': round(p1['RSI'], 1), 'P2 RSI': round(p2['RSI'], 1),
-                        'P1 Price': round(p1['Low'], 2), 'P2 Price': round(p2['Low'], 2)
+                        'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
+                        # Formatted Prices: $ and Comma separators
+                        'P1 Price': f"${p1['Low']:,.2f}",
+                        'P2 Price': f"${p2['Low']:,.2f}"
                     })
         # Bearish (High)
         if p2['High'] > lookback['High'].max():
@@ -120,8 +122,10 @@ def find_divergences(df_tf, ticker, timeframe):
                     divergences.append({
                         'Ticker': ticker, 'Type': 'Bearish', 'Timeframe': timeframe,
                         'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
-                        'P1 RSI': round(p1['RSI'], 1), 'P2 RSI': round(p2['RSI'], 1),
-                        'P1 Price': round(p1['High'], 2), 'P2 Price': round(p2['High'], 2)
+                        'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
+                        # Formatted Prices: $ and Comma separators
+                        'P1 Price': f"${p1['High']:,.2f}",
+                        'P2 Price': f"${p2['High']:,.2f}"
                     })
     return divergences
 
@@ -148,32 +152,23 @@ try:
         progress_bar.progress((i + 1) / len(all_tickers))
 
     if raw_results:
-        # CONSOLIDATION LOGIC: Keep only the latest signal per ticker/type/timeframe
+        # Consolidate signals (Keep latest per ticker/type/timeframe)
         res_df = pd.DataFrame(raw_results)
-        # Sort by Signal Date descending to ensure the latest is on top
         res_df = res_df.sort_values(by='Signal Date', ascending=False)
-        # Drop duplicates based on the unique combination of ticker, type, and timeframe
         consolidated_df = res_df.drop_duplicates(subset=['Ticker', 'Type', 'Timeframe'], keep='first')
         
-        # --- Stacked Layout (Full Width) ---
+        # --- Stacked Display ---
         for timeframe in ['Daily', 'Weekly']:
             st.markdown(f"## {timeframe} Analysis")
             
-            # Bullish Table
-            st.markdown(f"### 🟢 {timeframe} Bullish Signals")
-            bull_df = consolidated_df[(consolidated_df['Type'] == 'Bullish') & (consolidated_df['Timeframe'] == timeframe)]
-            if not bull_df.empty:
-                st.table(bull_df.drop(columns=['Type', 'Timeframe']))
-            else:
-                st.write(f"No {timeframe.lower()} bullish signals found.")
-            
-            # Bearish Table
-            st.markdown(f"### 🔴 {timeframe} Bearish Signals")
-            bear_df = consolidated_df[(consolidated_df['Type'] == 'Bearish') & (consolidated_df['Timeframe'] == timeframe)]
-            if not bear_df.empty:
-                st.table(bear_df.drop(columns=['Type', 'Timeframe']))
-            else:
-                st.write(f"No {timeframe.lower()} bearish signals found.")
+            for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
+                st.markdown(f"### {emoji} {timeframe} {s_type} Signals")
+                tbl_df = consolidated_df[(consolidated_df['Type'] == s_type) & (consolidated_df['Timeframe'] == timeframe)]
+                if not tbl_df.empty:
+                    # Remove redundant columns and display table
+                    st.table(tbl_df.drop(columns=['Type', 'Timeframe']))
+                else:
+                    st.write(f"No {timeframe.lower()} {s_type.lower()} signals found.")
             
             st.divider()
     else:
