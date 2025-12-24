@@ -86,10 +86,15 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
 def get_market_cap(symbol: str) -> float:
     try:
         t = yf.Ticker(symbol)
-        # Use fast_info as it is much more reliable and faster than info for basic stats
-        mc = t.fast_info.get('market_cap', 0)
-        if not mc:
+        mc = 0.0
+        try:
+            mc = t.fast_info.get('market_cap', 0)
+        except:
+            pass
+            
+        if not mc or mc == 0:
             mc = t.info.get('marketCap', 0)
+            
         return float(mc) if mc else 0.0
     except:
         return 0.0
@@ -135,27 +140,40 @@ def clean_strike_fmt(val):
         return str(int(f)) if f == int(f) else str(f)
     except: return str(val)
 
+def get_max_trade_date(df):
+    """Helper to get the most recent trade date from the dataset"""
+    if not df.empty and "Trade Date" in df.columns:
+        valid_dates = df["Trade Date"].dropna()
+        if not valid_dates.empty:
+            return valid_dates.max().date()
+    return date.today() - timedelta(days=1)
+
 # --- 3. APP MODULES ---
 
 def run_options_database_app(df):
     st.title("📂 Options Database")
+    
+    max_data_date = get_max_trade_date(df)
+    
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
         default_ticker = st.session_state.get("db_ticker", "")
         db_ticker = st.text_input("Ticker", value=default_ticker, key="db_ticker_input").strip().upper()
         st.session_state["db_ticker"] = db_ticker
-    with c2: start_date = st.date_input("Trade Start Date", value=None, key="db_start")
-    with c3: end_date = st.date_input("Trade End Date", value=None, key="db_end")
+    with c2: start_date = st.date_input("Trade Start Date", value=max_data_date, key="db_start")
+    with c3: end_date = st.date_input("Trade End Date", value=max_data_date, key="db_end")
     with c4:
         exp_range_default = (date.today() + timedelta(days=365))
         db_exp_end = st.date_input("Expiration Range (end)", value=exp_range_default, key="db_exp")
     st.markdown('</div>', unsafe_allow_html=True)
+    
     with st.sidebar:
         st.markdown("**Include Order Type**")
         inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
         inc_pb = st.checkbox("Puts Bought", value=True, key="db_inc_pb")
         inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
+        
     f = df.copy()
     if db_ticker: f = f[f["Symbol"].astype(str).str.upper().eq(db_ticker)]
     if start_date: f = f[f["Trade Date"].dt.date >= start_date]
@@ -167,57 +185,71 @@ def run_options_database_app(df):
     if inc_pb: allowed_types.append("Puts Bought")
     if inc_ps: allowed_types.append("Puts Sold")
     f = f[f[order_type_col].isin(allowed_types)]
+    
     if f.empty:
         st.warning("No data found matching these filters.")
         return
+        
     f = f.sort_values(by=["Trade Date", "Symbol"], ascending=[False, True])
     display_cols = ["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
     f_display = f[display_cols].copy()
     f_display["Trade Date"] = f_display["Trade Date"].dt.strftime("%d %b %y")
     f_display["Expiry"] = pd.to_datetime(f_display["Expiry"]).dt.strftime("%d %b %y")
+    
     def highlight_db_order_type(val):
         if val in ["Calls Bought", "Puts Sold"]: return 'background-color: rgba(113, 210, 138, 0.15); color: #71d28a; font-weight: 600;'
         elif val == "Puts Bought": return 'background-color: rgba(242, 156, 160, 0.15); color: #f29ca0; font-weight: 600;'
         return ''
+        
     st.subheader("Non-Expired Trades")
     st.caption("⚠️ User should check OI to confirm trades are still open")
     st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=True, hide_index=True, height=get_table_height(f_display, max_rows=30))
 
 def run_rankings_app(df):
     st.title("🏆 Rankings")
-    yesterday = date.today() - timedelta(days=1)
-    start_default = yesterday - timedelta(days=14)
+    
+    max_data_date = get_max_trade_date(df)
+    start_default = max_data_date - timedelta(days=14)
+    
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c_pad = st.columns([1.2, 1.2, 0.8, 3], gap="small")
     with c1: rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
-    with c2: rank_end = st.date_input("Trade End Date", value=yesterday, key="rank_end")
+    with c2: rank_end = st.date_input("Trade End Date", value=max_data_date, key="rank_end")
     with c3: limit = st.number_input("Limit", value=20, min_value=1, max_value=200, key="rank_limit")
     st.markdown('</div>', unsafe_allow_html=True)
+    
     f = df.copy()
     if rank_start: f = f[f["Trade Date"].dt.date >= rank_start]
     if rank_end: f = f[f["Trade Date"].dt.date <= rank_end]
     if f.empty:
         st.warning("No data found matching these dates.")
         return
+        
     order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
     target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
     f_filtered = f[f[order_type_col].isin(target_types)].copy()
+    
     if f_filtered.empty:
         st.warning("No trades of the specified sentiment types found in this range.")
         return
+        
     counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
     dollars = f_filtered.groupby(["Symbol", order_type_col])["Dollars"].sum().unstack(fill_value=0)
     last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
+    
     for col in target_types:
         if col not in counts.columns: counts[col] = 0
         if col not in dollars.columns: dollars[col] = 0
+        
     scores_df = pd.DataFrame(index=counts.index)
     scores_df["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
     scores_df["Trade Count"] = counts["Calls Bought"] + counts["Puts Sold"] + counts["Puts Bought"]
     scores_df["Dollars"] = dollars["Calls Bought"] + dollars["Puts Sold"] - dollars["Puts Bought"]
+    
     res = scores_df.reset_index().merge(last_trades, on="Symbol")
     res = res.rename(columns={"Trade Date": "Last Trade"})
     display_cols = ["Symbol", "Trade Count", "Last Trade", "Dollars", "Score"]
+    
     rank_col_config = {
         "Symbol": st.column_config.TextColumn("Sym", width=40),
         "Trade Count": st.column_config.NumberColumn("Qty", width=40),
@@ -227,9 +259,12 @@ def run_rankings_app(df):
     }
     fmt_currency = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
     fmt_score = lambda x: f"({abs(int(x))})" if x < 0 else f"{int(x)}"
+    
     bull_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
     bear_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[True, True]).head(limit)
+    
     st.caption("Ranking tables vary from Bulltard's as he includes expired trades and these do not. Tickers with the same score are sorted in descending order based on Dollars.")
+    
     col_left, col_right = st.columns(2, gap="large")
     with col_left:
         st.markdown("<h3 style='color: #71d28a; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
@@ -240,14 +275,18 @@ def run_rankings_app(df):
 
 def run_strike_zones_app(df):
     st.title("📊 Options Strike Zones")
+    
+    max_data_date = get_max_trade_date(df)
     exp_range_default = (date.today() + timedelta(days=365))
+    
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1: ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
-    with c2: td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
-    with c3: td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
+    with c2: td_start = st.date_input("Trade Date (start)", value=max_data_date, key="sz_start")
+    with c3: td_end = st.date_input("Trade Date (end)", value=max_data_date, key="sz_end")
     with c4: exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
     st.markdown('</div>', unsafe_allow_html=True)
+    
     with st.sidebar:
         st.markdown("**View Mode**")
         view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], label_visibility="collapsed")
@@ -273,16 +312,20 @@ def run_strike_zones_app(df):
     f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
     order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
     edit_pool_raw = f[f[order_type_col].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
+    
     if edit_pool_raw.empty:
         st.warning("No trades match current filters.")
         return
+        
     edit_pool = edit_pool_raw.sort_values(by="Trade Date", ascending=False).copy()
     edit_pool["Trade Date Display"] = edit_pool["Trade Date"].dt.strftime("%d %b %y")
     edit_pool["Expiry Display"] = edit_pool["Expiry_DT"].dt.strftime("%d %b %y")
     state_key = f"sz_include_{ticker}"
+    
     if state_key not in st.session_state: st.session_state[state_key] = [True] * len(edit_pool)
     if len(st.session_state[state_key]) != len(edit_pool): st.session_state[state_key] = [True] * len(edit_pool)
     edit_pool["Included"] = st.session_state[state_key]
+    
     cols_to_show = ["Trade Date Display", order_type_col, "Symbol", "Strike", "Expiry Display", "Contracts", "Dollars", "Included"]
     used = edit_pool[edit_pool["Included"] == True].copy()
     
@@ -307,6 +350,7 @@ def run_strike_zones_app(df):
     def pct_from_spot(x):
         if x is None or np.isnan(x): return "—"
         return f"{(x/spot-1)*100:+.1f}%"
+        
     badges = [f'<span class="price-badge-header">Price: ${spot:,.2f}</span>']
     if ema8: badges.append(f'<span class="badge">EMA(8): ${ema8:,.2f} ({pct_from_spot(ema8)})</span>')
     if ema21: badges.append(f'<span class="badge">EMA(21): ${ema21:,.2f} ({pct_from_spot(ema21)})</span>')
@@ -368,15 +412,19 @@ def run_strike_zones_app(df):
 def run_pivot_tables_app(df):
     """Exposure analysis with split rows and robust RR pairing (Strict 1:1 ratio)"""
     st.title("🎯 Pivot Tables")
-    yesterday = date.today() - timedelta(days=1)
+    
+    max_data_date = get_max_trade_date(df)
+            
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5, c6 = st.columns(6, gap="small")
-    with c1: td_start = st.date_input("Trade Start Date", value=yesterday, key="pv_start")
-    with c2: td_end = st.date_input("Trade End Date", value=yesterday, key="pv_end")
+    with c1: td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
+    with c2: td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
     with c3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
     with c4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=1, key="pv_notional")]
     with c5: min_mkt_cap = {"0B": 0, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "100B", "200B", "500B", "1T"], index=1, key="pv_mkt_cap")]
     with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=1, key="pv_ema_filter")
+    
+    st.caption("ℹ️ Market Cap filtering relies on external data and can occasionally be buggy. If the tables are not populating as expected, try setting 'Mkt Cap Min' to **0B**.")
     st.markdown('</div>', unsafe_allow_html=True)
     
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
@@ -413,14 +461,23 @@ def run_pivot_tables_app(df):
     def apply_f(data, bypass_quant=False):
         if data.empty: return data
         f = data.copy()
-        if bypass_quant: return f
         if ticker_filter: f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
-        f = f[f["Dollars"] >= min_notional]
+        
+        if not bypass_quant:
+            f = f[f["Dollars"] >= min_notional]
+            
         if not f.empty and min_mkt_cap > 0:
-            valid_symbols = [s for s in f["Symbol"].unique() if get_market_cap(s) >= float(min_mkt_cap)]
+            unique_symbols = f["Symbol"].unique()
+            valid_symbols = []
+            for s in unique_symbols:
+                mc = get_market_cap(s)
+                if mc >= float(min_mkt_cap):
+                    valid_symbols.append(s)
             f = f[f["Symbol"].isin(valid_symbols)]
+            
         if not f.empty and ema_filter == "Yes":
-            valid_ema_symbols = [s for s in f["Symbol"].unique() if is_above_ema21(s)]
+            unique_symbols = f["Symbol"].unique()
+            valid_ema_symbols = [s for s in unique_symbols if is_above_ema21(s)]
             f = f[f["Symbol"].isin(valid_ema_symbols)]
         return f
 
