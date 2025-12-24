@@ -151,7 +151,6 @@ def find_divergences(df_tf, ticker, timeframe):
     divergences = []
     if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
 
-    # Get the latest row available in the dataset for dynamic status checks
     latest_p = df_tf.iloc[-1]
 
     def get_date_str(p):
@@ -172,14 +171,10 @@ def find_divergences(df_tf, ticker, timeframe):
                     post_df = df_tf.iloc[i + 1 :]
                     if not (not post_df.empty and (post_df['RSI'] <= p1['RSI']).any()):
                         tags = []
-                        
-                        # DYNAMIC TAG: Check if current (latest) price is above EMA8
                         if 'EMA8' in latest_p and latest_p['Price'] >= latest_p['EMA8']: 
                             tags.append(f"EMA{EMA_PERIOD}")
-                        
                         if is_vol_high: tags.append("VOL_HIGH")
                         if p2['Volume'] > p1['Volume']: tags.append("V_GROWTH")
-                        
                         divergences.append({
                             'Ticker': ticker, 'Type': 'Bullish', 'Timeframe': timeframe, 'Tags': ", ".join(tags),
                             'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
@@ -195,14 +190,10 @@ def find_divergences(df_tf, ticker, timeframe):
                     post_df = df_tf.iloc[i + 1 :]
                     if not (not post_df.empty and (post_df['RSI'] >= p1['RSI']).any()):
                         tags = []
-                        
-                        # DYNAMIC TAG: Check if current (latest) price is below EMA21
                         if 'EMA21' in latest_p and latest_p['Price'] <= latest_p['EMA21']: 
                             tags.append(f"EMA{EMA21_PERIOD}")
-                            
                         if is_vol_high: tags.append("VOL_HIGH")
                         if p2['Volume'] > p1['Volume']: tags.append("V_GROWTH")
-                        
                         divergences.append({
                             'Ticker': ticker, 'Type': 'Bearish', 'Timeframe': timeframe, 'Tags': ", ".join(tags),
                             'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
@@ -246,6 +237,10 @@ elif csv_buffer:
             for tf in ['Daily', 'Weekly']:
                 st.markdown(f"---")
                 st.header(f"📅 {tf} Divergence Analysis")
+                
+                # New Note Added specifically for Weekly section
+                if tf == 'Weekly':
+                    st.caption("Note: The 2nd signal is based off the week's close, but the 2nd signal date is the first trading day of the week to align with how chart candles are labeled.")
                 
                 for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
                     st.subheader(f"{emoji} {s_type} Signals")
