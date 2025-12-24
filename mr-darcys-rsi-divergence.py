@@ -78,7 +78,6 @@ def prepare_data(df):
     df_d = df_d.dropna(subset=['Price', 'RSI', 'High', 'Low'])
 
     # --- Weekly Subset ---
-    # Fixed: All variables used here are now defined above
     df_w = df[[w_close_col, w_vol_col, w_high_col, w_low_col, w_rsi_col, w_ema8_col, w_ema21_col]].copy()
     df_w.rename(columns={
         w_close_col: 'Price', w_vol_col: 'Volume', w_high_col: 'High', w_low_col: 'Low',
@@ -153,15 +152,28 @@ try:
     if all_results:
         res_df = pd.DataFrame(all_results)
         
-        for tf in ['Daily', 'Weekly']:
-            st.header(f"{tf} Signals")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.subheader(f"{tf} Bullish")
-                st.table(res_df[(res_df['Type'] == 'Bullish') & (res_df['Timeframe'] == tf)])
-            with c2:
-                st.subheader(f"{tf} Bearish")
-                st.table(res_df[(res_df['Type'] == 'Bearish') & (res_df['Timeframe'] == tf)])
+        # --- Stacked Layout (Full Width) ---
+        # Stacks tables on top of each other for better readability on mobile/web
+        for timeframe in ['Daily', 'Weekly']:
+            st.markdown(f"## {timeframe} Analysis")
+            
+            # Bullish Table
+            st.markdown(f"### 🟢 {timeframe} Bullish Signals")
+            bull_df = res_df[(res_df['Type'] == 'Bullish') & (res_df['Timeframe'] == timeframe)]
+            if not bull_df.empty:
+                st.table(bull_df.drop(columns=['Type', 'Timeframe'])) # Drop redundant columns for display
+            else:
+                st.write(f"No {timeframe.lower()} bullish signals found.")
+            
+            # Bearish Table
+            st.markdown(f"### 🔴 {timeframe} Bearish Signals")
+            bear_df = res_df[(res_df['Type'] == 'Bearish') & (res_df['Timeframe'] == timeframe)]
+            if not bear_df.empty:
+                st.table(bear_df.drop(columns=['Type', 'Timeframe']))
+            else:
+                st.write(f"No {timeframe.lower()} bearish signals found.")
+            
+            st.divider() # Visual separator between Daily and Weekly
     else:
         st.write("No divergences found.")
 except Exception as e:
