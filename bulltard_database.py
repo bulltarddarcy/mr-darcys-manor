@@ -86,13 +86,10 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
 def get_market_cap(symbol: str) -> float:
     try:
         t = yf.Ticker(symbol)
-        # Try fast_info first (more reliable in hosted environments)
         try:
             return float(t.fast_info['marketCap'])
         except:
             pass
-            
-        # Fallback to basic info fetch
         return float(t.info.get('marketCap', 0))
     except:
         return 0.0
@@ -139,7 +136,6 @@ def clean_strike_fmt(val):
     except: return str(val)
 
 def get_max_trade_date(df):
-    """Helper to get the most recent trade date from the dataset"""
     if not df.empty and "Trade Date" in df.columns:
         valid_dates = df["Trade Date"].dropna()
         if not valid_dates.empty:
@@ -150,7 +146,6 @@ def get_max_trade_date(df):
 
 def run_options_database_app(df):
     st.title("📂 Options Database")
-    
     max_data_date = get_max_trade_date(df)
     
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
@@ -205,7 +200,6 @@ def run_options_database_app(df):
 
 def run_rankings_app(df):
     st.title("🏆 Rankings")
-    
     max_data_date = get_max_trade_date(df)
     start_default = max_data_date - timedelta(days=14)
     
@@ -273,7 +267,6 @@ def run_rankings_app(df):
 
 def run_strike_zones_app(df):
     st.title("📊 Options Strike Zones")
-    
     exp_range_default = (date.today() + timedelta(days=365))
     
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
@@ -287,17 +280,14 @@ def run_strike_zones_app(df):
     with st.sidebar:
         st.markdown("**View Mode**")
         view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], label_visibility="collapsed")
-        
         st.markdown("**Zone Width**")
         width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], label_visibility="collapsed")
         fixed_size_choice = 10
         if width_mode == "Fixed": fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
-        
         st.markdown("**Include Order Type**")
         inc_calls_bought = st.checkbox("Calls Bought", value=True)
         inc_puts_sold    = st.checkbox("Puts Sold", value=True)
         inc_puts_bought  = st.checkbox("Puts Bought", value=True)
-        
         st.markdown("**Other Options**")
         hide_empty      = st.checkbox("Hide Empty Zones", value=True)
         show_table       = st.checkbox("Show Strike Zone Table", value=True)
@@ -407,9 +397,7 @@ def run_strike_zones_app(df):
             st.rerun()
 
 def run_pivot_tables_app(df):
-    """Exposure analysis with split rows and robust RR pairing (Strict 1:1 ratio)"""
     st.title("🎯 Pivot Tables")
-    
     max_data_date = get_max_trade_date(df)
             
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
@@ -418,7 +406,6 @@ def run_pivot_tables_app(df):
     with c2: td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
     with c3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
     with c4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=1, key="pv_notional")]
-    # Added 10B, 50B and set default index to 0 (0B) to ensure table populates initially
     with c5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
     with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=1, key="pv_ema_filter")
     
@@ -434,10 +421,8 @@ def run_pivot_tables_app(df):
     cb_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy()
     ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
     
-    # 1:1 Matching keys
     keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
     cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
-    
     rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
     
     rr_rows = []
@@ -460,10 +445,8 @@ def run_pivot_tables_app(df):
         if data.empty: return data
         f = data.copy()
         if ticker_filter: f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
-        
         if not bypass_quant:
             f = f[f["Dollars"] >= min_notional]
-            
         if not f.empty and min_mkt_cap > 0:
             unique_symbols = f["Symbol"].unique()
             valid_symbols = []
@@ -472,7 +455,6 @@ def run_pivot_tables_app(df):
                 if mc >= float(min_mkt_cap):
                     valid_symbols.append(s)
             f = f[f["Symbol"].isin(valid_symbols)]
-            
         if not f.empty and ema_filter == "Yes":
             unique_symbols = f["Symbol"].unique()
             valid_ema_symbols = [s for s in unique_symbols if is_above_ema21(s)]
@@ -480,7 +462,6 @@ def run_pivot_tables_app(df):
         return f
 
     df_cb_f, df_ps_f = apply_f(cb_pool, bypass_quant=False), apply_f(ps_pool, bypass_quant=False)
-    # Risk Reversal table strictly ignores ticker and quant/mktcap/ema filters per request
     df_rr_f = df_rr
 
     def get_p(data, is_rr=False):
@@ -513,6 +494,14 @@ def run_pivot_tables_app(df):
 
 def run_rsi_divergences_app():
     st.title("📈 RSI Divergences")
+
+    # Modified section with link and description 
+    st.markdown("""
+        **Note:** You can view divergences of the S&P 100, NQ 100 and Mr Darcy's shitco list here: 
+        https://mr-darcys-rsi-divergence.streamlit.app/
+    """)
+    st.markdown("---")
+
     folder_id = st.secrets.get("GDRIVE_FOLDER_ID")
     api_key = st.secrets.get("GDRIVE_API_KEY")
     if folder_id and api_key:
@@ -563,37 +552,9 @@ if st.session_state["authentication_status"]:
     .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
     .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
     .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
-    
-    .price-divider {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        position: relative;
-        margin: 24px 0;
-        width: 100%;
-    }
-    .price-divider::before, .price-divider::after {
-        content: "";
-        flex-grow: 1;
-        height: 2px;
-        background: var(--line);
-        opacity: 0.6;
-    }
-    .price-badge {
-        background: #2b3a45;
-        color: #bfe7ff;
-        border: 1px solid #56b6ff;
-        border-radius: 16px;
-        padding: 6px 14px;
-        font-weight: 800;
-        font-size: 12px;
-        letter-spacing: 0.5px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.35);
-        white-space: nowrap;
-        margin: 0 12px;
-        z-index: 1;
-    }
-
+    .price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
+    .price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: var(--line); opacity: 0.6; }
+    .price-badge { background: #2b3a45; color: #bfe7ff; border: 1px solid #56b6ff; border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; box-shadow: 0 2px 8px rgba(0,0,0,0.35); white-space: nowrap; margin: 0 12px; z-index: 1; }
     .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
     .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
     .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
