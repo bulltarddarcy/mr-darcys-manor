@@ -7,37 +7,13 @@ import numpy as np
 from datetime import date, timedelta, datetime
 import yfinance as yf
 import math
-import streamlit_authenticator as stauth
 import os
 import glob
 import streamlit.components.v1 as components
 import requests
 import time
 
-# --- 1. AUTHENTICATION SETUP ---
-credentials = {
-    "usernames": {
-        "admin": {
-            "name": "Admin",
-            "password": "tape-curtain-phone" 
-        },
-        "mister": {
-            "name": "Mister", 
-            "password": "darcy"
-        }
-    }
-}
-
-authenticator = stauth.Authenticate(
-    credentials, 
-    "options_dashboard_cookie", 
-    "abcdef", 
-    cookie_expiry_days=30
-)
-
-authenticator.login(location='main')
-
-# --- 2. GLOBAL DATA LOADING & UTILITIES ---
+# --- 1. GLOBAL DATA LOADING & UTILITIES ---
 COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
@@ -46,7 +22,7 @@ COLUMN_CONFIG_PIVOT = {
     "Dollars": st.column_config.NumberColumn("Dollars", width=110),
 }
 
-# UPDATED: Added ttl=600 so the app fetches new data from Google Sheets every 10 minutes
+# The ttl=600 ensures the app re-checks your Google Sheet every 10 minutes.
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
     df = pd.read_csv(url)
@@ -143,7 +119,7 @@ def get_max_trade_date(df):
             return valid_dates.max().date()
     return date.today() - timedelta(days=1)
 
-# --- 3. APP MODULES ---
+# --- 2. APP MODULES ---
 
 def run_options_database_app(df):
     st.title("📂 Options Database")
@@ -496,7 +472,6 @@ def run_pivot_tables_app(df):
 def run_rsi_divergences_app():
     st.title("📈 RSI Divergences")
 
-    # Modified section with link and description 
     st.markdown("""
         **Note:** You can view divergences of the S&P 100, NQ 100 and Mr Darcy's shitco list here: 
         https://mr-darcys-rsi-divergence.streamlit.app/
@@ -535,62 +510,59 @@ def run_rsi_divergences_app():
     else:
         st.error("Google Drive Secrets (GDRIVE_FOLDER_ID / GDRIVE_API_KEY) are missing.")
 
-# --- 4. MAIN EXECUTION ---
-if st.session_state["authentication_status"]:
-    if "tool" in st.query_params or "ticker" in st.query_params:
-        st.session_state["app_choice_internal"] = st.query_params.get("tool")
-        st.session_state["db_ticker"] = st.query_params.get("ticker")
-        st.query_params.clear()
-    st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
-    st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
-    html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg)!important;}
-    .block-container{padding-top:1.2rem;padding-bottom:1rem;}
-    .control-box{padding:14px 0; border-radius:10px;}
-    .zones-panel{padding:14px 0; border-radius:10px;}
-    .zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
-    .zone-label{width:100px;font-weight:700; text-align: right;}
-    .zone-bar{height:22px;border-radius:6px;min-width:6px}
-    .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
-    .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
-    .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
-    .price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
-    .price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: var(--line); opacity: 0.6; }
-    .price-badge { background: #2b3a45; color: #bfe7ff; border: 1px solid #56b6ff; border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; box-shadow: 0 2px 8px rgba(0,0,0,0.35); white-space: nowrap; margin: 0 12px; z-index: 1; }
-    .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
-    .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
-    .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
-    th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-    .legend-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; margin-top: 25px; text-transform: uppercase; letter-spacing: 0.8px; }
-    .legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 14px; }
-    .color-dot { width: 14px; height: 14px; border-radius: 3px; }
-    </style>""", unsafe_allow_html=True)
-    try:
-        sheet_url = st.secrets["GSHEET_URL"]
-        df_global = load_and_clean_data(sheet_url)
-        last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
-        with st.sidebar:
-            st.markdown(f"**Last Updated:** {last_updated_date}")
-            st.header("Select Tool")
-            tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
-            default_tool_idx = 0
-            if "app_choice_internal" in st.session_state:
-                try: default_tool_idx = tools.index(st.session_state["app_choice_internal"])
-                except: pass
-                del st.session_state["app_choice_internal"]
-            app_choice = st.selectbox("Select Tool", tools, index=default_tool_idx, label_visibility="collapsed")
-        if app_choice == "Options Database": run_options_database_app(df_global)
-        elif app_choice == "Rankings": run_rankings_app(df_global)
-        elif app_choice == "Pivot Tables": run_pivot_tables_app(df_global)
-        elif app_choice == "RSI Divergences": run_rsi_divergences_app()
-        else: run_strike_zones_app(df_global)
-        with st.sidebar:
-            if app_choice == "Pivot Tables":
-                st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
-                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
-                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
-                st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
-            st.markdown('<div style="margin-top: 6rem;"></div>', unsafe_allow_html=True)
-            authenticator.logout('Logout', 'sidebar')
-    except Exception as e: st.error(f"Error: {e}")
-elif st.session_state["authentication_status"] is False: st.error('Incorrect password')
-elif st.session_state["authentication_status"] is None: st.warning('Please login')
+# --- 3. MAIN EXECUTION ---
+if "tool" in st.query_params or "ticker" in st.query_params:
+    st.session_state["app_choice_internal"] = st.query_params.get("tool")
+    st.session_state["db_ticker"] = st.query_params.get("ticker")
+    st.query_params.clear()
+
+st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
+st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
+html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg)!important;}
+.block-container{padding-top:1.2rem;padding-bottom:1rem;}
+.control-box{padding:14px 0; border-radius:10px;}
+.zones-panel{padding:14px 0; border-radius:10px;}
+.zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
+.zone-label{width:100px;font-weight:700; text-align: right;}
+.zone-bar{height:22px;border-radius:6px;min-width:6px}
+.zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
+.zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
+.zone-value{min-width:220px;font-variant-numeric:tabular-nums}
+.price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
+.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: var(--line); opacity: 0.6; }
+.price-badge { background: #2b3a45; color: #bfe7ff; border: 1px solid #56b6ff; border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; box-shadow: 0 2px 8px rgba(0,0,0,0.35); white-space: nowrap; margin: 0 12px; z-index: 1; }
+.metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
+.badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
+.price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
+th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
+.legend-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; margin-top: 25px; text-transform: uppercase; letter-spacing: 0.8px; }
+.legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 14px; }
+.color-dot { width: 14px; height: 14px; border-radius: 3px; }
+</style>""", unsafe_allow_html=True)
+
+try:
+    sheet_url = st.secrets["GSHEET_URL"]
+    df_global = load_and_clean_data(sheet_url)
+    last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
+    with st.sidebar:
+        st.markdown(f"**Last Updated:** {last_updated_date}")
+        st.header("Select Tool")
+        tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
+        default_tool_idx = 0
+        if "app_choice_internal" in st.session_state:
+            try: default_tool_idx = tools.index(st.session_state["app_choice_internal"])
+            except: pass
+            del st.session_state["app_choice_internal"]
+        app_choice = st.selectbox("Select Tool", tools, index=default_tool_idx, label_visibility="collapsed")
+    if app_choice == "Options Database": run_options_database_app(df_global)
+    elif app_choice == "Rankings": run_rankings_app(df_global)
+    elif app_choice == "Pivot Tables": run_pivot_tables_app(df_global)
+    elif app_choice == "RSI Divergences": run_rsi_divergences_app()
+    else: run_strike_zones_app(df_global)
+    with st.sidebar:
+        if app_choice == "Pivot Tables":
+            st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
+except Exception as e: st.error(f"Error: {e}")
