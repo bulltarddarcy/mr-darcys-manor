@@ -86,16 +86,14 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
 def get_market_cap(symbol: str) -> float:
     try:
         t = yf.Ticker(symbol)
-        mc = 0.0
+        # Try fast_info first (more reliable in hosted environments)
         try:
-            mc = t.fast_info.get('market_cap', 0)
+            return float(t.fast_info['marketCap'])
         except:
             pass
             
-        if not mc or mc == 0:
-            mc = t.info.get('marketCap', 0)
-            
-        return float(mc) if mc else 0.0
+        # Fallback to basic info fetch
+        return float(t.info.get('marketCap', 0))
     except:
         return 0.0
 
@@ -420,7 +418,8 @@ def run_pivot_tables_app(df):
     with c2: td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
     with c3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
     with c4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=1, key="pv_notional")]
-    with c5: min_mkt_cap = {"0B": 0, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "100B", "200B", "500B", "1T"], index=1, key="pv_mkt_cap")]
+    # Added 10B, 50B and set default index to 0 (0B) to ensure table populates initially
+    with c5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
     with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=1, key="pv_ema_filter")
     
     st.caption("ℹ️ Market Cap filtering relies on external data and can occasionally be buggy. If the tables are not populating as expected, try setting 'Mkt Cap Min' to **0B**.")
