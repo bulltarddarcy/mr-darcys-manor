@@ -5,12 +5,14 @@ import os
 from datetime import datetime
 
 # --- Secrets & Path Configuration ---
-# Streamlit uses st.secrets to securely access your hidden URLs
 def get_gdrive_download_url(url):
     """Converts a standard Google Drive view URL into a direct download URL."""
-    # Logic to convert /file/d/ID/view into /uc?export=download&id=ID
-    file_id = url.split('/')[-2]
-    return f'https://drive.google.com/uc?export=download&id={file_id}'
+    try:
+        # Extracts file ID from URL: .../file/d/[ID]/view
+        file_id = url.split('/')[-2]
+        return f'https://drive.google.com/uc?export=download&id={file_id}'
+    except Exception:
+        return url
 
 # --- Logic Constants ---
 VOL_SMA_PERIOD = 30
@@ -28,7 +30,7 @@ data_option = st.sidebar.selectbox(
     ("Divergences Data", "S&P 500 Data")
 )
 
-# Accessing secrets set up in Streamlit Cloud or local .streamlit/secrets.toml
+# Accessing secrets
 try:
     if data_option == "Divergences Data":
         raw_url = st.secrets["URL_DIVERGENCES"]
@@ -37,7 +39,7 @@ try:
     
     DATA_URL = get_gdrive_download_url(raw_url)
 except KeyError:
-    st.error("Secrets not found. Please ensure URL_DIVERGENCES and URL_SP500 are set in Streamlit Secrets.")
+    st.error("Secrets not found. Please ensure URL_DIVERGENCES and URL_SP500 are set.")
     st.stop()
 
 # --- Core Functions ---
@@ -52,9 +54,12 @@ def prepare_data(df):
     high_col = next((col for col in df.columns if 'HIGH' in col and 'W_' not in col), None)
     low_col = next((col for col in df.columns if 'LOW' in col and 'W_' not in col), None)
     
-    # Required Indicators mapped from source file
+    # Define Daily Column Names
     d_rsi_col, d_ema8_col, d_ema21_col = 'RSI_14', 'EMA_8', 'EMA_21'
+    
+    # Define Weekly Column Names
     w_close_col, w_vol_col, w_rsi_col = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
+    w_ema8_col, w_ema21_col = 'W_EMA_8', 'W_EMA_21'
     w_high_col, w_low_col = 'W_HIGH', 'W_LOW'
 
     if not date_col or not close_col:
@@ -73,6 +78,7 @@ def prepare_data(df):
     df_d = df_d.dropna(subset=['Price', 'RSI', 'High', 'Low'])
 
     # --- Weekly Subset ---
+    # Fixed: All variables used here are now defined above
     df_w = df[[w_close_col, w_vol_col, w_high_col, w_low_col, w_rsi_col, w_ema8_col, w_ema21_col]].copy()
     df_w.rename(columns={
         w_close_col: 'Price', w_vol_col: 'Volume', w_high_col: 'High', w_low_col: 'Low',
@@ -102,7 +108,6 @@ def find_divergences(df_tf, ticker, timeframe):
         if p2['Low'] < lookback['Low'].min():
             p1 = lookback.loc[lookback['RSI'].idxmin()]
             if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
-                # RSI > 50 Reset Logic
                 if not (df_tf.loc[p1.name : p2.name, 'RSI'] > 50).any():
                     divergences.append({
                         'Ticker': ticker, 'Type': 'Bullish', 'Timeframe': timeframe,
@@ -114,7 +119,6 @@ def find_divergences(df_tf, ticker, timeframe):
         if p2['High'] > lookback['High'].max():
             p1 = lookback.loc[lookback['RSI'].idxmax()]
             if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD):
-                # RSI < 50 Reset Logic
                 if not (df_tf.loc[p1.name : p2.name, 'RSI'] < 50).any():
                     divergences.append({
                         'Ticker': ticker, 'Type': 'Bearish', 'Timeframe': timeframe,
@@ -128,7 +132,6 @@ def find_divergences(df_tf, ticker, timeframe):
 
 st.info(f"Connecting to data source...")
 try:
-    # Use pandas to read directly from the Google Drive download URL
     master = pd.read_csv(DATA_URL)
     t_col = next((c for c in master.columns if 'TICKER' in c.upper()), 'TICKER')
     all_tickers = master[t_col].unique()
