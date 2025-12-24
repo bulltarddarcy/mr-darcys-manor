@@ -1,291 +1,165 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import requests
-import io
+import os
+from datetime import datetime
 
-# --- Page Config ---
-st.set_page_config(
-    page_title="RSI Divergences Live",
-    page_icon="📊",
-    layout="wide"
+# --- Secrets & Path Configuration ---
+# Streamlit uses st.secrets to securely access your hidden URLs
+def get_gdrive_download_url(url):
+    """Converts a standard Google Drive view URL into a direct download URL."""
+    # Logic to convert /file/d/ID/view into /uc?export=download&id=ID
+    file_id = url.split('/')[-2]
+    return f'https://drive.google.com/uc?export=download&id={file_id}'
+
+# --- Logic Constants ---
+VOL_SMA_PERIOD = 30
+DIVERGENCE_LOOKBACK = 90
+SIGNAL_LOOKBACK_PERIOD = 25
+RSI_DIFF_THRESHOLD = 2
+
+# --- Streamlit UI Setup ---
+st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
+st.title("📈 RSI Price Divergence Scanner")
+
+# Dataset Selection Sidebar
+data_option = st.sidebar.selectbox(
+    "Select Dataset to Analyze",
+    ("Divergences Data", "S&P 500 Data")
 )
 
-# --- Constants from local script (Divergence_make_dashboard.py) ---
-RSI_PERIOD = 14
-EMA_PERIOD = 8 
-EMA21_PERIOD = 21 
-VOL_SMA_PERIOD = 30 
-DIVERGENCE_LOOKBACK = 180  
-SIGNAL_LOOKBACK_PERIOD = 15 
-
-# --- Improved Google Drive Loading Utility ---
-
-def get_drive_file_id(url):
-    """Extracts file ID from various Google Drive link formats."""
-    if not url: return None
-    if "/file/d/" in url:
-        return url.split('/d/')[-1].split('/')[0].split('?')[0]
-    elif "id=" in url:
-        return url.split('id=')[-1].split('&')[0]
-    return None
-
-def download_large_drive_file(file_id):
-    """
-    Downloads files from Drive, handling the virus scan warning for large files.
-    """
-    base_url = "https://docs.google.com/uc?export=download"
-    session = requests.Session()
-    
-    response = session.get(base_url, params={'id': file_id}, stream=True)
-    
-    confirm_token = None
-    for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
-            confirm_token = value
-            break
-            
-    if confirm_token:
-        params = {'id': file_id, 'confirm': confirm_token}
-        response = session.get(base_url, params=params, stream=True)
-        
-    return response
-
-# --- Technical Indicator Logic (Calculated BEFORE slicing) ---
-
-def calculate_rsi(series, period):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0).fillna(0)
-    loss = -delta.where(delta < 0, 0).fillna(0)
-    # Wilder's Smoothing via ewm (com=period-1)
-    avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-    rs = np.where(avg_loss != 0, avg_gain / avg_loss, np.inf) 
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.round(2)
-
-def calculate_ema(series, period):
-    return series.ewm(span=period, adjust=False).mean().round(2)
-
-@st.cache_data
-def process_ticker_indicators(df, timeframe='Daily'):
-    """
-    FIX: Indicators are calculated on the RAW dataframe first.
-    Slicing/Resampling happens AFTER to ensure indicator warm-up parity.
-    Explicit separation of Daily/Weekly paths with the -4 day weekly offset.
-    """
-    df = df.copy().sort_values('Date')
-    
-    # --- STEP 1: Calculate on full raw data ---
-    # This ensures RSI and EMA have the same 'history' as your local computer
-    df['RSI'] = calculate_rsi(df['Price'], RSI_PERIOD)
-    df['EMA8'] = calculate_ema(df['Price'], EMA_PERIOD) 
-    df['EMA21'] = calculate_ema(df['Price'], EMA21_PERIOD)
-    df['VolSMA'] = df['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
-    
-    # --- STEP 2: Explicitly handle Timeframe Logic ---
-    if timeframe == 'Weekly':
-        # Resample block: aggregate OHLCV and take the last calculated indicator values
-        df = df.resample('W-FRI', on='Date').agg({
-            'Open': 'first',
-            'High': 'max',
-            'Low': 'min',
-            'Price': 'last',
-            'Volume': 'sum',
-            'Ticker': 'first',
-            'RSI': 'last',
-            'EMA8': 'last',
-            'EMA21': 'last',
-            'VolSMA': 'last'
-        }).reset_index().dropna()
-        
-        # Apply -4 Day Offset to align with Monday start date
-        df['Date'] = df['Date'] - pd.Timedelta(days=4)
-        
+# Accessing secrets set up in Streamlit Cloud or local .streamlit/secrets.toml
+try:
+    if data_option == "Divergences Data":
+        raw_url = st.secrets["URL_DIVERGENCES"]
     else:
-        # Daily block: Bypass resampling completely to maintain index integrity
-        df = df.dropna()
+        raw_url = st.secrets["URL_SP500"]
+    
+    DATA_URL = get_gdrive_download_url(raw_url)
+except KeyError:
+    st.error("Secrets not found. Please ensure URL_DIVERGENCES and URL_SP500 are set in Streamlit Secrets.")
+    st.stop()
 
-    return df
+# --- Core Functions ---
 
-def find_divergences(df_timeframe, ticker):
-    divergences = {'bullish': [], 'bearish': []}
-    if len(df_timeframe) < DIVERGENCE_LOOKBACK + 1:
-        return divergences
+def prepare_data(df):
+    """Clean and map columns from the combined master CSV."""
+    df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
+    
+    date_col = next((col for col in df.columns if 'DATE' in col), None)
+    close_col = next((col for col in df.columns if 'CLOSE' in col and 'W_' not in col), None)
+    vol_col = next((col for col in df.columns if ('VOL' in col or 'VOLUME' in col) and 'W_' not in col), None)
+    high_col = next((col for col in df.columns if 'HIGH' in col and 'W_' not in col), None)
+    low_col = next((col for col in df.columns if 'LOW' in col and 'W_' not in col), None)
+    
+    # Required Indicators mapped from source file
+    d_rsi_col, d_ema8_col, d_ema21_col = 'RSI_14', 'EMA_8', 'EMA_21'
+    w_close_col, w_vol_col, w_rsi_col = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
+    w_high_col, w_low_col = 'W_HIGH', 'W_LOW'
+
+    if not date_col or not close_col:
+        return None, None
+
+    df.index = pd.to_datetime(df[date_col])
+    df = df.sort_index()
+    
+    # --- Daily Subset ---
+    df_d = df[[close_col, vol_col, high_col, low_col, d_rsi_col, d_ema8_col, d_ema21_col]].copy()
+    df_d.rename(columns={
+        close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low',
+        d_rsi_col: 'RSI', d_ema8_col: 'EMA8', d_ema21_col: 'EMA21'
+    }, inplace=True)
+    df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
+    df_d = df_d.dropna(subset=['Price', 'RSI', 'High', 'Low'])
+
+    # --- Weekly Subset ---
+    df_w = df[[w_close_col, w_vol_col, w_high_col, w_low_col, w_rsi_col, w_ema8_col, w_ema21_col]].copy()
+    df_w.rename(columns={
+        w_close_col: 'Price', w_vol_col: 'Volume', w_high_col: 'High', w_low_col: 'Low',
+        w_rsi_col: 'RSI', w_ema8_col: 'EMA8', w_ema21_col: 'EMA21'
+    }, inplace=True)
+    df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
+    df_w['ChartDate'] = df_w.index - pd.Timedelta(days=4)
+    df_w = df_w.dropna(subset=['Price', 'RSI', 'High', 'Low'])
+    
+    return df_d, df_w
+
+def find_divergences(df_tf, ticker, timeframe):
+    """Detects RSI divergences using candle extremes."""
+    divergences = []
+    if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
+
+    def get_date_str(point):
+        return df_tf.loc[point.name, 'ChartDate'].strftime('%Y-%m-%d') if timeframe == 'weekly' else point.name.strftime('%Y-%m-%d')
             
-    start_index = max(DIVERGENCE_LOOKBACK, len(df_timeframe) - SIGNAL_LOOKBACK_PERIOD)
+    start_idx = max(DIVERGENCE_LOOKBACK, len(df_tf) - SIGNAL_LOOKBACK_PERIOD)
     
-    bullish_hits = []
-    bearish_hits = []
-
-    for i in range(start_index, len(df_timeframe)):
-        second_point = df_timeframe.iloc[i]
-        lookback_df = df_timeframe.iloc[i - DIVERGENCE_LOOKBACK : i]
+    for i in range(start_idx, len(df_tf)):
+        p2 = df_tf.iloc[i]
+        lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
         
-        min_rsi_idx = lookback_df['RSI'].idxmin() 
-        first_point_low = lookback_df.loc[min_rsi_idx]
-        max_rsi_idx = lookback_df['RSI'].idxmax()
-        first_point_high = lookback_df.loc[max_rsi_idx]
-
-        is_vol_high = second_point['Volume'] > (second_point['VolSMA'] * 1.5)
-        v_growth = second_point['Volume'] > first_point_low['Volume']
-        
-        tags = []
-        if is_vol_high: tags.append("VOL_HIGH")
-        if v_growth: tags.append("V_GROWTH")
-
-        # Bullish Divergence
-        if second_point['RSI'] > first_point_low['RSI'] and second_point['Price'] < lookback_df['Price'].min():
-            current_tags = list(tags)
-            if second_point['Price'] >= second_point['EMA8']:
-                current_tags.append("EMA8")
-            bullish_hits.append({
-                'Ticker': ticker,
-                'Tags': current_tags,
-                'First Date': first_point_low['Date'],
-                'Signal Date': second_point['Date'],
-                'firstRSI': first_point_low['RSI'],
-                'secondRSI': second_point['RSI'],
-                'Price 1': round(float(first_point_low['Price']), 2),
-                'Price 2': round(float(second_point['Price']), 2)
-            })
-
-        # Bearish Divergence
-        if second_point['RSI'] < first_point_high['RSI'] and second_point['Price'] > lookback_df['Price'].max():
-            current_tags = list(tags)
-            if second_point['Price'] <= second_point['EMA21']:
-                current_tags.append("EMA21")
-            bearish_hits.append({
-                'Ticker': ticker,
-                'Tags': current_tags,
-                'First Date': first_point_high['Date'],
-                'Signal Date': second_point['Date'],
-                'firstRSI': first_point_high['RSI'],
-                'secondRSI': second_point['RSI'],
-                'Price 1': round(float(first_point_high['Price']), 2),
-                'Price 2': round(float(second_point['Price']), 2)
-            })
-    
-    # Consolidation
-    if bullish_hits:
-        latest_bull = bullish_hits[-1]
-        all_tags = set()
-        for h in bullish_hits: all_tags.update(h['Tags'])
-        divergences['bullish'].append({
-            'Ticker': ticker,
-            'Tags': " ".join(sorted(list(all_tags))),
-            'First Date': min([h['First Date'] for h in bullish_hits]).strftime('%Y-%m-%d'),
-            'Signal Date': latest_bull['Signal Date'].strftime('%Y-%m-%d'),
-            'RSI': f"{int(latest_bull['firstRSI'])} → {int(latest_bull['secondRSI'])}",
-            'Price 1': latest_bull['Price 1'],
-            'Price 2': latest_bull['Price 2']
-        })
-
-    if bearish_hits:
-        latest_bear = bearish_hits[-1]
-        all_tags = set()
-        for h in bearish_hits: all_tags.update(h['Tags'])
-        divergences['bearish'].append({
-            'Ticker': ticker,
-            'Tags': " ".join(sorted(list(all_tags))),
-            'First Date': min([h['First Date'] for h in bearish_hits]).strftime('%Y-%m-%d'),
-            'Signal Date': latest_bear['Signal Date'].strftime('%Y-%m-%d'),
-            'RSI': f"{int(latest_bear['firstRSI'])} → {int(latest_bear['secondRSI'])}",
-            'Price 1': latest_bear['Price 1'],
-            'Price 2': latest_bear['Price 2']
-        })
-
+        # Bullish (Using Candle Low)
+        if p2['Low'] < lookback['Low'].min():
+            p1 = lookback.loc[lookback['RSI'].idxmin()]
+            if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
+                # RSI > 50 Reset Logic
+                if not (df_tf.loc[p1.name : p2.name, 'RSI'] > 50).any():
+                    divergences.append({
+                        'Ticker': ticker, 'Type': 'Bullish', 'Timeframe': timeframe,
+                        'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
+                        'P1 RSI': round(p1['RSI'], 1), 'P2 RSI': round(p2['RSI'], 1),
+                        'P1 Price': round(p1['Low'], 2), 'P2 Price': round(p2['Low'], 2)
+                    })
+        # Bearish (Using Candle High)
+        if p2['High'] > lookback['High'].max():
+            p1 = lookback.loc[lookback['RSI'].idxmax()]
+            if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD):
+                # RSI < 50 Reset Logic
+                if not (df_tf.loc[p1.name : p2.name, 'RSI'] < 50).any():
+                    divergences.append({
+                        'Ticker': ticker, 'Type': 'Bearish', 'Timeframe': timeframe,
+                        'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
+                        'P1 RSI': round(p1['RSI'], 1), 'P2 RSI': round(p2['RSI'], 1),
+                        'P1 Price': round(p1['High'], 2), 'P2 Price': round(p2['High'], 2)
+                    })
     return divergences
 
-# --- Data Loading ---
+# --- Execution ---
 
-@st.cache_data(ttl=3600)
-def load_large_data(url):
-    file_id = get_drive_file_id(url)
-    if not file_id: return pd.DataFrame()
-    try:
-        response = download_large_drive_file(file_id)
-        if response.status_code != 200: return pd.DataFrame()
+st.info(f"Connecting to data source...")
+try:
+    # Use pandas to read directly from the Google Drive download URL
+    master = pd.read_csv(DATA_URL)
+    t_col = next((c for c in master.columns if 'TICKER' in c.upper()), 'TICKER')
+    all_tickers = master[t_col].unique()
+
+    all_results = []
+    progress_bar = st.progress(0)
+
+    for i, ticker in enumerate(all_tickers):
+        df_t = master[master[t_col] == ticker].copy()
+        d_d, d_w = prepare_data(df_t)
         
-        df = pd.read_csv(io.BytesIO(response.content))
-        df.columns = [col.strip().upper() for col in df.columns]
+        if d_d is not None:
+            all_results.extend(find_divergences(d_d, ticker, 'Daily'))
+        if d_w is not None:
+            all_results.extend(find_divergences(d_w, ticker, 'Weekly'))
         
-        column_map = {
-            'TICKER': 'Ticker', 'SYMBOL': 'Ticker',
-            'OPEN': 'Open', 'HIGH': 'High', 'LOW': 'Low',
-            'CLOSE': 'Price', 'PRICE': 'Price',
-            'VOLUME': 'Volume', 'DATE': 'Date'
-        }
+        progress_bar.progress((i + 1) / len(all_tickers))
+
+    if all_results:
+        res_df = pd.DataFrame(all_results)
         
-        df.rename(columns={c: column_map[c] for c in df.columns if c in column_map}, inplace=True)
-        df['Date'] = pd.to_datetime(df['Date'])
-        return df
-    except:
-        return pd.DataFrame()
-
-# --- App UI ---
-
-st.title("📉 RSI Divergences Live")
-
-PRESETS = {
-    "Darcy's List": st.secrets.get("URL_DIVERGENCES"),
-    "Midcap": st.secrets.get("URL_MIDCAP"),
-    "S&P 500": st.secrets.get("URL_SP500")
-}
-
-AVAILABLE_DATASETS = {k: v for k, v in PRESETS.items() if v is not None}
-
-st.sidebar.markdown("### Data Configuration")
-selected_dataset = st.sidebar.radio("Select Dataset", list(AVAILABLE_DATASETS.keys()) if AVAILABLE_DATASETS else ["None"])
-timeframe = st.sidebar.radio("RSI Divergence Length", ["Daily", "Weekly"])
-view_mode = st.sidebar.radio("View Mode", ["Summary Dashboard", "Ticker Detail"])
-
-if AVAILABLE_DATASETS and selected_dataset != "None":
-    raw_df = load_large_data(AVAILABLE_DATASETS[selected_dataset])
-
-    if not raw_df.empty:
-        if view_mode == "Summary Dashboard":
-            st.header(f"Scanner: {selected_dataset} ({timeframe})")
-            all_bullish, all_bearish = [], []
-            tickers = raw_df['Ticker'].unique()
-            
-            prog = st.progress(0)
-            for idx, ticker in enumerate(tickers):
-                t_df = raw_df[raw_df['Ticker'] == ticker]
-                t_df = process_ticker_indicators(t_df, timeframe)
-                divs = find_divergences(t_df, ticker)
-                all_bullish.extend(divs['bullish'])
-                all_bearish.extend(divs['bearish'])
-                prog.progress((idx + 1) / len(tickers))
-            
+        for tf in ['Daily', 'Weekly']:
+            st.header(f"{tf} Signals")
             c1, c2 = st.columns(2)
             with c1:
-                st.subheader("🟢 Bullish")
-                if all_bullish: st.dataframe(pd.DataFrame(all_bullish).sort_values('Signal Date', ascending=False), hide_index=True)
-                else: st.write("No signals.")
+                st.subheader(f"{tf} Bullish")
+                st.table(res_df[(res_df['Type'] == 'Bullish') & (res_df['Timeframe'] == tf)])
             with c2:
-                st.subheader("🔴 Bearish")
-                if all_bearish: st.dataframe(pd.DataFrame(all_bearish).sort_values('Signal Date', ascending=False), hide_index=True)
-                else: st.write("No signals.")
-        else:
-            ticker_list = sorted(raw_df['Ticker'].unique())
-            sel_ticker = st.sidebar.selectbox("Select Ticker", ticker_list)
-            t_df = raw_df[raw_df['Ticker'] == sel_ticker]
-            t_df = process_ticker_indicators(t_df, timeframe)
-            
-            st.subheader(f"Analysis: {sel_ticker} ({timeframe})")
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=t_df['Date'], y=t_df['Price'], name="Price", line=dict(color='white')))
-            fig.add_trace(go.Scatter(x=t_df['Date'], y=t_df['EMA8'], name="EMA 8", line=dict(color='cyan', dash='dot')))
-            fig.add_trace(go.Scatter(x=t_df['Date'], y=t_df['EMA21'], name="EMA 21", line=dict(color='magenta', dash='dot')))
-            fig.update_layout(height=450, template="plotly_dark")
-            st.plotly_chart(fig, use_container_width=True)
-            
-            fig_r = go.Figure()
-            fig_r.add_trace(go.Scatter(x=t_df['Date'], y=t_df['RSI'], name="RSI", line=dict(color='yellow')))
-            fig_r.add_hline(y=70, line_dash="dash", line_color="red")
-            fig_r.add_hline(y=30, line_dash="dash", line_color="green")
-            fig_r.update_layout(height=250, template="plotly_dark")
-            st.plotly_chart(fig_r, use_container_width=True)
+                st.subheader(f"{tf} Bearish")
+                st.table(res_df[(res_df['Type'] == 'Bearish') & (res_df['Timeframe'] == tf)])
+    else:
+        st.write("No divergences found.")
+except Exception as e:
+    st.error(f"Error loading data: {e}")
