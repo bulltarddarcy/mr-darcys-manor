@@ -46,7 +46,8 @@ COLUMN_CONFIG_PIVOT = {
     "Dollars": st.column_config.NumberColumn("Dollars", width=110),
 }
 
-@st.cache_data(show_spinner="Updating Data...")
+# UPDATED: Added ttl=600 so the app fetches new data from Google Sheets every 10 minutes
+@st.cache_data(ttl=600, show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
     df = pd.read_csv(url)
     want = ["Trade Date","Order Type","Symbol","Strike (Actual)","Strike","Expiry","Contracts","Dollars","Error"]
