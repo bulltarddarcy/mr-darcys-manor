@@ -276,14 +276,13 @@ def run_rankings_app(df):
 def run_strike_zones_app(df):
     st.title("📊 Options Strike Zones")
     
-    max_data_date = get_max_trade_date(df)
     exp_range_default = (date.today() + timedelta(days=365))
     
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1: ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
-    with c2: td_start = st.date_input("Trade Date (start)", value=max_data_date, key="sz_start")
-    with c3: td_end = st.date_input("Trade Date (end)", value=max_data_date, key="sz_end")
+    with c2: td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
+    with c3: td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
     with c4: exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
     st.markdown('</div>', unsafe_allow_html=True)
     
@@ -482,7 +481,8 @@ def run_pivot_tables_app(df):
         return f
 
     df_cb_f, df_ps_f = apply_f(cb_pool, bypass_quant=False), apply_f(ps_pool, bypass_quant=False)
-    df_rr_f = apply_f(df_rr, bypass_quant=True)
+    # Risk Reversal table strictly ignores ticker and quant/mktcap/ema filters per request
+    df_rr_f = df_rr
 
     def get_p(data, is_rr=False):
         if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
@@ -509,7 +509,7 @@ def run_pivot_tables_app(df):
         st.subheader("Risk Reversals"); tbl = get_p(df_rr_f, is_rr=True)
         if not tbl.empty: 
             st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT); 
-            st.caption("ℹ️ This table reflects 1:1 ratio Risk Reversals and Date filters only.")
+            st.caption("ℹ️ This table reflects matched pairs within the selected dates only.")
         else: st.caption("No matched RR pairs found.")
 
 def run_rsi_divergences_app():
