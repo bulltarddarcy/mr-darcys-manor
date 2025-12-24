@@ -22,7 +22,6 @@ COLUMN_CONFIG_PIVOT = {
     "Dollars": st.column_config.NumberColumn("Dollars", width=110),
 }
 
-# The ttl=600 ensures the app re-checks your Google Sheet every 10 minutes.
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
     df = pd.read_csv(url)
@@ -100,10 +99,11 @@ def highlight_expiry(val):
         next_fri = this_fri + timedelta(days=7)
         two_fri = this_fri + timedelta(days=14)
         if expiry_date < today: return "" 
-        # Updated to mild colors: Green, Orange, Red
-        if expiry_date == this_fri: return "background-color: #5b8c5a; color: white;" 
-        elif expiry_date == next_fri: return "background-color: #c48b41; color: white;" 
-        elif expiry_date == two_fri: return "background-color: #a65d5d; color: white;" 
+        
+        # Updated colors per user request
+        if expiry_date == this_fri: return "background-color: #b7e1cd; color: black;" 
+        elif expiry_date == next_fri: return "background-color: #fce8b2; color: black;" 
+        elif expiry_date == two_fri: return "background-color: #f4c7c3; color: black;" 
         return ""
     except: return ""
 
@@ -560,11 +560,12 @@ try:
     elif app_choice == "Pivot Tables": run_pivot_tables_app(df_global)
     elif app_choice == "RSI Divergences": run_rsi_divergences_app()
     else: run_strike_zones_app(df_global)
+    
+    # Sidebar Legend with updated user colors
     with st.sidebar:
         if app_choice == "Pivot Tables":
             st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
-            # Updated legend items with mild hex codes
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#5b8c5a"></div> This Friday</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#c48b41"></div> Next Friday</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#a65d5d"></div> Two Fridays</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#b7e1cd"></div> This Friday</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#fce8b2"></div> Next Friday</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#f4c7c3"></div> Two Fridays</div>', unsafe_allow_html=True)
 except Exception as e: st.error(f"Error: {e}")
