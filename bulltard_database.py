@@ -100,9 +100,10 @@ def highlight_expiry(val):
         next_fri = this_fri + timedelta(days=7)
         two_fri = this_fri + timedelta(days=14)
         if expiry_date < today: return "" 
-        if expiry_date == this_fri: return "background-color: #2d5a27; color: white;" 
-        elif expiry_date == next_fri: return "background-color: #8c5e03; color: white;" 
-        elif expiry_date == two_fri: return "background-color: #7d3c3c; color: white;" 
+        # Updated to mild colors: Green, Orange, Red
+        if expiry_date == this_fri: return "background-color: #5b8c5a; color: white;" 
+        elif expiry_date == next_fri: return "background-color: #c48b41; color: white;" 
+        elif expiry_date == two_fri: return "background-color: #a65d5d; color: white;" 
         return ""
     except: return ""
 
@@ -562,7 +563,8 @@ try:
     with st.sidebar:
         if app_choice == "Pivot Tables":
             st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#2d5a27"></div> This Friday</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#8c5e03"></div> Next Friday</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#7d3c3c"></div> Two Fridays</div>', unsafe_allow_html=True)
+            # Updated legend items with mild hex codes
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#5b8c5a"></div> This Friday</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#c48b41"></div> Next Friday</div>', unsafe_allow_html=True)
+            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#a65d5d"></div> Two Fridays</div>', unsafe_allow_html=True)
 except Exception as e: st.error(f"Error: {e}")
