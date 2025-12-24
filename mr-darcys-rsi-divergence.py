@@ -22,7 +22,7 @@ def get_confirmed_gdrive_data(url):
         download_url = "https://docs.google.com/uc?export=download"
         session = requests.Session()
         
-        # Pass 1: Get the initial response (might be the HTML warning page)
+        # Pass 1: Get the initial response
         response = session.get(download_url, params={'id': file_id}, stream=True)
         
         confirm_token = None
@@ -40,7 +40,6 @@ def get_confirmed_gdrive_data(url):
         if confirm_token:
             response = session.get(download_url, params={'id': file_id, 'confirm': confirm_token}, stream=True)
         
-        # Check if the result is still HTML (indicating failure)
         if response.text.strip().startswith("<!DOCTYPE html>"):
             return "HTML_ERROR"
             
@@ -48,6 +47,28 @@ def get_confirmed_gdrive_data(url):
     except Exception as e:
         st.error(f"Fetch Error: {e}")
         return None
+
+def load_dataset_config():
+    """Reads the TXT file from Drive and returns a dictionary {Name: SecretKey}"""
+    try:
+        if "URL_CONFIG" not in st.secrets:
+            st.warning("URL_CONFIG not found in secrets. Using hardcoded defaults.")
+            return {"Darcy Data": "URL_DARCY", "S&P 100 Data": "URL_SP100"}
+            
+        config_url = st.secrets["URL_CONFIG"]
+        buffer = get_confirmed_gdrive_data(config_url)
+        
+        if buffer and buffer != "HTML_ERROR":
+            lines = buffer.getvalue().splitlines()
+            config_dict = {}
+            for line in lines:
+                if ',' in line:
+                    name, key = line.split(',')
+                    config_dict[name.strip()] = key.strip()
+            return config_dict
+    except Exception as e:
+        st.error(f"Error loading config file: {e}")
+    return {"Darcy Data": "URL_DARCY"}
 
 # --- Logic Constants ---
 VOL_SMA_PERIOD = 30
@@ -61,59 +82,49 @@ EMA21_PERIOD = 21
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 st.title("📈 RSI Divergence Scanner")
 
-# --- Sidebar: Dataset Selection ---
+# --- Dynamic Dataset Selection ---
+dataset_map = load_dataset_config()
 data_option = st.sidebar.selectbox(
     "Select Dataset to Analyze",
-    ("Darcy Data", "S&P 100 Data", "NQ 100 Data", "Sectors Data")
+    options=list(dataset_map.keys())
 )
 
 # --- Sidebar: Logic & Tags Summary ---
 st.sidebar.markdown("---")
 st.sidebar.header("📝 Strategy Logic")
 st.sidebar.markdown("""
-* **Bullish Divergence**: Price hits a new 90-day low, but RSI is higher than its previous low (fading downward momentum).
-* **Bearish Divergence**: Price hits a new 90-day high, but RSI is lower than its previous high (fading upward momentum).
-* **RSI Filter**: RSI must not have crossed the 50-level mid-point between the two points to ensure a continuous move.
-* **Signal Window**: Scans for signals that triggered within the last 25 periods.
+* **Bullish Divergence**: Price hits a new 90-day low, but RSI is higher than its previous low.
+* **Bearish Divergence**: Price hits a new 90-day high, but RSI is lower than its previous high.
+* **Signal Window**: Scans for signals within the last 25 periods.
 """)
 
 st.sidebar.header("🏷️ Tags Explained")
 st.sidebar.markdown("""
-* **EMA8 / EMA21 (Dynamic)**: Price is **currently** holding above (Bullish) or below (Bearish) the EMA in the most recent data, regardless of when the signal triggered.
-* **VOL_HIGH**: Volume on the Signal Date was at least 150% of the 30-day average volume.
-* **V_GROWTH**: Volume on the Signal Date was higher than the volume on the first point (P1).
+* **EMA8 / EMA21**: Price is currently holding above/below the respective EMA.
+* **VOL_HIGH**: Volume on Signal Date was >150% of 30-day average.
+* **V_GROWTH**: Volume on Signal Date > Volume on first point (P1).
 """)
 
-# Secrets Mapping for datasets
+# Resolve URL from mapping
 try:
-    if data_option == "Darcy Data":
-        target_url = st.secrets["URL_DARCY"]
-    elif data_option == "S&P 100 Data":
-        target_url = st.secrets["URL_SP100"]
-    elif data_option == "NQ 100 Data":
-        target_url = st.secrets["URL_NQ100"]
-    elif data_option == "Sectors Data":
-        target_url = st.secrets["URL_SECTORS"]
+    secret_key_name = dataset_map[data_option]
+    target_url = st.secrets[secret_key_name]
 except KeyError as e:
-    st.error(f"Secret key {e} not found. Please ensure URL_DARCY, URL_SP100, URL_NQ100, and URL_SECTORS are set.")
+    st.error(f"Missing Secret: Could not find the key '{e}' in your Streamlit Secrets.")
     st.stop()
 
 # --- Logic Functions ---
 
 def prepare_data(df):
-    """Sync with Source of Truth prepare_data logic."""
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
     
-    # Identify basic columns
     date_col = next((col for col in df.columns if 'DATE' in col), None)
     close_col = next((col for col in df.columns if 'CLOSE' in col and 'W_' not in col), None)
     vol_col = next((col for col in df.columns if ('VOL' in col or 'VOLUME' in col) and 'W_' not in col), None)
     high_col = next((col for col in df.columns if 'HIGH' in col and 'W_' not in col), None)
     low_col = next((col for col in df.columns if 'LOW' in col and 'W_' not in col), None)
     
-    # Daily logic columns
     d_rsi_col, d_ema8_col, d_ema21_col = 'RSI_14', 'EMA_8', 'EMA_21'
-    # Weekly logic columns
     w_close_col, w_vol_col, w_rsi_col = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
     w_ema8_col, w_ema21_col = 'W_EMA_8', 'W_EMA_21'
     w_high_col, w_low_col = 'W_HIGH', 'W_LOW'
@@ -149,7 +160,6 @@ def prepare_data(df):
     return df_d, df_w
 
 def find_divergences(df_tf, ticker, timeframe):
-    """Detection logic with dynamic EMA tags."""
     divergences = []
     if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
 
@@ -210,19 +220,18 @@ st.info(f"Connecting to {data_option}...")
 csv_buffer = get_confirmed_gdrive_data(target_url)
 
 if csv_buffer == "HTML_ERROR":
-    st.error("Google Drive is still serving an HTML warning page. Your file may still be too large.")
+    st.error("Google Drive is serving an HTML warning. The file is likely too large for standard scanning.")
 elif csv_buffer:
     try:
         master = pd.read_csv(csv_buffer)
-        
         t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+        
         if not t_col:
             st.error(f"Ticker column not found. Available: {list(master.columns)}")
             st.stop()
 
         raw_results = []
         progress_bar = st.progress(0, text="Scanning tickers...")
-        
         grouped = master.groupby(t_col)
         total_groups = len(grouped)
         
@@ -239,10 +248,6 @@ elif csv_buffer:
             for tf in ['Daily', 'Weekly']:
                 st.markdown(f"---")
                 st.header(f"📅 {tf} Divergence Analysis")
-                
-                if tf == 'Weekly':
-                    st.caption("Note: The 2nd signal is based off the week's close, but the 2nd signal date is the first trading day of the week to align with how chart candles are labeled.")
-                
                 for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
                     st.subheader(f"{emoji} {s_type} Signals")
                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)]
