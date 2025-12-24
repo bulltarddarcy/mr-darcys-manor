@@ -2,23 +2,25 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import json
 from datetime import datetime
 
 # --- Secrets & Path Configuration ---
 def get_gdrive_download_url(url):
     """Converts a standard Google Drive view URL into a direct download URL."""
     try:
-        # Extracts file ID from URL: .../file/d/[ID]/view
         file_id = url.split('/')[-2]
         return f'https://drive.google.com/uc?export=download&id={file_id}'
     except Exception:
         return url
 
-# --- Logic Constants ---
+# --- Logic Constants (Synced with Source of Truth) ---
 VOL_SMA_PERIOD = 30
 DIVERGENCE_LOOKBACK = 90
 SIGNAL_LOOKBACK_PERIOD = 25
 RSI_DIFF_THRESHOLD = 2
+EMA_PERIOD = 8
+EMA21_PERIOD = 21
 
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
@@ -36,7 +38,6 @@ try:
         raw_url = st.secrets["URL_DIVERGENCES"]
     else:
         raw_url = st.secrets["URL_SP500"]
-    
     DATA_URL = get_gdrive_download_url(raw_url)
 except KeyError:
     st.error("Secrets not found. Please ensure URL_DIVERGENCES and URL_SP500 are set in Streamlit Secrets.")
@@ -45,7 +46,7 @@ except KeyError:
 # --- Core Functions ---
 
 def prepare_data(df):
-    """Clean and map columns from the combined master CSV."""
+    """Clean and map columns from the combined master CSV. Sync with SOT logic."""
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
     
     date_col = next((col for col in df.columns if 'DATE' in col), None)
@@ -54,19 +55,20 @@ def prepare_data(df):
     high_col = next((col for col in df.columns if 'HIGH' in col and 'W_' not in col), None)
     low_col = next((col for col in df.columns if 'LOW' in col and 'W_' not in col), None)
     
-    # Column Mappings
+    # Column Mappings as defined in SOT
     d_rsi_col, d_ema8_col, d_ema21_col = 'RSI_14', 'EMA_8', 'EMA_21'
     w_close_col, w_vol_col, w_rsi_col = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
     w_ema8_col, w_ema21_col = 'W_EMA_8', 'W_EMA_21'
     w_high_col, w_low_col = 'W_HIGH', 'W_LOW'
 
-    if not date_col or not close_col:
+    # Strict check: High, Low, and Volume are required for SOT logic
+    if not all([date_col, close_col, vol_col, high_col, low_col]):
         return None, None
 
     df.index = pd.to_datetime(df[date_col])
     df = df.sort_index()
     
-    # --- Daily Subset ---
+    # Daily Subset
     df_d = df[[close_col, vol_col, high_col, low_col, d_rsi_col, d_ema8_col, d_ema21_col]].copy()
     df_d.rename(columns={
         close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low',
@@ -75,7 +77,7 @@ def prepare_data(df):
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     df_d = df_d.dropna(subset=['Price', 'RSI', 'High', 'Low'])
 
-    # --- Weekly Subset ---
+    # Weekly Subset
     df_w = df[[w_close_col, w_vol_col, w_high_col, w_low_col, w_rsi_col, w_ema8_col, w_ema21_col]].copy()
     df_w.rename(columns={
         w_close_col: 'Price', w_vol_col: 'Volume', w_high_col: 'High', w_low_col: 'Low',
@@ -88,12 +90,12 @@ def prepare_data(df):
     return df_d, df_w
 
 def find_divergences(df_tf, ticker, timeframe):
-    """Detects RSI divergences with formatted RSI and Prices ($0,000.00)."""
+    """Detects RSI divergences including invalidation and volume metrics."""
     divergences = []
     if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
 
     def get_date_str(point):
-        return df_tf.loc[point.name, 'ChartDate'].strftime('%Y-%m-%d') if timeframe == 'weekly' else point.name.strftime('%Y-%m-%d')
+        return df_tf.loc[point.name, 'ChartDate'].strftime('%Y-%m-%d') if timeframe == 'Weekly' else point.name.strftime('%Y-%m-%d')
             
     start_idx = max(DIVERGENCE_LOOKBACK, len(df_tf) - SIGNAL_LOOKBACK_PERIOD)
     
@@ -101,32 +103,53 @@ def find_divergences(df_tf, ticker, timeframe):
         p2 = df_tf.iloc[i]
         lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
         
-        # Bullish (Low)
+        is_vol_high = int(p2['Volume'] > (p2['VolSMA'] * 1.5))
+        
+        # --- Standard Bullish (Low) ---
         if p2['Low'] < lookback['Low'].min():
             p1 = lookback.loc[lookback['RSI'].idxmin()]
             if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
+                # Bullish Invalidation: RSI peaks > 50 between P1 and P2
                 if not (df_tf.loc[p1.name : p2.name, 'RSI'] > 50).any():
-                    divergences.append({
-                        'Ticker': ticker, 'Type': 'Bullish', 'Timeframe': timeframe,
-                        'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
-                        'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
-                        # Formatted Prices: $ and Comma separators
-                        'P1 Price': f"${p1['Low']:,.2f}",
-                        'P2 Price': f"${p2['Low']:,.2f}"
-                    })
-        # Bearish (High)
+                    # Post-Signal Invalidation: RSI drops below P1 RSI later
+                    post_signal_df = df_tf.iloc[i + 1 :]
+                    if not (not post_signal_df.empty and (post_signal_df['RSI'] <= p1['RSI']).any()):
+                        tags = []
+                        if p2['Price'] >= p2['EMA8']: tags.append(f"EMA{EMA_PERIOD}")
+                        if is_vol_high: tags.append("VOL_HIGH")
+                        if p2['Volume'] > p1['Volume']: tags.append("V_GROWTH")
+                        
+                        divergences.append({
+                            'Ticker': ticker, 'Type': 'Bullish', 'Timeframe': timeframe,
+                            'Tags': ", ".join(tags),
+                            'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
+                            'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
+                            'P1 Price': f"${p1['Low']:,.2f}",
+                            'P2 Price': f"${p2['Low']:,.2f}"
+                        })
+
+        # --- Standard Bearish (High) ---
         if p2['High'] > lookback['High'].max():
             p1 = lookback.loc[lookback['RSI'].idxmax()]
             if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD):
+                # Bearish Invalidation: RSI drops below 50 between P1 and P2
                 if not (df_tf.loc[p1.name : p2.name, 'RSI'] < 50).any():
-                    divergences.append({
-                        'Ticker': ticker, 'Type': 'Bearish', 'Timeframe': timeframe,
-                        'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
-                        'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
-                        # Formatted Prices: $ and Comma separators
-                        'P1 Price': f"${p1['High']:,.2f}",
-                        'P2 Price': f"${p2['High']:,.2f}"
-                    })
+                    # Post-Signal Invalidation: RSI rises above P1 RSI later
+                    post_signal_df = df_tf.iloc[i + 1 :]
+                    if not (not post_signal_df.empty and (post_signal_df['RSI'] >= p1['RSI']).any()):
+                        tags = []
+                        if p2['Price'] <= p2['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
+                        if is_vol_high: tags.append("VOL_HIGH")
+                        if p2['Volume'] > p1['Volume']: tags.append("V_GROWTH")
+
+                        divergences.append({
+                            'Ticker': ticker, 'Type': 'Bearish', 'Timeframe': timeframe,
+                            'Tags': ", ".join(tags),
+                            'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
+                            'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
+                            'P1 Price': f"${p1['High']:,.2f}",
+                            'P2 Price': f"${p2['High']:,.2f}"
+                        })
     return divergences
 
 # --- Execution ---
@@ -152,24 +175,19 @@ try:
         progress_bar.progress((i + 1) / len(all_tickers))
 
     if raw_results:
-        # Consolidate signals (Keep latest per ticker/type/timeframe)
         res_df = pd.DataFrame(raw_results)
         res_df = res_df.sort_values(by='Signal Date', ascending=False)
         consolidated_df = res_df.drop_duplicates(subset=['Ticker', 'Type', 'Timeframe'], keep='first')
         
-        # --- Stacked Display ---
         for timeframe in ['Daily', 'Weekly']:
             st.markdown(f"## {timeframe} Analysis")
-            
             for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
                 st.markdown(f"### {emoji} {timeframe} {s_type} Signals")
                 tbl_df = consolidated_df[(consolidated_df['Type'] == s_type) & (consolidated_df['Timeframe'] == timeframe)]
                 if not tbl_df.empty:
-                    # Remove redundant columns and display table
                     st.table(tbl_df.drop(columns=['Type', 'Timeframe']))
                 else:
                     st.write(f"No {timeframe.lower()} {s_type.lower()} signals found.")
-            
             st.divider()
     else:
         st.write("No divergences found.")
