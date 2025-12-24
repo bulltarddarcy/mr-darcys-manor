@@ -95,7 +95,6 @@ def find_divergences(df_tf, ticker, timeframe):
     if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
 
     def get_date_str(point):
-        # Timeframe comparison is now case-insensitive to ensure correct Weekly date display
         return df_tf.loc[point.name, 'ChartDate'].strftime('%Y-%m-%d') if timeframe.lower() == 'weekly' else point.name.strftime('%Y-%m-%d')
             
     start_idx = max(DIVERGENCE_LOOKBACK, len(df_tf) - SIGNAL_LOOKBACK_PERIOD)
@@ -112,7 +111,7 @@ def find_divergences(df_tf, ticker, timeframe):
             if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
                 # Bullish Invalidation: RSI peaks > 50 between P1 and P2
                 if not (df_tf.loc[p1.name : p2.name, 'RSI'] > 50).any():
-                    # Post-Signal Invalidation: RSI drops below P1 RSI later
+                    # Post-Signal Invalidation
                     post_signal_df = df_tf.iloc[i + 1 :]
                     if not (not post_signal_df.empty and (post_signal_df['RSI'] <= p1['RSI']).any()):
                         tags = []
@@ -135,7 +134,7 @@ def find_divergences(df_tf, ticker, timeframe):
             if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD):
                 # Bearish Invalidation: RSI drops below 50 between P1 and P2
                 if not (df_tf.loc[p1.name : p2.name, 'RSI'] < 50).any():
-                    # Post-Signal Invalidation: RSI rises above P1 RSI later
+                    # Post-Signal Invalidation
                     post_signal_df = df_tf.iloc[i + 1 :]
                     if not (not post_signal_df.empty and (post_signal_df['RSI'] >= p1['RSI']).any()):
                         tags = []
@@ -158,9 +157,19 @@ def find_divergences(df_tf, ticker, timeframe):
 st.info(f"Connecting to data source...")
 try:
     master = pd.read_csv(DATA_URL)
-    t_col = next((c for c in master.columns if 'TICKER' in c.upper()), 'TICKER')
-    all_tickers = master[t_col].unique()
+    
+    # Robust ticker column detection to prevent 'TICKER' KeyErrors
+    t_col = None
+    for col in master.columns:
+        if col.strip().upper() in ['TICKER', 'SYMBOL', 'SYM', 'CODE']:
+            t_col = col
+            break
+            
+    if not t_col:
+        st.error(f"Could not find a ticker or symbol column. Available: {', '.join(master.columns)}")
+        st.stop()
 
+    all_tickers = master[t_col].unique()
     raw_results = []
     progress_bar = st.progress(0)
 
@@ -179,7 +188,7 @@ try:
         res_df = pd.DataFrame(raw_results)
         res_df = res_df.sort_values(by='Signal Date', ascending=False)
         
-        # FIXED: Use groupby to keep the latest signal for BOTH types per ticker
+        # Ensures both Bullish and Bearish signals are kept for a ticker
         consolidated_df = res_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
         
         for timeframe in ['Daily', 'Weekly']:
