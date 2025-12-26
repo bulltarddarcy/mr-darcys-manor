@@ -75,7 +75,7 @@ EMA21_PERIOD = 21
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
-# FIX: Changed unsafe_allow_Costs to unsafe_allow_html
+# FIX: Changed unsafe_allow_Costs to unsafe_allow_html and set a neutral Slate Blue highlight
 st.markdown("""
     <style>
     div[data-testid="stPills"] button[aria-checked="true"] {
@@ -263,17 +263,17 @@ elif csv_buffer:
         with col1:
             st.subheader("📝 Strategy Logic")
             st.markdown(f"""
-            * **Signal Window**: The scanner checks for divergences occurring within the last **{SIGNAL_LOOKBACK_PERIOD} periods** from the most recent available data point.
-            * **Lookback Window**: For each potential signal, the scanner searches the preceding **{DIVERGENCE_LOOKBACK} periods** to identify the historical price and RSI reference points.
-            * **Bullish Divergence**: Price reaches a new low relative to its Lookback Window, but the RSI remains higher than its own previous low within that same window.
-            * **Bearish Divergence**: Price reaches a new high relative to its Lookback Window, but the RSI remains lower than its own previous high within that same window.
+            * **Signal Window**: The scanner checks for valid signals occurring within the last **{SIGNAL_LOOKBACK_PERIOD} periods** from the most recent data point available in the dataset.
+            * **Lookback Window**: For every point in the Signal Window, the scanner searches the preceding **{DIVERGENCE_LOOKBACK} periods** to establish historical price and RSI reference points.
+            * **Bullish Divergence**: Price hits a new low relative to the Lookback Window, but the RSI is higher than the previous RSI low found within that same window.
+            * **Bearish Divergence**: Price hits a new high relative to the Lookback Window, but the RSI is lower than the previous RSI high found within that same window.
             """)
         with col2:
             st.subheader("🏷️ Tags Explained")
             st.markdown(f"""
-            * **EMA{EMA_PERIOD}**: Added to **Bullish** signals if the current price is holding **above** the {EMA_PERIOD}-period EMA.
-            * **EMA{EMA21_PERIOD}**: Added to **Bearish** signals if the current price is holding **below** the {EMA21_PERIOD}-period EMA.
-            * **VOL_HIGH**: Volume on the Signal Date was at least 150% of the **{VOL_SMA_PERIOD}-period** average.
+            * **EMA{EMA_PERIOD}**: Applied to **Bullish** signals when the current price is holding **above** the {EMA_PERIOD}-period EMA.
+            * **EMA{EMA21_PERIOD}**: Applied to **Bearish** signals when the current price is holding **below** the {EMA21_PERIOD}-period EMA.
+            * **VOL_HIGH**: Volume on the Signal Date was >150% of the **{VOL_SMA_PERIOD}-period** average.
             * **V_GROW**: Volume on the Signal Date is higher than the volume recorded at the first divergence point (P1).
             """)
 
