@@ -137,9 +137,8 @@ def run_options_database_app(df):
         exp_range_default = (date.today() + timedelta(days=365))
         db_exp_end = st.date_input("Expiration Range (end)", value=exp_range_default, key="db_exp")
     
-    # Options Database: Added instructional text to the left of the checkboxes
-    ot_label, ot1, ot2, ot3, ot_pad = st.columns([2.2, 1, 1, 1, 3.8])
-    with ot_label: st.markdown('<div style="padding-top: 5px; color: #a1a1a1; font-size: 14px;">Click to Include/Exclude Order Types:</div>', unsafe_allow_html=True)
+    # Updated: Instruction text removed and column widths increased to prevent text wrapping
+    ot1, ot2, ot3, ot_pad = st.columns([1.5, 1.5, 1.5, 5.5])
     with ot1: inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
     with ot2: inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
     with ot3: inc_pb = st.checkbox("Puts Bought", value=True, key="db_inc_pb")
