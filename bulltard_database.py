@@ -137,8 +137,7 @@ def run_options_database_app(df):
         exp_range_default = (date.today() + timedelta(days=365))
         db_exp_end = st.date_input("Expiration Range (end)", value=exp_range_default, key="db_exp")
     
-    # (1) Order Type Filters moved to a single row under the main filters
-    st.write("Include Order Type:")
+    # (4) Removed "Include Order Type:" text
     ot1, ot2, ot3, ot_pad = st.columns([1, 1, 1, 5])
     with ot1: inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
     with ot2: inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
@@ -387,10 +386,9 @@ def run_pivot_tables_app(df):
     with c5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
     with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=1, key="pv_ema_filter")
     
-    # (2) Updated Note and (3) In-line Expiry Legend
-    st.info("ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset 'Mkt Cap Min' to 0B and then try again.")
+    # (3) Market cap filter note now light text (st.caption style) instead of st.info
+    st.caption("ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset 'Mkt Cap Min' to 0B and then try again.")
     
-    # Custom HTML for 1-line legend
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-bottom: 15px; align-items: center;">
         <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#b7e1cd"></div> This Friday</div>
@@ -482,10 +480,37 @@ def run_pivot_tables_app(df):
         else: st.caption("No matched RR pairs found.")
 
 def run_rsi_divergences_app():
-    # (4) RSI Divergences Page simplification
+    # (1) & (2) Simplified RSI Page with customized Tie-Dye Button
     st.title("📈 RSI Divergences")
-    st.write("Click the button below to visit the external RSI Divergence tracker.")
-    st.link_button("Travel to the new RSI Divergence website.", "https://mr-darcys-rsi-divergence.streamlit.app/")
+    
+    # CSS for the tie-dye gradient button
+    st.markdown("""
+    <style>
+    div.stLinkButton > a {
+        background: linear-gradient(45deg, #ff00ff, #00ffff, #ff0000, #ffff00, #00ff00);
+        background-size: 400% 400%;
+        animation: tie-dye 10s ease infinite;
+        border: none;
+        color: white !important;
+        font-weight: bold;
+        padding: 15px 30px;
+        border-radius: 10px;
+        text-decoration: none;
+        display: inline-block;
+        transition: transform 0.2s;
+    }
+    div.stLinkButton > a:hover {
+        transform: scale(1.05);
+    }
+    @keyframes tie-dye {
+        0%{background-position:0% 50%}
+        50%{background-position:100% 50%}
+        100%{background-position:0% 50%}
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    st.link_button("🌈 🚀 Click to travel to the new RSI Divergence website 🚀 🌈", "https://mr-darcys-rsi-divergence.streamlit.app/")
 
 # --- 3. MAIN EXECUTION ---
 if "tool" in st.query_params or "ticker" in st.query_params:
