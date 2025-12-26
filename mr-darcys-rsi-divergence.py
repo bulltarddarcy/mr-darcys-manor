@@ -74,7 +74,13 @@ st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
 st.markdown("""
     <style>
-    table { width: 100%; border-collapse: collapse; }
+    /* Table layout fixed ensures consistent column widths across all tables */
+    table { 
+        width: 100%; 
+        border-collapse: collapse; 
+        table-layout: fixed; 
+        margin-bottom: 2rem;
+    }
     
     /* Header Styling and Alignment */
     thead tr th {
@@ -84,21 +90,34 @@ st.markdown("""
         border-bottom: 2px solid #dee2e6;
     }
     
-    /* Body Cell Padding */
-    tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; }
+    /* Specific Fixed Widths for consistency */
+    th:nth-child(1) { width: 10%; } /* Ticker */
+    th:nth-child(2) { width: 32%; } /* Tags - wide for bubbles */
+    th:nth-child(3) { width: 12%; } /* P1 Date */
+    th:nth-child(4) { width: 12%; } /* Signal Date */
+    th:nth-child(5) { width: 10%; } /* RSI */
+    th:nth-child(6) { width: 12%; } /* P1 Price */
+    th:nth-child(7) { width: 12%; } /* P2 Price */
+    
+    /* Body Cell Padding and wrapping */
+    tbody tr td { 
+        padding: 10px !important; 
+        border-bottom: 1px solid #eee; 
+        word-wrap: break-word;
+    }
 
     /* Alignment Rules */
     .align-left { text-align: left !important; }
     .align-center { text-align: center !important; }
 
-    /* Tag Bubble Styling - Font size set to 14px to match table text */
+    /* Tag Bubble Styling */
     .tag-bubble {
         display: inline-block;
         padding: 2px 10px;
         border-radius: 12px;
         font-size: 14px;
         font-weight: 600;
-        margin-right: 4px;
+        margin: 2px 4px 2px 0;
         color: white;
         white-space: nowrap;
     }
@@ -188,7 +207,6 @@ def find_divergences(df_tf, ticker, timeframe):
                     post_df = df_tf.iloc[i + 1 :]
                     if not (not post_df.empty and (post_df['RSI'] <= p1['RSI']).any()):
                         tags = []
-                        # Bullish logic: Price above EMA
                         if 'EMA8' in latest_p and latest_p['Price'] >= latest_p['EMA8']: tags.append(f"EMA{EMA8_PERIOD}")
                         if 'EMA21' in latest_p and latest_p['Price'] >= latest_p['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
                         if is_vol_high: tags.append("VOL_HIGH")
@@ -208,7 +226,6 @@ def find_divergences(df_tf, ticker, timeframe):
                     post_df = df_tf.iloc[i + 1 :]
                     if not (not post_df.empty and (post_df['RSI'] >= p1['RSI']).any()):
                         tags = []
-                        # Bearish logic: Price below EMA
                         if 'EMA8' in latest_p and latest_p['Price'] <= latest_p['EMA8']: tags.append(f"EMA{EMA8_PERIOD}")
                         if 'EMA21' in latest_p and latest_p['Price'] <= latest_p['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
                         if is_vol_high: tags.append("VOL_HIGH")
@@ -272,14 +289,12 @@ if csv_buffer and csv_buffer != "HTML_ERROR":
                     if not tbl_df.empty:
                         display_df = tbl_df.drop(columns=['Type', 'Timeframe'])
                         
-                        # Define Column-to-Alignment mapping for headers
                         align_map = {
                             'Ticker': 'align-left', 'Tags': 'align-left',
                             'P1 Price': 'align-left', 'P2 Price': 'align-left',
                             'P1 Date': 'align-center', 'Signal Date': 'align-center', 'RSI': 'align-center'
                         }
 
-                        # Construct HTML manually for absolute control over alignment
                         html = '<table><thead><tr>'
                         for col in display_df.columns:
                             cls = align_map.get(col, 'align-center')
@@ -308,16 +323,16 @@ if csv_buffer and csv_buffer != "HTML_ERROR":
         with col1:
             st.subheader("📝 Strategy Logic")
             st.markdown(f"""
-            * **Signal Window**: Scans for signals within the last **{SIGNAL_LOOKBACK_PERIOD} periods**.
-            * **Lookback Window**: Searches preceding **{DIVERGENCE_LOOKBACK} periods** to establish historical reference points.
-            * **Bullish Divergence**: New price low relative to Lookback, but RSI is higher than previous RSI low.
-            * **Bearish Divergence**: New price high relative to Lookback, but RSI is lower than previous RSI high.
+            * **Signal Window**: Scans signals within the last **{SIGNAL_LOOKBACK_PERIOD} periods**.
+            * **Lookback Window**: Searches preceding **{DIVERGENCE_LOOKBACK} periods** for extremes.
+            * **Bullish Divergence**: New price low, but RSI is higher than previous low.
+            * **Bearish Divergence**: New price high, but RSI is lower than previous high.
             """)
         with col2:
             st.subheader("🏷️ Tags Explained")
             st.markdown(f"""
-            * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if the current price is holding **above** (Bullish) or **below** (Bearish) these respective levels.
-            * **VOL_HIGH**: Volume on Signal Date was >150% of the **{VOL_SMA_PERIOD}-period** average.
-            * **V_GROW**: Volume on the Signal Date is higher than the volume recorded at the first divergence point (P1).
+            * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if current price is holding **above** (Bullish) or **below** (Bearish) these levels.
+            * **VOL_HIGH**: Volume > 150% of {VOL_SMA_PERIOD}-day average.
+            * **V_GROW**: Signal Volume > P1 Volume.
             """)
     except Exception as e: st.error(f"Error: {e}")
