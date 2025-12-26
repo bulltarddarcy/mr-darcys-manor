@@ -383,27 +383,14 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
 
-    # --- Puts Sold Calculator (Compact 6-Field Single-Row) ---
+    # --- RESTRUCTURED Puts Sold Calculator (Single Row, 6 Equal Columns) ---
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
-    # ROW: Perfect alignment layout
-    calc_cols = st.columns(6)
-    
-    with calc_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-    with calc_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-    with calc_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
-    
-    # Logic
-    dte = (c_expiry - date.today()).days
-    coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
-    annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
-        
-    # Standard Streamlit dark mode label styling: 14px, #FAFAFA at 0.6 opacity
-    label_style = "font-size: 14px; margin-bottom: 8px; color: rgba(250, 250, 250, 0.6); font-family: 'Source Sans Pro', sans-serif; font-weight: 400; letter-spacing: normal;"
-    # CSS to make output boxes look identical to native Streamlit text inputs but non-interactive
+    # CSS to force uniform look and behavior for outputs
     st.markdown("""
         <style>
+            /* This targets result text fields specifically */
             .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
                 background-color: rgba(113, 210, 138, 0.1) !important;
                 color: #71d28a !important;
@@ -412,12 +399,28 @@ def run_pivot_tables_app(df):
                 pointer-events: none !important;
                 cursor: default !important;
             }
+            /* Ensures labels match exactly */
+            .st-key-calc_out_ann label, .st-key-calc_out_coc label, .st-key-calc_out_dte label {
+                color: rgba(250, 250, 250, 0.6) !important;
+                font-family: 'Source Sans Pro', sans-serif !important;
+            }
         </style>
     """, unsafe_allow_html=True)
 
-    with calc_cols[3]: st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", key="calc_out_ann")
-    with calc_cols[4]: st.text_input("Cash on Cash Return", value=f"{coc_ret:.2f}%", key="calc_out_coc")
-    with calc_cols[5]: st.text_input("Days to Expiration", value=str(max(0, dte)), key="calc_out_dte")
+    calc_row = st.columns(6)
+    
+    with calc_row[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
+    with calc_row[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
+    with calc_row[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
+    
+    # Calculation Logic - Verified
+    dte_val = (c_expiry - date.today()).days
+    coc_val = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
+    ann_val = (coc_val / dte_val) * 365 if dte_val > 0 else 0.0
+        
+    with calc_row[3]: st.text_input("Annualised Return", value=f"{ann_val:.2f}%", key="calc_out_ann")
+    with calc_row[4]: st.text_input("Cash on Cash Return", value=f"{coc_val:.2f}%", key="calc_out_coc")
+    with calc_row[5]: st.text_input("Days to Expiration", value=str(max(0, dte_val)), key="calc_out_dte")
 
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 20px; margin-bottom: 20px; align-items: center;">
