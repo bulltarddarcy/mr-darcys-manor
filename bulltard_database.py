@@ -14,6 +14,7 @@ import requests
 import time
 
 # --- 1. GLOBAL DATA LOADING & UTILITIES ---
+# Fixed formatting for Pivot Tables (Main View)
 COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
@@ -172,7 +173,8 @@ def run_options_database_app(df):
         
     st.subheader("Non-Expired Trades")
     st.caption("⚠️ User should check OI to confirm trades are still open")
-    st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=True, hide_index=True, height=get_table_height(f_display, max_rows=30))
+    # Applied comma formatting to Dollars and Contracts
+    st.dataframe(f_display.style.format({"Dollars": "$%,.0f", "Contracts": "%,.0f"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=True, hide_index=True, height=get_table_height(f_display, max_rows=30))
 
 def run_rankings_app(df):
     st.title("🏆 Rankings")
@@ -220,13 +222,13 @@ def run_rankings_app(df):
     
     rank_col_config = {
         "Symbol": st.column_config.TextColumn("Sym", width=40),
-        "Trade Count": st.column_config.NumberColumn("Qty", width=40),
+        "Trade Count": st.column_config.NumberColumn("Qty", width=40, format="%,d"),
         "Last Trade": st.column_config.TextColumn("Last", width=70),
-        "Dollars": st.column_config.NumberColumn("Dollars", width=90),
+        "Dollars": st.column_config.NumberColumn("Dollars", width=90, format="$%,d"),
         "Score": st.column_config.NumberColumn("Score", width=40),
     }
-    fmt_currency = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
-    fmt_score = lambda x: f"({abs(int(x))})" if x < 0 else f"{int(x)}"
+    fmt_currency = lambda x: f"($%,.0f)" % abs(x) if x < 0 else f"$%,.0f" % x
+    fmt_score = lambda x: f"(%,d)" % abs(int(x)) if x < 0 else f"%,d" % int(x)
     
     bull_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
     bear_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[True, True]).head(limit)
@@ -237,10 +239,10 @@ def run_rankings_app(df):
     col_left, col_right = st.columns(2, gap="large")
     with col_left:
         st.markdown("<h3 style='color: #71d28a; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
-        st.dataframe(bull_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bull_df), column_config=rank_col_config)
+        st.dataframe(bull_df.style.format({"Dollars": "$%,.0f", "Trade Count": "%,.0f", "Score": "%,d"}), use_container_width=True, hide_index=True, height=get_table_height(bull_df), column_config=rank_col_config)
     with col_right:
         st.markdown("<h3 style='color: #f29ca0; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
-        st.dataframe(bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
+        st.dataframe(bear_df.style.format({"Dollars": "$%,.0f", "Trade Count": "%,.0f", "Score": "%,d"}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
 
 def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
@@ -331,7 +333,7 @@ def run_strike_zones_app(df):
         st.info("No trades selected. Check boxes in the table below to display data.")
     else:
         f_chart["Signed Dollars"] = f_chart.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
-        fmt_neg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
+        fmt_neg = lambda x: f"($%,.0f)" % abs(x) if x < 0 else f"$%,.0f" % x
 
         if view_mode == "Price Zones":
             strike_min, strike_max = float(np.nanmin(f_chart["Strike (Actual)"].values)), float(np.nanmax(f_chart["Strike (Actual)"].values))
@@ -369,7 +371,7 @@ def run_strike_zones_app(df):
                 val_str = fmt_neg(r["Net_Dollars"])
                 st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
-    # --- DATA TABLE BELOW GRAPHIC ---
+    # --- DATA TABLE BELOW GRAPHIC (Corrected Formatting) ---
     if show_table:
         st.markdown("---")
         st.subheader("Data Table")
@@ -521,7 +523,7 @@ def run_pivot_tables_app(df):
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
         return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
 
-    row1_c1, row1_c2, row1_c3 = st.columns(3); fmt = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
+    row1_c1, row1_c2, row1_c3 = st.columns(3); fmt = {"Dollars": "$%,.0f", "Contracts": "%,.0f"}
     with row1_c1:
         st.subheader("Calls Bought"); tbl = get_p(df_cb_f)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
