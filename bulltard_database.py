@@ -397,17 +397,18 @@ def run_pivot_tables_app(df):
     annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
         
     with calc_cols[3]:
-        # Using a specific dark grey hex code (#FAFAFA is too bright, #808495 matches Streamlit dark mode labels)
+        # Updated: Removed hardcoded color and font to match standard Streamlit labels
         st.markdown(f"""
-            <div style="font-size: 14px; margin-bottom: 8px; color: #808495; font-family: sans-serif;">Annualised Return</div>
+            <div style="font-size: 14px; margin-bottom: 8px;">Annualised Return</div>
             <div style='background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
                 <span style='font-size: 14px; font-weight: 600; color: #71d28a;'>{annual_ret:.2f}%</span>
             </div>
         """, unsafe_allow_html=True)
         
     with calc_cols[4]:
+        # Updated: Removed hardcoded color and font to match standard Streamlit labels
         st.markdown(f"""
-            <div style="font-size: 14px; margin-bottom: 8px; color: #808495; font-family: sans-serif;">Days to Expiration</div>
+            <div style="font-size: 14px; margin-bottom: 8px;">Days to Expiration</div>
             <div style='background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
                 <span style='font-size: 14px; font-weight: 600; color: #71d28a;'>{max(0, dte)}</span>
             </div>
