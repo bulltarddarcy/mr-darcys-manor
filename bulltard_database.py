@@ -287,9 +287,9 @@ def run_strike_zones_app(df):
     if inc_cb: allowed_sz_types.append("Calls Bought")
     if inc_ps: allowed_sz_types.append("Puts Sold")
     if inc_pb: allowed_sz_types.append("Puts Bought")
-    edit_pool_raw = f[f[order_type_col].isin(allowed_sz_types)].copy()
+    f = f[f[order_type_col].isin(allowed_sz_types)]
     
-    if edit_pool_raw.empty:
+    if f.empty:
         st.warning("No trades match current filters.")
         return
         
@@ -383,44 +383,39 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
 
-    # --- RESTRUCTURED Puts Sold Calculator (Single Row, 6 Equal Columns) ---
+    # --- Puts Sold Calculator ---
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
-    # CSS to force uniform look and behavior for outputs
-    st.markdown("""
-        <style>
-            /* This targets result text fields specifically */
-            .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
-                background-color: rgba(113, 210, 138, 0.1) !important;
-                color: #71d28a !important;
-                border: 1px solid #71d28a !important;
-                font-weight: 700 !important;
-                pointer-events: none !important;
-                cursor: default !important;
-            }
-            /* Ensures labels match exactly */
-            .st-key-calc_out_ann label, .st-key-calc_out_coc label, .st-key-calc_out_dte label {
-                color: rgba(250, 250, 250, 0.6) !important;
-                font-family: 'Source Sans Pro', sans-serif !important;
-            }
-        </style>
-    """, unsafe_allow_html=True)
-
-    calc_row = st.columns(6)
+    # ROW 1: INPUTS
+    calc_in_cols = st.columns(3)
+    with calc_in_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
+    with calc_in_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
+    with calc_in_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
     
-    with calc_row[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-    with calc_row[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-    with calc_row[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
-    
-    # Calculation Logic - Verified
-    dte_val = (c_expiry - date.today()).days
-    coc_val = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
-    ann_val = (coc_val / dte_val) * 365 if dte_val > 0 else 0.0
+    # Logic
+    dte = (c_expiry - date.today()).days
+    coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
+    annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
         
-    with calc_row[3]: st.text_input("Annualised Return", value=f"{ann_val:.2f}%", key="calc_out_ann")
-    with calc_row[4]: st.text_input("Cash on Cash Return", value=f"{coc_val:.2f}%", key="calc_out_coc")
-    with calc_row[5]: st.text_input("Days to Expiration", value=str(max(0, dte_val)), key="calc_out_dte")
+    # ROW 2: OUTPUTS (Using standard HTML to force update priority while mimicking Streamlit styles)
+    calc_out_cols = st.columns(3)
+    
+    # Standard Streamlit dark mode styling variables
+    label_style = "font-size: 14px; margin-bottom: 8px; color: rgba(250, 250, 250, 0.6); font-family: 'Source Sans Pro', sans-serif; font-weight: 400;"
+    box_style = "background: rgba(113, 210, 138, 0.1); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;"
+    text_style = "font-size: 14px; font-weight: 700; color: #71d28a;"
+    
+    with calc_out_cols[0]:
+        st.markdown(f'<div style="{label_style}">Annualised Return</div><div style="{box_style}"><span style="{text_style}">{annual_ret:.2f}%</span></div>', unsafe_allow_html=True)
+        
+    with calc_out_cols[1]:
+        st.markdown(f'<div style="{label_style}">Cash on Cash Return</div><div style="{box_style}"><span style="{text_style}">{coc_ret:.2f}%</span></div>', unsafe_allow_html=True)
+
+    with calc_out_cols[2]:
+        # DTE uses a lighter box
+        dte_box = box_style.replace("0.1", "0.04")
+        st.markdown(f'<div style="{label_style}">Days to Expiration</div><div style="{dte_box}"><span style="{text_style}">{max(0, dte)}</span></div>', unsafe_allow_html=True)
 
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 20px; margin-bottom: 20px; align-items: center;">
