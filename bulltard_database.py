@@ -294,18 +294,30 @@ def run_strike_zones_app(df):
         st.warning("No trades match current filters.")
         return
 
-    # --- NEW INTERACTIVE DATA EDITOR ---
+    # --- TRACKING SELECTIONS ---
+    # We add an Include column to the raw pool if it doesn't exist
     if "Include" not in edit_pool_raw.columns:
         edit_pool_raw.insert(0, "Include", True)
+    
+    # We need to capture the state of the editor. Streamlit's data_editor returns the 
+    # dataframe reflecting the changes, but we want the charts to update based on it.
+    # To keep the charts at the top, we use an empty placeholder or simply process 
+    # the selection before rendering visuals.
+    
+    # Pre-process display strings
+    edit_pool_raw["Trade Date Str"] = edit_pool_raw["Trade Date"].dt.strftime("%d %b %y")
+    edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
 
+    # --- 1. RENDER VISUALS (UPPER PORTION) ---
+    visual_placeholder = st.container()
+
+    # --- 2. RENDER INTERACTIVE TABLE (LOWER PORTION) ---
     if show_table:
+        st.markdown("---")
         st.subheader("Data Table & Selection")
-        st.caption("Uncheck rows to remove them from the charts below.")
+        st.caption("Uncheck rows to remove them from the charts above.")
         
-        # We create a display-friendly version for the editor
-        edit_pool_raw["Trade Date Str"] = edit_pool_raw["Trade Date"].dt.strftime("%d %b %y")
-        edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
-        
+        # Display editor at the bottom
         edited_df = st.data_editor(
             edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]],
             column_config={
@@ -320,82 +332,82 @@ def run_strike_zones_app(df):
             use_container_width=True,
             key="sz_editor"
         )
-        # Filter the active dataframe 'f' based on user selection in editor
+        # Identify the active rows for the charts
         f = edit_pool_raw[edited_df["Include"]].copy()
     else:
         f = edit_pool_raw.copy()
 
-    if f.empty:
-        st.info("Check 'Include' boxes in the table above to visualize data.")
-        return
+    # --- 3. EXECUTE CHART LOGIC (INTO THE TOP CONTAINER) ---
+    with visual_placeholder:
+        if f.empty:
+            st.info("No rows selected. Check the 'Include' boxes below.")
+        else:
+            @st.cache_data(ttl=300)
+            def get_stock_indicators(sym: str):
+                try:
+                    ticker_obj = yf.Ticker(sym)
+                    h = ticker_obj.history(period="60d", interval="1d")
+                    if len(h) == 0: return None, None, None, None, None
+                    close = h["Close"]
+                    spot_val = float(close.iloc[-1])
+                    ema8  = float(close.ewm(span=8, adjust=False).mean().iloc[-1])
+                    ema21 = float(close.ewm(span=21, adjust=False).mean().iloc[-1])
+                    sma200_full = ticker_obj.history(period="2y")["Close"]
+                    sma200 = float(sma200_full.rolling(window=200).mean().iloc[-1]) if len(sma200_full) >= 200 else None
+                    return spot_val, ema8, ema21, sma200, h
+                except: return None, None, None, None, None
 
-    # --- STOCK DATA & INDICATORS ---
-    @st.cache_data(ttl=300)
-    def get_stock_indicators(sym: str):
-        try:
-            ticker_obj = yf.Ticker(sym)
-            h = ticker_obj.history(period="60d", interval="1d")
-            if len(h) == 0: return None, None, None, None, None
-            close = h["Close"]
-            spot_val = float(close.iloc[-1])
-            ema8  = float(close.ewm(span=8, adjust=False).mean().iloc[-1])
-            ema21 = float(close.ewm(span=21, adjust=False).mean().iloc[-1])
-            sma200_full = ticker_obj.history(period="2y")["Close"]
-            sma200 = float(sma200_full.rolling(window=200).mean().iloc[-1]) if len(sma200_full) >= 200 else None
-            return spot_val, ema8, ema21, sma200, h
-        except: return None, None, None, None, None
+            spot, ema8, ema21, sma200, history = get_stock_indicators(ticker)
+            if spot is None: spot = 100.0
 
-    spot, ema8, ema21, sma200, history = get_stock_indicators(ticker)
-    if spot is None: spot = 100.0
+            def pct_from_spot(x):
+                if x is None or np.isnan(x): return "—"
+                return f"{(x/spot-1)*100:+.1f}%"
+                
+            badges = [f'<span class="price-badge-header">Price: ${spot:,.2f}</span>']
+            if ema8: badges.append(f'<span class="badge">EMA(8): ${ema8:,.2f} ({pct_from_spot(ema8)})</span>')
+            if ema21: badges.append(f'<span class="badge">EMA(21): ${ema21:,.2f} ({pct_from_spot(ema21)})</span>')
+            if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
+            st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
 
-    def pct_from_spot(x):
-        if x is None or np.isnan(x): return "—"
-        return f"{(x/spot-1)*100:+.1f}%"
-        
-    badges = [f'<span class="price-badge-header">Price: ${spot:,.2f}</span>']
-    if ema8: badges.append(f'<span class="badge">EMA(8): ${ema8:,.2f} ({pct_from_spot(ema8)})</span>')
-    if ema21: badges.append(f'<span class="badge">EMA(21): ${ema21:,.2f} ({pct_from_spot(ema21)})</span>')
-    if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
-    st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
+            f["Signed Dollars"] = f.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
+            fmt_neg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
 
-    f["Signed Dollars"] = f.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
-    fmt_neg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
-
-    if view_mode == "Price Zones":
-        strike_min, strike_max = float(np.nanmin(f["Strike (Actual)"].values)), float(np.nanmax(f["Strike (Actual)"].values))
-        if width_mode == "Auto": zone_w = float(next((s for s in [1, 2, 5, 10, 25, 50, 100] if s >= (max(1e-9, strike_max - strike_min) / 12.0)), 100))
-        else: zone_w = float(fixed_size_choice)
-        
-        n_dn, n_up = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w)), int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
-        lower_edge = spot - n_dn * zone_w
-        total = max(1, n_dn + n_up)
-        f["ZoneIdx"] = f["Strike (Actual)"].apply(lambda x: min(total - 1, max(0, int(math.floor((x - lower_edge) / zone_w)))))
-        agg = f.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
-        zone_df = pd.DataFrame([(z, lower_edge + z*zone_w, lower_edge + (z+1)*zone_w) for z in range(total)], columns=["ZoneIdx","Zone_Low","Zone_High"])
-        zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
-        if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
-        
-        st.markdown('<div class="zones-panel">', unsafe_allow_html=True)
-        for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
-            if r["Zone_Low"] + (zone_w/2) > spot:
-                color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                val_str = fmt_neg(r["Net_Dollars"])
-                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
-        for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
-            if r["Zone_Low"] + (zone_w/2) < spot:
-                color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                val_str = fmt_neg(r["Net_Dollars"])
-                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        e = f.copy()
-        e["Bucket"] = pd.cut((pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days), bins=[0, 7, 30, 90, 180, 10000], labels=["0-7d", "8-30d", "31-90d", "91-180d", ">180d"], include_lowest=True)
-        agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
-        for _, r in agg.iterrows():
-            color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
-            val_str = fmt_neg(r["Net_Dollars"])
-            st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+            if view_mode == "Price Zones":
+                strike_min, strike_max = float(np.nanmin(f["Strike (Actual)"].values)), float(np.nanmax(f["Strike (Actual)"].values))
+                if width_mode == "Auto": zone_w = float(next((s for s in [1, 2, 5, 10, 25, 50, 100] if s >= (max(1e-9, strike_max - strike_min) / 12.0)), 100))
+                else: zone_w = float(fixed_size_choice)
+                
+                n_dn, n_up = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w)), int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
+                lower_edge = spot - n_dn * zone_w
+                total = max(1, n_dn + n_up)
+                f["ZoneIdx"] = f["Strike (Actual)"].apply(lambda x: min(total - 1, max(0, int(math.floor((x - lower_edge) / zone_w)))))
+                agg = f.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
+                zone_df = pd.DataFrame([(z, lower_edge + z*zone_w, lower_edge + (z+1)*zone_w) for z in range(total)], columns=["ZoneIdx","Zone_Low","Zone_High"])
+                zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
+                if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
+                
+                st.markdown('<div class="zones-panel">', unsafe_allow_html=True)
+                for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
+                    if r["Zone_Low"] + (zone_w/2) > spot:
+                        color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
+                        val_str = fmt_neg(r["Net_Dollars"])
+                        st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
+                for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
+                    if r["Zone_Low"] + (zone_w/2) < spot:
+                        color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
+                        val_str = fmt_neg(r["Net_Dollars"])
+                        st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                e = f.copy()
+                e["Bucket"] = pd.cut((pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days), bins=[0, 7, 30, 90, 180, 10000], labels=["0-7d", "8-30d", "31-90d", "91-180d", ">180d"], include_lowest=True)
+                agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
+                for _, r in agg.iterrows():
+                    color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
+                    val_str = fmt_neg(r["Net_Dollars"])
+                    st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
