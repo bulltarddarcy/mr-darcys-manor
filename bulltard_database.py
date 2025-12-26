@@ -293,45 +293,16 @@ def run_strike_zones_app(df):
         st.warning("No trades match current filters.")
         return
 
-    # Initialize checkbox state
-    if "sz_include_list" not in st.session_state:
-        st.session_state["sz_include_list"] = [True] * len(f)
-    
-    # Sync state if length changed (new ticker/date range)
-    if len(st.session_state["sz_include_list"]) != len(f):
-        st.session_state["sz_include_list"] = [True] * len(f)
+    # Initialize or verify session state for row selection
+    if "sz_include_map" not in st.session_state:
+        st.session_state["sz_include_map"] = {}
 
-    # Prepare data for the editor
-    f_display = f.copy()
-    f_display.insert(0, "Include", st.session_state["sz_include_list"])
-    f_display["Trade Date"] = f_display["Trade Date"].dt.strftime("%d %b %y")
-    f_display["Expiry"] = f_display["Expiry_DT"].dt.strftime("%d %b %y")
+    # --- GRAPHIC CALCULATION BLOCK ---
+    # We must determine chart data based on what's currently in session state
+    # If a row is missing from the map (new load), it defaults to True
+    f_chart_filter = f.index.map(lambda x: st.session_state["sz_include_map"].get(x, True))
+    f_chart = f[f_chart_filter].copy()
 
-    if show_table:
-        st.subheader("Data Table (Uncheck to exclude from graphic)")
-        # Use data_editor to allow checking/unchecking
-        edited_f = st.data_editor(
-            f_display[["Include", "Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]],
-            column_config={
-                "Include": st.column_config.CheckboxColumn("Incl", default=True, width="small"),
-                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d")
-            },
-            hide_index=True,
-            use_container_width=True,
-            key="sz_editor"
-        )
-        # Update session state
-        st.session_state["sz_include_list"] = edited_f["Include"].tolist()
-        # Filter chart data based on checkboxes
-        f_chart = f[edited_f["Include"].values].copy()
-    else:
-        f_chart = f[st.session_state["sz_include_list"]].copy()
-
-    if f_chart.empty:
-        st.info("No trades selected. Check rows in the table to display them.")
-        return
-
-    # --- Graphic Logic ---
     @st.cache_data(ttl=300)
     def get_stock_indicators(sym: str):
         try:
@@ -360,44 +331,84 @@ def run_strike_zones_app(df):
     if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
     st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
 
-    f_chart["Signed Dollars"] = f_chart.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
-    fmt_neg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
-
-    if view_mode == "Price Zones":
-        strike_min, strike_max = float(np.nanmin(f_chart["Strike (Actual)"].values)), float(np.nanmax(f_chart["Strike (Actual)"].values))
-        if width_mode == "Auto": zone_w = float(next((s for s in [1, 2, 5, 10, 25, 50, 100] if s >= (max(1e-9, strike_max - strike_min) / 12.0)), 100))
-        else: zone_w = float(fixed_size_choice)
-        
-        n_dn, n_up = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w)), int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
-        lower_edge = spot - n_dn * zone_w
-        total = max(1, n_dn + n_up)
-        f_chart["ZoneIdx"] = f_chart["Strike (Actual)"].apply(lambda x: min(total - 1, max(0, int(math.floor((x - lower_edge) / zone_w)))))
-        agg = f_chart.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
-        zone_df = pd.DataFrame([(z, lower_edge + z*zone_w, lower_edge + (z+1)*zone_w) for z in range(total)], columns=["ZoneIdx","Zone_Low","Zone_High"])
-        zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
-        if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
-        
-        st.markdown('<div class="zones-panel">', unsafe_allow_html=True)
-        for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
-            if r["Zone_Low"] + (zone_w/2) > spot:
-                color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                val_str = fmt_neg(r["Net_Dollars"])
-                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
-        for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
-            if r["Zone_Low"] + (zone_w/2) < spot:
-                color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                val_str = fmt_neg(r["Net_Dollars"])
-                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+    if f_chart.empty:
+        st.info("No trades selected. Check boxes in the table below to display data.")
     else:
-        e = f_chart.copy()
-        e["Bucket"] = pd.cut((pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days), bins=[0, 7, 30, 90, 180, 10000], labels=["0-7d", "8-30d", "31-90d", "91-180d", ">180d"], include_lowest=True)
-        agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
-        for _, r in agg.iterrows():
-            color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
-            val_str = fmt_neg(r["Net_Dollars"])
-            st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+        f_chart["Signed Dollars"] = f_chart.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
+        fmt_neg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
+
+        if view_mode == "Price Zones":
+            strike_min, strike_max = float(np.nanmin(f_chart["Strike (Actual)"].values)), float(np.nanmax(f_chart["Strike (Actual)"].values))
+            if width_mode == "Auto": zone_w = float(next((s for s in [1, 2, 5, 10, 25, 50, 100] if s >= (max(1e-9, strike_max - strike_min) / 12.0)), 100))
+            else: zone_w = float(fixed_size_choice)
+            
+            n_dn, n_up = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w)), int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
+            lower_edge = spot - n_dn * zone_w
+            total = max(1, n_dn + n_up)
+            f_chart["ZoneIdx"] = f_chart["Strike (Actual)"].apply(lambda x: min(total - 1, max(0, int(math.floor((x - lower_edge) / zone_w)))))
+            agg = f_chart.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
+            zone_df = pd.DataFrame([(z, lower_edge + z*zone_w, lower_edge + (z+1)*zone_w) for z in range(total)], columns=["ZoneIdx","Zone_Low","Zone_High"])
+            zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
+            if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
+            
+            st.markdown('<div class="zones-panel">', unsafe_allow_html=True)
+            for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
+                if r["Zone_Low"] + (zone_w/2) > spot:
+                    color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
+                    val_str = fmt_neg(r["Net_Dollars"])
+                    st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
+            for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
+                if r["Zone_Low"] + (zone_w/2) < spot:
+                    color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
+                    val_str = fmt_neg(r["Net_Dollars"])
+                    st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            e = f_chart.copy()
+            e["Bucket"] = pd.cut((pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days), bins=[0, 7, 30, 90, 180, 10000], labels=["0-7d", "8-30d", "31-90d", "91-180d", ">180d"], include_lowest=True)
+            agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
+            for _, r in agg.iterrows():
+                color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
+                val_str = fmt_neg(r["Net_Dollars"])
+                st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+
+    # --- DATA TABLE BELOW GRAPHIC ---
+    if show_table:
+        st.markdown("---")
+        st.subheader("Data Table")
+        st.caption("ℹ️ Uncheck rows to exclude them from the Strike Zone visual above.")
+        
+        # Prepare table data with session state values
+        f_table = f.copy()
+        f_table.insert(0, "Include", [st.session_state["sz_include_map"].get(idx, True) for idx in f.index])
+        f_table["Trade Date Str"] = f_table["Trade Date"].dt.strftime("%d %b %y")
+        f_table["Expiry Str"] = f_table["Expiry_DT"].dt.strftime("%d %b %y")
+
+        edited_df = st.data_editor(
+            f_table[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]],
+            column_config={
+                "Include": st.column_config.CheckboxColumn("Incl", default=True, width="small"),
+                "Trade Date Str": "Trade Date",
+                "Expiry Str": "Expiry",
+                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d")
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="sz_editor"
+        )
+
+        # Update session state map based on editor changes
+        # This triggers a rerun, which will then use the new values in the graphic logic above
+        changes_detected = False
+        for i, idx in enumerate(f.index):
+            new_val = edited_df.iloc[i]["Include"]
+            if st.session_state["sz_include_map"].get(idx) != new_val:
+                st.session_state["sz_include_map"][idx] = new_val
+                changes_detected = True
+        
+        if changes_detected:
+            st.rerun()
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
@@ -426,7 +437,7 @@ def run_pivot_tables_app(df):
     
     dte = (c_expiry - date.today()).days
     coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
-    annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
+    annual_ret = (coc_ret / max(1, dte)) * 365 if dte >= 0 else 0.0
 
     st.session_state["calc_out_ann"] = f"{annual_ret:.2f}%"
     st.session_state["calc_out_coc"] = f"{coc_ret:.2f}%"
