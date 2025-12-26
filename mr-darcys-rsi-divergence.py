@@ -87,16 +87,16 @@ st.markdown("""
     /* Body Cell Padding */
     tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; }
 
-    /* Alignment Rules for Headers AND Cells */
+    /* Alignment Rules */
     .align-left { text-align: left !important; }
     .align-center { text-align: center !important; }
 
-    /* Tag Bubble Styling */
+    /* Tag Bubble Styling - Font size set to 14px to match table text */
     .tag-bubble {
         display: inline-block;
         padding: 2px 10px;
         border-radius: 12px;
-        font-size: 11px;
+        font-size: 14px;
         font-weight: 600;
         margin-right: 4px;
         color: white;
@@ -110,9 +110,9 @@ st.info("💡 See bottom of page for strategy logic and tag explanations.")
 
 # --- Helpers ---
 def style_tags(tag_str):
-    if not tag_str: return '<div class="align-left"></div>'
+    if not tag_str: return ''
     tags = tag_str.split(", ")
-    html_str = '<div class="align-left">'
+    html_str = ''
     colors = {
         f"EMA{EMA8_PERIOD}": "#4a90e2", 
         f"EMA{EMA21_PERIOD}": "#9b59b6", 
@@ -122,7 +122,6 @@ def style_tags(tag_str):
     for t in tags:
         color = colors.get(t, "#7f8c8d")
         html_str += f'<span class="tag-bubble" style="background-color: {color};">{t}</span>'
-    html_str += '</div>'
     return html_str
 
 # --- Logic Functions ---
@@ -189,6 +188,7 @@ def find_divergences(df_tf, ticker, timeframe):
                     post_df = df_tf.iloc[i + 1 :]
                     if not (not post_df.empty and (post_df['RSI'] <= p1['RSI']).any()):
                         tags = []
+                        # Bullish logic: Price above EMA
                         if 'EMA8' in latest_p and latest_p['Price'] >= latest_p['EMA8']: tags.append(f"EMA{EMA8_PERIOD}")
                         if 'EMA21' in latest_p and latest_p['Price'] >= latest_p['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
                         if is_vol_high: tags.append("VOL_HIGH")
@@ -208,6 +208,7 @@ def find_divergences(df_tf, ticker, timeframe):
                     post_df = df_tf.iloc[i + 1 :]
                     if not (not post_df.empty and (post_df['RSI'] >= p1['RSI']).any()):
                         tags = []
+                        # Bearish logic: Price below EMA
                         if 'EMA8' in latest_p and latest_p['Price'] <= latest_p['EMA8']: tags.append(f"EMA{EMA8_PERIOD}")
                         if 'EMA21' in latest_p and latest_p['Price'] <= latest_p['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
                         if is_vol_high: tags.append("VOL_HIGH")
@@ -269,7 +270,6 @@ if csv_buffer and csv_buffer != "HTML_ERROR":
                     st.subheader(f"{emoji} {s_type} Signals")
                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                     if not tbl_df.empty:
-                        # Drop columns not needed for view
                         display_df = tbl_df.drop(columns=['Type', 'Timeframe'])
                         
                         # Define Column-to-Alignment mapping for headers
@@ -308,16 +308,16 @@ if csv_buffer and csv_buffer != "HTML_ERROR":
         with col1:
             st.subheader("📝 Strategy Logic")
             st.markdown(f"""
-            * **Signal Window**: Scans signals within the last **{SIGNAL_LOOKBACK_PERIOD} periods**.
-            * **Lookback Window**: Searches preceding **{DIVERGENCE_LOOKBACK} periods** for extremes.
-            * **Bullish Divergence**: New price low, but RSI is higher than previous low.
-            * **Bearish Divergence**: New price high, but RSI is lower than previous high.
+            * **Signal Window**: Scans for signals within the last **{SIGNAL_LOOKBACK_PERIOD} periods**.
+            * **Lookback Window**: Searches preceding **{DIVERGENCE_LOOKBACK} periods** to establish historical reference points.
+            * **Bullish Divergence**: New price low relative to Lookback, but RSI is higher than previous RSI low.
+            * **Bearish Divergence**: New price high relative to Lookback, but RSI is lower than previous RSI high.
             """)
         with col2:
             st.subheader("🏷️ Tags Explained")
             st.markdown(f"""
-            * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if current price is holding **above** (Bullish) or **below** (Bearish) these levels.
-            * **VOL_HIGH**: Volume > 150% of {VOL_SMA_PERIOD}-day average.
-            * **V_GROW**: Signal Volume > P1 Volume.
+            * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if the current price is holding **above** (Bullish) or **below** (Bearish) these respective levels.
+            * **VOL_HIGH**: Volume on Signal Date was >150% of the **{VOL_SMA_PERIOD}-period** average.
+            * **V_GROW**: Volume on the Signal Date is higher than the volume recorded at the first divergence point (P1).
             """)
     except Exception as e: st.error(f"Error: {e}")
