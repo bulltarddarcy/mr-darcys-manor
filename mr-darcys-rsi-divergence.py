@@ -75,35 +75,46 @@ EMA21_PERIOD = 21
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
-# THE NUCLEAR OPTION FOR CSS: 
-# Overrides the root primary color variable that st.pills uses for its "active" state.
+# CSS for (1) Light shaded headers and (3) Tag Pill Styling
 st.markdown("""
     <style>
-    :root {
-        --primary-color: #475569;
+    /* Shade the header of dataframes */
+    thead tr th {
+        background-color: #f0f2f6 !important;
+        color: #31333f !important;
     }
-    /* Specific override for the pill highlight to ensure Slate Blue */
-    div[data-testid="stPills"] button[aria-checked="true"] {
-        background-color: #475569 !important;
-        color: white !important;
-        border: 1px solid #475569 !important;
-    }
-    /* Neutralize the hover effect */
-    div[data-testid="stPills"] button:hover {
-        border-color: #475569 !important;
-        color: #475569 !important;
-    }
-    div[data-testid="stPills"] button[aria-checked="true"]:hover {
-        color: white !important;
-        background-color: #334155 !important;
+    /* Style for the custom Tag Bubbles */
+    .tag-bubble {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+        margin-right: 4px;
+        color: white;
     }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("📈 RSI Divergence Scanner")
-
-# 1. Top Note
 st.info("💡 See bottom of page for strategy logic and tag explanations.")
+
+# --- Helper for Tag Bubbles ---
+def style_tags(tag_str):
+    if not tag_str: return ""
+    tags = tag_str.split(", ")
+    html_str = ""
+    # Define colors for specific tags
+    colors = {
+        f"EMA{EMA_PERIOD}": "#4a90e2", # Blue
+        f"EMA{EMA21_PERIOD}": "#9b59b6", # Purple
+        "VOL_HIGH": "#e67e22",        # Orange
+        "V_GROW": "#27ae60"           # Green
+    }
+    for t in tags:
+        color = colors.get(t, "#7f8c8d") # Default Gray
+        html_str += f'<span class="tag-bubble" style="background-color: {color};">{t}</span>'
+    return html_str
 
 # --- Logic Functions ---
 def prepare_data(df):
@@ -162,7 +173,6 @@ def find_divergences(df_tf, ticker, timeframe):
         lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
         is_vol_high = int(p2['Volume'] > (p2['VolSMA'] * 1.5)) if not pd.isna(p2['VolSMA']) else 0
         
-        # Bullish
         if p2['Low'] < lookback['Low'].min():
             p1 = lookback.loc[lookback['RSI'].idxmin()]
             if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
@@ -180,7 +190,6 @@ def find_divergences(df_tf, ticker, timeframe):
                             'P1 Price': f"${p1['Low']:,.2f}", 'P2 Price': f"${p2['Low']:,.2f}"
                         })
 
-        # Bearish
         if p2['High'] > lookback['High'].max():
             p1 = lookback.loc[lookback['RSI'].idxmax()]
             if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD):
@@ -201,12 +210,7 @@ def find_divergences(df_tf, ticker, timeframe):
 
 # --- Data Selection Row ---
 dataset_map = load_dataset_config()
-data_option = st.pills(
-    "Select Dataset to Analyze",
-    options=list(dataset_map.keys()),
-    selection_mode="single",
-    default=list(dataset_map.keys())[0]
-)
+data_option = st.pills("Select Dataset to Analyze", options=list(dataset_map.keys()), selection_mode="single", default=list(dataset_map.keys())[0])
 
 if not data_option:
     st.warning("Please select a dataset to begin scanning.")
@@ -216,8 +220,8 @@ if not data_option:
 try:
     secret_key_name = dataset_map[data_option]
     target_url = st.secrets[secret_key_name]
-except KeyError as e:
-    st.error(f"Missing Secret: Could not find the key '{e}' in your Streamlit Secrets.")
+except KeyError:
+    st.error("Missing Secret configuration.")
     st.stop()
 
 csv_buffer = get_confirmed_gdrive_data(target_url)
@@ -233,12 +237,10 @@ elif csv_buffer:
             st.error(f"Ticker column not found.")
             st.stop()
 
-        # --- VIEW SCANNED TICKERS ---
         all_tickers = sorted(master[t_col].unique())
         with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
             search_query = st.text_input("Filter ticker list...", placeholder="Type symbol here...").upper()
             filtered_tickers = [t for t in all_tickers if search_query in t]
-            
             cols = st.columns(6)
             for idx, ticker in enumerate(filtered_tickers):
                 cols[idx % 6].write(ticker)
@@ -263,9 +265,14 @@ elif csv_buffer:
                 st.header(f"📅 {tf} Divergence Analysis")
                 for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
                     st.subheader(f"{emoji} {s_type} Signals")
-                    tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)]
+                    tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                     if not tbl_df.empty:
-                        st.table(tbl_df.drop(columns=['Type', 'Timeframe']))
+                        # (3) Apply tag bubbles and (2) Hide index/first column
+                        tbl_df['Tags'] = tbl_df['Tags'].apply(style_tags)
+                        st.write(
+                            tbl_df.drop(columns=['Type', 'Timeframe']).to_html(escape=False, index=False), 
+                            unsafe_allow_html=True
+                        )
                     else:
                         st.write(f"No {tf} {s_type} signals found.")
         else:
@@ -277,19 +284,18 @@ elif csv_buffer:
         with col1:
             st.subheader("📝 Strategy Logic")
             st.markdown(f"""
-            * **Signal Window**: The scanner checks for valid signals occurring within the last **{SIGNAL_LOOKBACK_PERIOD} periods** from the most recent data point available in the file.
-            * **Lookback Window**: For every potential signal found in the Signal Window, the scanner searches the preceding **{DIVERGENCE_LOOKBACK} periods** to establish historical reference points for price and RSI.
-            * **Bullish Divergence**: Price hits a new low relative to the Lookback Window, but the RSI is higher than the previous RSI low found within that same window.
-            * **Bearish Divergence**: Price hits a new high relative to the Lookback Window, but the RSI is lower than the previous RSI high found within that same window.
+            * **Signal Window**: Scans for valid signals within the last **{SIGNAL_LOOKBACK_PERIOD} periods** from the most recent data point.
+            * **Lookback Window**: Searches the preceding **{DIVERGENCE_LOOKBACK} periods** to establish historical reference points.
+            * **Bullish Divergence**: Price hits a new low relative to Lookback, but RSI is higher than the previous RSI low.
+            * **Bearish Divergence**: Price hits a new high relative to Lookback, but RSI is lower than the previous RSI high.
             """)
         with col2:
             st.subheader("🏷️ Tags Explained")
             st.markdown(f"""
-            * **EMA{EMA_PERIOD}**: Added to **Bullish** signals if the current price is holding **above** the {EMA_PERIOD}-period EMA.
-            * **EMA{EMA21_PERIOD}**: Added to **Bearish** signals if the current price is holding **below** the {EMA21_PERIOD}-period EMA.
-            * **VOL_HIGH**: Volume on the Signal Date was >150% of the **{VOL_SMA_PERIOD}-period** average.
-            * **V_GROW**: Volume on the Signal Date is higher than the volume recorded at the first divergence point (P1).
+            * **EMA{EMA_PERIOD}**: Price currently holding **above** the {EMA_PERIOD}-period EMA (Bullish).
+            * **EMA{EMA21_PERIOD}**: Price currently holding **below** the {EMA21_PERIOD}-period EMA (Bearish).
+            * **VOL_HIGH**: Volume on Signal Date was >150% of the **{VOL_SMA_PERIOD}-period** average.
+            * **V_GROW**: Volume on Signal Date > Volume recorded at first divergence point (P1).
             """)
-
     except Exception as e:
         st.error(f"Processing Error: {e}")
