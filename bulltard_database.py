@@ -412,12 +412,12 @@ def run_pivot_tables_app(df):
     annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
         
     with calc_c4:
-        # Use disabled text input to match native Streamlit alignment/styling
-        st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", disabled=True, key="calc_res_ann")
+        # Use text input without disabled=True to avoid grey look
+        # User input in these boxes is ignored because we don't save the result to a variable
+        st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", key="calc_res_ann")
         
     with calc_c5:
-        # Use disabled text input to match native Streamlit alignment/styling
-        st.text_input("Days to Expiry", value=str(max(0, dte)), disabled=True, key="calc_res_dte")
+        st.text_input("Days to Expiry", value=str(max(0, dte)), key="calc_res_dte")
 
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 20px; margin-bottom: 20px; align-items: center;">
@@ -429,7 +429,6 @@ def run_pivot_tables_app(df):
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # Table logic...
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty:
         st.info("No data found for the selected date range.")
