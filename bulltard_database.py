@@ -271,7 +271,7 @@ def run_strike_zones_app(df):
     with sc4:
         st.markdown("**Other Options**")
         hide_empty      = st.checkbox("Hide Empty Zones", value=True)
-        show_table       = st.checkbox("Show Strike Zone Table", value=True)
+        show_table       = st.checkbox("Show Data Table", value=True)
     
     st.markdown("---")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -287,12 +287,51 @@ def run_strike_zones_app(df):
     if inc_cb: allowed_sz_types.append("Calls Bought")
     if inc_ps: allowed_sz_types.append("Puts Sold")
     if inc_pb: allowed_sz_types.append("Puts Bought")
-    edit_pool_raw = f[f[order_type_col].isin(allowed_sz_types)].copy()
+    f = f[f[order_type_col].isin(allowed_sz_types)].copy()
     
-    if edit_pool_raw.empty:
+    if f.empty:
         st.warning("No trades match current filters.")
         return
+
+    # --- Data Editor Integration ---
+    if "sz_include_map" not in st.session_state:
+        st.session_state["sz_include_map"] = {}
+
+    # Create editable table dataframe
+    f_edit = f.copy()
+    f_edit["Include"] = f_edit.index.map(lambda i: st.session_state["sz_include_map"].get(i, True))
+    f_edit["Trade Date Str"] = f_edit["Trade Date"].dt.strftime("%d %b %y")
+    f_edit["Expiry Str"] = f_edit["Expiry_DT"].dt.strftime("%d %b %y")
+    
+    if show_table:
+        st.subheader("Data Table (Uncheck to exclude from graphic)")
+        edited_df = st.data_editor(
+            f_edit[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]],
+            column_config={
+                "Include": st.column_config.CheckboxColumn("Incl", default=True, width="small"),
+                "Trade Date Str": "Trade Date",
+                "Expiry Str": "Expiry",
+                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d")
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="sz_editor"
+        )
+        # Update session state with edited values
+        for idx, row in edited_df.iterrows():
+            st.session_state["sz_include_map"][f.index[idx]] = row["Include"]
         
+        # Filter 'f' based on updated selections for the chart
+        included_indices = [f.index[idx] for idx, row in edited_df.iterrows() if row["Include"]]
+        f_chart = f.loc[included_indices].copy()
+    else:
+        f_chart = f[f_edit["Include"].values].copy()
+
+    if f_chart.empty:
+        st.info("Check boxes in the table to see data in the graphic.")
+        return
+
+    # --- Graphic Logic ---
     @st.cache_data(ttl=300)
     def get_stock_indicators(sym: str):
         try:
@@ -321,19 +360,19 @@ def run_strike_zones_app(df):
     if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
     st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
 
-    f["Signed Dollars"] = f.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
+    f_chart["Signed Dollars"] = f_chart.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
     fmt_neg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
 
     if view_mode == "Price Zones":
-        strike_min, strike_max = float(np.nanmin(f["Strike (Actual)"].values)), float(np.nanmax(f["Strike (Actual)"].values))
+        strike_min, strike_max = float(np.nanmin(f_chart["Strike (Actual)"].values)), float(np.nanmax(f_chart["Strike (Actual)"].values))
         if width_mode == "Auto": zone_w = float(next((s for s in [1, 2, 5, 10, 25, 50, 100] if s >= (max(1e-9, strike_max - strike_min) / 12.0)), 100))
         else: zone_w = float(fixed_size_choice)
         
         n_dn, n_up = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w)), int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
         lower_edge = spot - n_dn * zone_w
         total = max(1, n_dn + n_up)
-        f["ZoneIdx"] = f["Strike (Actual)"].apply(lambda x: min(total - 1, max(0, int(math.floor((x - lower_edge) / zone_w)))))
-        agg = f.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
+        f_chart["ZoneIdx"] = f_chart["Strike (Actual)"].apply(lambda x: min(total - 1, max(0, int(math.floor((x - lower_edge) / zone_w)))))
+        agg = f_chart.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
         zone_df = pd.DataFrame([(z, lower_edge + z*zone_w, lower_edge + (z+1)*zone_w) for z in range(total)], columns=["ZoneIdx","Zone_Low","Zone_High"])
         zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
         if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
@@ -352,20 +391,13 @@ def run_strike_zones_app(df):
                 st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
     else:
-        e = f.copy()
+        e = f_chart.copy()
         e["Bucket"] = pd.cut((pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days), bins=[0, 7, 30, 90, 180, 10000], labels=["0-7d", "8-30d", "31-90d", "91-180d", ">180d"], include_lowest=True)
         agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
         for _, r in agg.iterrows():
             color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
             val_str = fmt_neg(r["Net_Dollars"])
             st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-
-    if show_table:
-        st.subheader("Data Table")
-        f_disp = f.copy()
-        f_disp["Trade Date"] = f_disp["Trade Date"].dt.strftime("%d %b %y")
-        f_disp["Expiry"] = f_disp["Expiry_DT"].dt.strftime("%d %b %y")
-        st.dataframe(f_disp[["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True, hide_index=True)
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
@@ -387,26 +419,19 @@ def run_pivot_tables_app(df):
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
-    # ROW: Perfect alignment layout
     calc_cols = st.columns(6)
-    
     with calc_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
     with calc_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
     with calc_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
     
-    # Logic
     dte = (c_expiry - date.today()).days
     coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
     annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
 
-    # FIX: Push updated values explicitly into session state to force update for widgets with keys
     st.session_state["calc_out_ann"] = f"{annual_ret:.2f}%"
     st.session_state["calc_out_coc"] = f"{coc_ret:.2f}%"
     st.session_state["calc_out_dte"] = str(max(0, dte))
         
-    # Standard Streamlit dark mode label styling: 14px, #FAFAFA at 0.6 opacity
-    label_style = "font-size: 14px; margin-bottom: 8px; color: rgba(250, 250, 250, 0.6); font-family: 'Source Sans Pro', sans-serif; font-weight: 400; letter-spacing: normal;"
-    # CSS to make output boxes look identical to native Streamlit text inputs but non-interactive
     st.markdown("""
         <style>
             .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
@@ -492,7 +517,6 @@ def run_pivot_tables_app(df):
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
         return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
 
-    # Table Layout
     row1_c1, row1_c2, row1_c3 = st.columns(3); fmt = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
     with row1_c1:
         st.subheader("Calls Bought"); tbl = get_p(df_cb_f)
