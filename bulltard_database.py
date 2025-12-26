@@ -18,8 +18,8 @@ COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
     "Expiry_Table": st.column_config.TextColumn("Exp", width=90),
-    "Contracts": st.column_config.NumberColumn("Qty", width=60, format="%,d"),
-    "Dollars": st.column_config.NumberColumn("Dollars", width=110, format="$%,d"),
+    "Contracts": st.column_config.NumberColumn("Qty", width=60, format="%d"),
+    "Dollars": st.column_config.NumberColumn("Dollars", width=110, format="$%d"),
 }
 
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
@@ -389,8 +389,8 @@ def run_strike_zones_app(df):
                 "Include": st.column_config.CheckboxColumn("Incl", default=True, width="small"),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry",
-                "Contracts": st.column_config.NumberColumn("Qty", format="%,d"),
-                "Dollars": st.column_config.NumberColumn("Dollars", format="$%,d")
+                "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
+                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d")
             },
             hide_index=True,
             use_container_width=True,
