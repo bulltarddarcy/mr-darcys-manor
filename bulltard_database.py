@@ -362,13 +362,10 @@ def run_strike_zones_app(df):
 
     if show_table:
         st.subheader("Data Table")
-        df_for_editor = edit_pool[cols_to_show].copy()
-        df_for_editor["Dollars"] = df_for_editor["Dollars"].apply(lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}")
-        df_for_editor["Contracts"] = df_for_editor["Contracts"].apply(lambda x: f"{x:,.0f}")
-        edited_df = st.data_editor(df_for_editor, column_config={"Trade Date Display": "Trade Date", "Expiry Display": "Expiry", "Contracts": st.column_config.TextColumn("Qty", width=80), "Dollars": st.column_config.TextColumn("Dollars", width=110), "Included": st.column_config.CheckboxColumn(default=True)}, use_container_width=True, hide_index=True, key="strike_zones_editor")
-        if not edited_df["Included"].equals(df_for_editor["Included"]): 
-            st.session_state[state_key] = edited_df["Included"].tolist()
-            st.rerun()
+        f_disp = f.copy()
+        f_disp["Trade Date"] = f_disp["Trade Date"].dt.strftime("%d %b %y")
+        f_disp["Expiry"] = f_disp["Expiry_DT"].dt.strftime("%d %b %y")
+        st.dataframe(f_disp[["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True, hide_index=True)
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
@@ -386,35 +383,37 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
 
-    # --- Puts Sold Calculator (Clean Reconstruction) ---
+    # --- Puts Sold Calculator (3x2 Format Rebuild) ---
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
-    # ROW 1: Native Streamlit Inputs
-    in_c1, in_c2, in_c3 = st.columns(3)
-    with in_c1: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-    with in_c2: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-    with in_c3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
-    
-    # Calculation Logic
-    dte = (c_expiry - date.today()).days
-    coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
-    annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
-        
-    # ROW 2: Native Streamlit Output-styled Inputs (non-interactive via CSS pointer-events)
-    # This matches the native font, alignment, and spacing perfectly.
+    # CSS to make output boxes look like inputs but prevent typing/focus
     st.markdown("""
         <style>
+            /* Targets the specific text inputs used for output results */
             .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
                 background-color: rgba(113, 210, 138, 0.1) !important;
                 color: #71d28a !important;
                 border: 1px solid #71d28a !important;
                 font-weight: 700 !important;
-                pointer-events: none !important;
+                pointer-events: none !important; /* Prevents interaction */
+                cursor: default !important;
             }
         </style>
     """, unsafe_allow_html=True)
 
+    # ROW 1: INPUTS
+    in_c1, in_c2, in_c3 = st.columns(3)
+    with in_c1: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
+    with in_c2: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
+    with in_c3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
+    
+    # Logic
+    dte = (c_expiry - date.today()).days
+    coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
+    annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
+        
+    # ROW 2: OUTPUTS (Rebuilt as standard inputs to ensure alignment)
     out_c1, out_c2, out_c3 = st.columns(3)
     with out_c1: st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", key="calc_out_ann")
     with out_c2: st.text_input("Cash on Cash Return", value=f"{coc_ret:.2f}%", key="calc_out_coc")
@@ -439,6 +438,7 @@ def run_pivot_tables_app(df):
     ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
     pb_pool = d_range[d_range[order_type_col] == "Puts Bought"].copy()
     
+    # Matching logic
     keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
     cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
     rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
@@ -488,17 +488,20 @@ def run_pivot_tables_app(df):
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
         return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
 
-    # Pivot Table Layout
+    # Table Layout
     row1_c1, row1_c2, row1_c3 = st.columns(3); fmt = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
     with row1_c1:
         st.subheader("Calls Bought"); tbl = get_p(df_cb_f)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
+        else: st.caption("No individual calls found.")
     with row1_c2:
         st.subheader("Puts Sold"); tbl = get_p(df_ps_f)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
+        else: st.caption("No individual puts found.")
     with row1_c3:
         st.subheader("Puts Bought"); tbl = get_p(df_pb_f)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
+        else: st.caption("No individual puts found.")
     
     st.markdown("---")
     st.subheader("Risk Reversals")
