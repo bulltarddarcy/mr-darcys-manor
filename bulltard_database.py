@@ -100,7 +100,6 @@ def highlight_expiry(val):
         two_fri = this_fri + timedelta(days=14)
         if expiry_date < today: return "" 
         
-        # Updated colors per user request
         if expiry_date == this_fri: return "background-color: #b7e1cd; color: black;" 
         elif expiry_date == next_fri: return "background-color: #fce8b2; color: black;" 
         elif expiry_date == two_fri: return "background-color: #f4c7c3; color: black;" 
@@ -129,7 +128,8 @@ def run_options_database_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        default_ticker = st.session_state.get("db_ticker", "")
+        # Forced uppercase for default value and input result
+        default_ticker = st.session_state.get("db_ticker", "").upper()
         db_ticker = st.text_input("Ticker", value=default_ticker, key="db_ticker_input").strip().upper()
         st.session_state["db_ticker"] = db_ticker
     with c2: start_date = st.date_input("Trade Start Date", value=max_data_date, key="db_start")
@@ -249,7 +249,9 @@ def run_strike_zones_app(df):
     
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
-    with c1: ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
+    with c1: 
+        # Forced uppercase for default "AMZN" or user input
+        ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
     with c2: td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
     with c3: td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
     with c4: exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
@@ -382,7 +384,9 @@ def run_pivot_tables_app(df):
     c1, c2, c3, c4, c5, c6 = st.columns(6, gap="small")
     with c1: td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
     with c2: td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
-    with c3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
+    with c3: 
+        # Forced uppercase for ticker filtering
+        ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
     with c4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=1, key="pv_notional")]
     with c5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
     with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=1, key="pv_ema_filter")
@@ -561,7 +565,6 @@ try:
     elif app_choice == "RSI Divergences": run_rsi_divergences_app()
     else: run_strike_zones_app(df_global)
     
-    # Sidebar Legend with updated user colors
     with st.sidebar:
         if app_choice == "Pivot Tables":
             st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
