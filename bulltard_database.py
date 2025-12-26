@@ -383,41 +383,41 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
 
-    # --- Puts Sold Calculator (3x2 Format Rebuild) ---
+    # --- Puts Sold Calculator (Compact 6-Field Single-Row) ---
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
-    # CSS to make output boxes look like inputs but prevent typing/focus
-    st.markdown("""
-        <style>
-            /* Targets the specific text inputs used for output results */
-            .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
-                background-color: rgba(113, 210, 138, 0.1) !important;
-                color: #71d28a !important;
-                border: 1px solid #71d28a !important;
-                font-weight: 700 !important;
-                pointer-events: none !important; /* Prevents interaction */
-                cursor: default !important;
-            }
-        </style>
-    """, unsafe_allow_html=True)
-
-    # ROW 1: INPUTS
-    in_c1, in_c2, in_c3 = st.columns(3)
-    with in_c1: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-    with in_c2: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-    with in_c3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
+    # ROW: Perfect alignment layout
+    calc_cols = st.columns(6)
+    
+    with calc_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
+    with calc_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
+    with calc_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
     
     # Logic
     dte = (c_expiry - date.today()).days
     coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
     annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
         
-    # ROW 2: OUTPUTS (Rebuilt as standard inputs to ensure alignment)
-    out_c1, out_c2, out_c3 = st.columns(3)
-    with out_c1: st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", key="calc_out_ann")
-    with out_c2: st.text_input("Cash on Cash Return", value=f"{coc_ret:.2f}%", key="calc_out_coc")
-    with out_c3: st.text_input("Days to Expiration", value=str(max(0, dte)), key="calc_out_dte")
+    # Standard Streamlit dark mode label styling: 14px, #FAFAFA at 0.6 opacity
+    label_style = "font-size: 14px; margin-bottom: 8px; color: rgba(250, 250, 250, 0.6); font-family: 'Source Sans Pro', sans-serif; font-weight: 400; letter-spacing: normal;"
+    # CSS to make output boxes look identical to native Streamlit text inputs but non-interactive
+    st.markdown("""
+        <style>
+            .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
+                background-color: rgba(113, 210, 138, 0.1) !important;
+                color: #71d28a !important;
+                border: 1px solid #71d28a !important;
+                font-weight: 700 !important;
+                pointer-events: none !important;
+                cursor: default !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+    with calc_cols[3]: st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", key="calc_out_ann")
+    with calc_cols[4]: st.text_input("Cash on Cash Return", value=f"{coc_ret:.2f}%", key="calc_out_coc")
+    with calc_cols[5]: st.text_input("Days to Expiration", value=str(max(0, dte)), key="calc_out_dte")
 
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 20px; margin-bottom: 20px; align-items: center;">
@@ -438,7 +438,6 @@ def run_pivot_tables_app(df):
     ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
     pb_pool = d_range[d_range[order_type_col] == "Puts Bought"].copy()
     
-    # Matching logic
     keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
     cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
     rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
@@ -493,15 +492,12 @@ def run_pivot_tables_app(df):
     with row1_c1:
         st.subheader("Calls Bought"); tbl = get_p(df_cb_f)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-        else: st.caption("No individual calls found.")
     with row1_c2:
         st.subheader("Puts Sold"); tbl = get_p(df_ps_f)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-        else: st.caption("No individual puts found.")
     with row1_c3:
         st.subheader("Puts Bought"); tbl = get_p(df_pb_f)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-        else: st.caption("No individual puts found.")
     
     st.markdown("---")
     st.subheader("Risk Reversals")
