@@ -16,8 +16,7 @@ def get_confirmed_gdrive_data(url):
         elif '/d/' in url:
             file_id = url.split('/d/')[1].split('/')[0]
         
-        if not file_id:
-            return None
+        if not file_id: return None
             
         download_url = "https://docs.google.com/uc?export=download"
         session = requests.Session()
@@ -31,14 +30,12 @@ def get_confirmed_gdrive_data(url):
         
         if not confirm_token:
             match = re.search(r'confirm=([0-9A-Za-z_]+)', response.text)
-            if match:
-                confirm_token = match.group(1)
+            if match: confirm_token = match.group(1)
 
         if confirm_token:
             response = session.get(download_url, params={'id': file_id, 'confirm': confirm_token}, stream=True)
         
-        if response.text.strip().startswith("<!DOCTYPE html>"):
-            return "HTML_ERROR"
+        if response.text.strip().startswith("<!DOCTYPE html>"): return "HTML_ERROR"
             
         return StringIO(response.text)
     except Exception as e:
@@ -69,21 +66,24 @@ VOL_SMA_PERIOD = 30
 DIVERGENCE_LOOKBACK = 90
 SIGNAL_LOOKBACK_PERIOD = 25
 RSI_DIFF_THRESHOLD = 2
-EMA_PERIOD = 8
+EMA8_PERIOD = 8
 EMA21_PERIOD = 21
 
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
-# CSS for (1) Light shaded headers and (3) Tag Pill Styling
 st.markdown("""
     <style>
-    /* Shade the header of dataframes */
+    table { width: 100%; border-collapse: collapse; }
     thead tr th {
         background-color: #f0f2f6 !important;
         color: #31333f !important;
+        padding: 12px !important;
+        border-bottom: 2px solid #dee2e6;
     }
-    /* Style for the custom Tag Bubbles */
+    tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; }
+    .align-left { text-align: left !important; }
+    .align-center { text-align: center !important; }
     .tag-bubble {
         display: inline-block;
         padding: 2px 10px;
@@ -92,6 +92,7 @@ st.markdown("""
         font-weight: 600;
         margin-right: 4px;
         color: white;
+        white-space: nowrap;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -99,21 +100,21 @@ st.markdown("""
 st.title("📈 RSI Divergence Scanner")
 st.info("💡 See bottom of page for strategy logic and tag explanations.")
 
-# --- Helper for Tag Bubbles ---
+# --- Helpers ---
 def style_tags(tag_str):
-    if not tag_str: return ""
+    if not tag_str: return '<div class="align-left"></div>'
     tags = tag_str.split(", ")
-    html_str = ""
-    # Define colors for specific tags
+    html_str = '<div class="align-left">'
     colors = {
-        f"EMA{EMA_PERIOD}": "#4a90e2", # Blue
-        f"EMA{EMA21_PERIOD}": "#9b59b6", # Purple
-        "VOL_HIGH": "#e67e22",        # Orange
-        "V_GROW": "#27ae60"           # Green
+        f"EMA{EMA8_PERIOD}": "#4a90e2", 
+        f"EMA{EMA21_PERIOD}": "#9b59b6", 
+        "VOL_HIGH": "#e67e22",        
+        "V_GROW": "#27ae60"           
     }
     for t in tags:
-        color = colors.get(t, "#7f8c8d") # Default Gray
+        color = colors.get(t, "#7f8c8d")
         html_str += f'<span class="tag-bubble" style="background-color: {color};">{t}</span>'
+    html_str += '</div>'
     return html_str
 
 # --- Logic Functions ---
@@ -130,8 +131,7 @@ def prepare_data(df):
     w_ema8_col, w_ema21_col = 'W_EMA_8', 'W_EMA_21'
     w_high_col, w_low_col = 'W_HIGH', 'W_LOW'
 
-    if not all([date_col, close_col, vol_col, high_col, low_col]):
-        return None, None
+    if not all([date_col, close_col, vol_col, high_col, low_col]): return None, None
 
     df.index = pd.to_datetime(df[date_col])
     df = df.sort_index()
@@ -173,6 +173,7 @@ def find_divergences(df_tf, ticker, timeframe):
         lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
         is_vol_high = int(p2['Volume'] > (p2['VolSMA'] * 1.5)) if not pd.isna(p2['VolSMA']) else 0
         
+        # Bullish Divergence
         if p2['Low'] < lookback['Low'].min():
             p1 = lookback.loc[lookback['RSI'].idxmin()]
             if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
@@ -180,7 +181,8 @@ def find_divergences(df_tf, ticker, timeframe):
                     post_df = df_tf.iloc[i + 1 :]
                     if not (not post_df.empty and (post_df['RSI'] <= p1['RSI']).any()):
                         tags = []
-                        if 'EMA8' in latest_p and latest_p['Price'] >= latest_p['EMA8']: tags.append(f"EMA{EMA_PERIOD}")
+                        if 'EMA8' in latest_p and latest_p['Price'] >= latest_p['EMA8']: tags.append(f"EMA{EMA8_PERIOD}")
+                        if 'EMA21' in latest_p and latest_p['Price'] >= latest_p['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
                         if is_vol_high: tags.append("VOL_HIGH")
                         if p2['Volume'] > p1['Volume']: tags.append("V_GROW")
                         divergences.append({
@@ -190,6 +192,7 @@ def find_divergences(df_tf, ticker, timeframe):
                             'P1 Price': f"${p1['Low']:,.2f}", 'P2 Price': f"${p2['Low']:,.2f}"
                         })
 
+        # Bearish Divergence
         if p2['High'] > lookback['High'].max():
             p1 = lookback.loc[lookback['RSI'].idxmax()]
             if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD):
@@ -197,6 +200,7 @@ def find_divergences(df_tf, ticker, timeframe):
                     post_df = df_tf.iloc[i + 1 :]
                     if not (not post_df.empty and (post_df['RSI'] >= p1['RSI']).any()):
                         tags = []
+                        if 'EMA8' in latest_p and latest_p['Price'] <= latest_p['EMA8']: tags.append(f"EMA{EMA8_PERIOD}")
                         if 'EMA21' in latest_p and latest_p['Price'] <= latest_p['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
                         if is_vol_high: tags.append("VOL_HIGH")
                         if p2['Volume'] > p1['Volume']: tags.append("V_GROW")
@@ -208,53 +212,43 @@ def find_divergences(df_tf, ticker, timeframe):
                         })
     return divergences
 
-# --- Data Selection Row ---
+# --- App Logic ---
 dataset_map = load_dataset_config()
-data_option = st.pills("Select Dataset to Analyze", options=list(dataset_map.keys()), selection_mode="single", default=list(dataset_map.keys())[0])
+data_option = st.pills("Select Dataset", options=list(dataset_map.keys()), selection_mode="single", default=list(dataset_map.keys())[0])
 
 if not data_option:
-    st.warning("Please select a dataset to begin scanning.")
+    st.warning("Please select a dataset.")
     st.stop()
 
-# --- App Execution ---
 try:
     secret_key_name = dataset_map[data_option]
     target_url = st.secrets[secret_key_name]
 except KeyError:
-    st.error("Missing Secret configuration.")
+    st.error("Secret error.")
     st.stop()
 
 csv_buffer = get_confirmed_gdrive_data(target_url)
 
-if csv_buffer == "HTML_ERROR":
-    st.error("Google Drive warning: File too large to scan.")
-elif csv_buffer:
+if csv_buffer and csv_buffer != "HTML_ERROR":
     try:
         master = pd.read_csv(csv_buffer)
         t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-        
-        if not t_col:
-            st.error(f"Ticker column not found.")
-            st.stop()
-
         all_tickers = sorted(master[t_col].unique())
+        
         with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-            search_query = st.text_input("Filter ticker list...", placeholder="Type symbol here...").upper()
-            filtered_tickers = [t for t in all_tickers if search_query in t]
+            sq = st.text_input("Filter...").upper()
+            ft = [t for t in all_tickers if sq in t]
             cols = st.columns(6)
-            for idx, ticker in enumerate(filtered_tickers):
-                cols[idx % 6].write(ticker)
+            for i, ticker in enumerate(ft): cols[i % 6].write(ticker)
 
         raw_results = []
-        progress_bar = st.progress(0, text="Scanning tickers...")
+        progress_bar = st.progress(0, text="Scanning...")
         grouped = master.groupby(t_col)
-        total_groups = len(grouped)
-        
         for i, (ticker, group) in enumerate(grouped):
             d_d, d_w = prepare_data(group.copy())
             if d_d is not None: raw_results.extend(find_divergences(d_d, ticker, 'Daily'))
             if d_w is not None: raw_results.extend(find_divergences(d_w, ticker, 'Weekly'))
-            progress_bar.progress((i + 1) / total_groups)
+            progress_bar.progress((i + 1) / len(grouped))
 
         if raw_results:
             res_df = pd.DataFrame(raw_results).sort_values(by='Signal Date', ascending=False)
@@ -267,35 +261,35 @@ elif csv_buffer:
                     st.subheader(f"{emoji} {s_type} Signals")
                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                     if not tbl_df.empty:
-                        # (3) Apply tag bubbles and (2) Hide index/first column
+                        tbl_df['Ticker'] = tbl_df['Ticker'].apply(lambda x: f'<div class="align-left"><b>{x}</b></div>')
                         tbl_df['Tags'] = tbl_df['Tags'].apply(style_tags)
-                        st.write(
-                            tbl_df.drop(columns=['Type', 'Timeframe']).to_html(escape=False, index=False), 
-                            unsafe_allow_html=True
-                        )
-                    else:
-                        st.write(f"No {tf} {s_type} signals found.")
-        else:
-            st.warning("No signals detected.")
+                        tbl_df['P1 Date'] = tbl_df['P1 Date'].apply(lambda x: f'<div class="align-center">{x}</div>')
+                        tbl_df['Signal Date'] = tbl_df['Signal Date'].apply(lambda x: f'<div class="align-center">{x}</div>')
+                        tbl_df['RSI'] = tbl_df['RSI'].apply(lambda x: f'<div class="align-center">{x}</div>')
+                        tbl_df['P1 Price'] = tbl_df['P1 Price'].apply(lambda x: f'<div class="align-left">{x}</div>')
+                        tbl_df['P2 Price'] = tbl_df['P2 Price'].apply(lambda x: f'<div class="align-left">{x}</div>')
+                        
+                        html_table = tbl_df.drop(columns=['Type', 'Timeframe']).to_html(escape=False, index=False)
+                        st.markdown(html_table, unsafe_allow_html=True)
+                    else: st.write("No signals.")
+        else: st.warning("No signals.")
 
-        # --- Strategy Logic & Tags (Bottom of Page) ---
+        # --- Footer Logic ---
         st.divider()
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("📝 Strategy Logic")
             st.markdown(f"""
-            * **Signal Window**: Scans for valid signals within the last **{SIGNAL_LOOKBACK_PERIOD} periods** from the most recent data point.
-            * **Lookback Window**: Searches the preceding **{DIVERGENCE_LOOKBACK} periods** to establish historical reference points.
-            * **Bullish Divergence**: Price hits a new low relative to Lookback, but RSI is higher than the previous RSI low.
-            * **Bearish Divergence**: Price hits a new high relative to Lookback, but RSI is lower than the previous RSI high.
+            * **Signal Window**: Scans signals within the last **{SIGNAL_LOOKBACK_PERIOD} periods**.
+            * **Lookback Window**: Searches preceding **{DIVERGENCE_LOOKBACK} periods** for extremes.
+            * **Bullish Divergence**: New price low, but RSI is higher than previous low.
+            * **Bearish Divergence**: New price high, but RSI is lower than previous high.
             """)
         with col2:
             st.subheader("🏷️ Tags Explained")
             st.markdown(f"""
-            * **EMA{EMA_PERIOD}**: Price currently holding **above** the {EMA_PERIOD}-period EMA (Bullish).
-            * **EMA{EMA21_PERIOD}**: Price currently holding **below** the {EMA21_PERIOD}-period EMA (Bearish).
-            * **VOL_HIGH**: Volume on Signal Date was >150% of the **{VOL_SMA_PERIOD}-period** average.
-            * **V_GROW**: Volume on Signal Date > Volume recorded at first divergence point (P1).
+            * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if the current price is holding **above** (Bullish) or **below** (Bearish) these respective levels.
+            * **VOL_HIGH**: Volume > 150% of {VOL_SMA_PERIOD}-day average.
+            * **V_GROW**: Signal Volume > P1 Volume.
             """)
-    except Exception as e:
-        st.error(f"Processing Error: {e}")
+    except Exception as e: st.error(f"Error: {e}")
