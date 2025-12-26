@@ -398,9 +398,36 @@ def run_pivot_tables_app(df):
     
     st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
+
+    # --- Puts Sold Calculator Section ---
+    st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
+    st.markdown("<h4 style='margin-bottom: 10px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
+    calc_c1, calc_c2, calc_c3, calc_c4 = st.columns([1, 1, 1, 1.5])
     
+    with calc_c1: calc_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
+    with calc_c2: calc_premium = st.number_input("Premium", min_value=0.01, value=2.50, step=0.05, format="%.2f", key="calc_premium")
+    with calc_c3: calc_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
+    
+    # Calculate DTE and Annualised Return
+    today = date.today()
+    dte = (calc_expiry - today).days
+    if dte <= 0:
+        annual_ret = 0.0
+    else:
+        # Formula: premium / strike / dte * 365
+        annual_ret = (calc_premium / calc_strike / dte) * 365 * 100
+        
+    with calc_c4:
+        st.markdown(f"""
+        <div style='background: rgba(113, 210, 138, 0.1); border: 1px solid #71d28a; padding: 10px; border-radius: 8px; text-align: center; margin-top: 25px;'>
+            <div style='font-size: 0.8rem; color: #71d28a; font-weight: 600;'>Annualised Return</div>
+            <div style='font-size: 1.2rem; font-weight: 800; color: #71d28a;'>{annual_ret:.2f}%</div>
+            <div style='font-size: 0.7rem; color: #a1a1a1;'>{dte} Days to Expiry</div>
+        </div>
+        """, unsafe_allow_html=True)
+
     st.markdown("""
-    <div style="display: flex; gap: 20px; font-size: 14px; margin-bottom: 15px; align-items: center;">
+    <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 15px; margin-bottom: 15px; align-items: center;">
         <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#b7e1cd"></div> This Friday</div>
         <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#fce8b2"></div> Next Friday</div>
         <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#f4c7c3"></div> Two Fridays</div>
