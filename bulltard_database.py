@@ -287,9 +287,9 @@ def run_strike_zones_app(df):
     if inc_cb: allowed_sz_types.append("Calls Bought")
     if inc_ps: allowed_sz_types.append("Puts Sold")
     if inc_pb: allowed_sz_types.append("Puts Bought")
-    f = f[f[order_type_col].isin(allowed_sz_types)]
+    edit_pool_raw = f[f[order_type_col].isin(allowed_sz_types)].copy()
     
-    if f.empty:
+    if edit_pool_raw.empty:
         st.warning("No trades match current filters.")
         return
         
@@ -342,12 +342,14 @@ def run_strike_zones_app(df):
         for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
             if r["Zone_Low"] + (zone_w/2) > spot:
                 color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{fmt_neg(r["Net_Dollars"])} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                val_str = fmt_neg(r["Net_Dollars"])
+                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
         for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
             if r["Zone_Low"] + (zone_w/2) < spot:
                 color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{fmt_neg(r["Net_Dollars"])} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                val_str = fmt_neg(r["Net_Dollars"])
+                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
     else:
         e = f.copy()
@@ -355,7 +357,8 @@ def run_strike_zones_app(df):
         agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
         for _, r in agg.iterrows():
             color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
-            st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{fmt_neg(r["Net_Dollars"])} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+            val_str = fmt_neg(r["Net_Dollars"])
+            st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
     if show_table:
         st.subheader("Data Table")
@@ -394,9 +397,10 @@ def run_pivot_tables_app(df):
     annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
         
     with calc_cols[3]:
+        # Custom CSS to force read-only look without greyed-out state
         st.markdown(f"""
             <div style="font-size: 14px; margin-bottom: 8px; color: var(--text);">Annualised Return</div>
-            <div style='background: rgba(113, 210, 138, 0.1); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
+            <div style='background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
                 <span style='font-size: 14px; font-weight: 600; color: #71d28a;'>{annual_ret:.2f}%</span>
             </div>
         """, unsafe_allow_html=True)
@@ -404,7 +408,7 @@ def run_pivot_tables_app(df):
     with calc_cols[4]:
         st.markdown(f"""
             <div style="font-size: 14px; margin-bottom: 8px; color: var(--text);">Days to Expiration</div>
-            <div style='background: rgba(113, 210, 138, 0.05); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
+            <div style='background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
                 <span style='font-size: 14px; font-weight: 600; color: #71d28a;'>{max(0, dte)}</span>
             </div>
         """, unsafe_allow_html=True)
@@ -419,7 +423,7 @@ def run_pivot_tables_app(df):
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # Filtering Logic
+    # Table logic
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
