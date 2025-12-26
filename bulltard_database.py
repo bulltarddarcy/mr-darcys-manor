@@ -128,7 +128,6 @@ def run_options_database_app(df):
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        # Forced uppercase for default value and input result
         default_ticker = st.session_state.get("db_ticker", "").upper()
         db_ticker = st.text_input("Ticker", value=default_ticker, key="db_ticker_input").strip().upper()
         st.session_state["db_ticker"] = db_ticker
@@ -137,14 +136,15 @@ def run_options_database_app(df):
     with c4:
         exp_range_default = (date.today() + timedelta(days=365))
         db_exp_end = st.date_input("Expiration Range (end)", value=exp_range_default, key="db_exp")
+    
+    # (1) Order Type Filters moved to a single row under the main filters
+    st.write("Include Order Type:")
+    ot1, ot2, ot3, ot_pad = st.columns([1, 1, 1, 5])
+    with ot1: inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
+    with ot2: inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
+    with ot3: inc_pb = st.checkbox("Puts Bought", value=True, key="db_inc_pb")
     st.markdown('</div>', unsafe_allow_html=True)
     
-    with st.sidebar:
-        st.markdown("**Include Order Type**")
-        inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
-        inc_pb = st.checkbox("Puts Bought", value=True, key="db_inc_pb")
-        inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
-        
     f = df.copy()
     if db_ticker: f = f[f["Symbol"].astype(str).str.upper().eq(db_ticker)]
     if start_date: f = f[f["Trade Date"].dt.date >= start_date]
@@ -249,9 +249,7 @@ def run_strike_zones_app(df):
     
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4, gap="medium")
-    with c1: 
-        # Forced uppercase for default "AMZN" or user input
-        ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
+    with c1: ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
     with c2: td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
     with c3: td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
     with c4: exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
@@ -384,14 +382,23 @@ def run_pivot_tables_app(df):
     c1, c2, c3, c4, c5, c6 = st.columns(6, gap="small")
     with c1: td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
     with c2: td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
-    with c3: 
-        # Forced uppercase for ticker filtering
-        ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
+    with c3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
     with c4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=1, key="pv_notional")]
     with c5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
     with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=1, key="pv_ema_filter")
     
-    st.caption("ℹ️ Market Cap filtering relies on external data and can occasionally be buggy. If the tables are not populating as expected, try setting 'Mkt Cap Min' to **0B**.")
+    # (2) Updated Note and (3) In-line Expiry Legend
+    st.info("ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset 'Mkt Cap Min' to 0B and then try again.")
+    
+    # Custom HTML for 1-line legend
+    st.markdown("""
+    <div style="display: flex; gap: 20px; font-size: 14px; margin-bottom: 15px; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#b7e1cd"></div> This Friday</div>
+        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#fce8b2"></div> Next Friday</div>
+        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#f4c7c3"></div> Two Fridays</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
     st.markdown('</div>', unsafe_allow_html=True)
     
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
@@ -475,45 +482,10 @@ def run_pivot_tables_app(df):
         else: st.caption("No matched RR pairs found.")
 
 def run_rsi_divergences_app():
+    # (4) RSI Divergences Page simplification
     st.title("📈 RSI Divergences")
-
-    st.markdown("""
-        **Note:** You can view divergences of the S&P 100, NQ 100 and Mr Darcy's shitco list here: 
-        https://mr-darcys-rsi-divergence.streamlit.app/
-    """)
-    st.markdown("---")
-
-    folder_id = st.secrets.get("GDRIVE_FOLDER_ID")
-    api_key = st.secrets.get("GDRIVE_API_KEY")
-    if folder_id and api_key:
-        try:
-            query = f"'{folder_id}'+in+parents+and+name+contains+'.html'+and+trashed=false"
-            url = f"https://www.googleapis.com/drive/v3/files?q={query}&orderBy=name+desc&pageSize=1&key={api_key}"
-            response_obj = requests.get(url, timeout=10)
-            if response_obj.status_code != 200:
-                st.error(f"Google Drive API Error ({response_obj.status_code}): {response_obj.text}")
-                return
-            response = response_obj.json()
-            files = response.get('files', [])
-            if not files:
-                st.warning("No HTML files found in the specified Google Drive folder.")
-                return
-            latest_id = files[0]['id']
-            latest_name = files[0]['name']
-            content_url = f"https://www.googleapis.com/drive/v3/files/{latest_id}?alt=media&key={api_key}"
-            content_response = requests.get(content_url, timeout=10)
-            if content_response.status_code != 200:
-                st.error(f"Failed to download file content.")
-                return
-            content_response.encoding = 'utf-8'
-            html_content = content_response.text
-            st.info(f"Loaded: {latest_name}")
-            components.html(html_content, height=1200, scrolling=True)
-            return
-        except Exception as e:
-            st.error(f"Cloud load execution failed: {e}.")
-    else:
-        st.error("Google Drive Secrets (GDRIVE_FOLDER_ID / GDRIVE_API_KEY) are missing.")
+    st.write("Click the button below to visit the external RSI Divergence tracker.")
+    st.link_button("Travel to the new RSI Divergence website.", "https://mr-darcys-rsi-divergence.streamlit.app/")
 
 # --- 3. MAIN EXECUTION ---
 if "tool" in st.query_params or "ticker" in st.query_params:
@@ -565,10 +537,4 @@ try:
     elif app_choice == "RSI Divergences": run_rsi_divergences_app()
     else: run_strike_zones_app(df_global)
     
-    with st.sidebar:
-        if app_choice == "Pivot Tables":
-            st.markdown('<div class="legend-title">Expiry Legend</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#b7e1cd"></div> This Friday</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#fce8b2"></div> Next Friday</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legend-item"><div class="color-dot" style="background:#f4c7c3"></div> Two Fridays</div>', unsafe_allow_html=True)
 except Exception as e: st.error(f"Error: {e}")
