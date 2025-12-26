@@ -287,9 +287,9 @@ def run_strike_zones_app(df):
     if inc_cb: allowed_sz_types.append("Calls Bought")
     if inc_ps: allowed_sz_types.append("Puts Sold")
     if inc_pb: allowed_sz_types.append("Puts Bought")
-    edit_pool_raw = f[f[order_type_col].isin(allowed_sz_types)].copy()
+    f = f[f[order_type_col].isin(allowed_sz_types)]
     
-    if edit_pool_raw.empty:
+    if f.empty:
         st.warning("No trades match current filters.")
         return
         
@@ -362,13 +362,10 @@ def run_strike_zones_app(df):
 
     if show_table:
         st.subheader("Data Table")
-        df_for_editor = edit_pool[cols_to_show].copy()
-        df_for_editor["Dollars"] = df_for_editor["Dollars"].apply(lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}")
-        df_for_editor["Contracts"] = df_for_editor["Contracts"].apply(lambda x: f"{x:,.0f}")
-        edited_df = st.data_editor(df_for_editor, column_config={"Trade Date Display": "Trade Date", "Expiry Display": "Expiry", "Contracts": st.column_config.TextColumn("Qty", width=80), "Dollars": st.column_config.TextColumn("Dollars", width=110), "Included": st.column_config.CheckboxColumn(default=True)}, use_container_width=True, hide_index=True, key="strike_zones_editor")
-        if not edited_df["Included"].equals(df_for_editor["Included"]): 
-            st.session_state[state_key] = edited_df["Included"].tolist()
-            st.rerun()
+        f_disp = f.copy()
+        f_disp["Trade Date"] = f_disp["Trade Date"].dt.strftime("%d %b %y")
+        f_disp["Expiry"] = f_disp["Expiry_DT"].dt.strftime("%d %b %y")
+        st.dataframe(f_disp[["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True, hide_index=True)
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
@@ -401,9 +398,10 @@ def run_pivot_tables_app(df):
     coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
     annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
         
-    # ROW 2: OUTPUTS (Using var(--font) to match native inputs)
+    # ROW 2: OUTPUTS (Perfect font match using specific Streamlit CSS properties)
     calc_out_cols = st.columns(3)
-    label_style = "font-size: 14px; margin-bottom: 8px; color: #808495; font-family: var(--font), sans-serif;"
+    # Streamlit standard dark mode label styling: 14px, #FAFAFA at 0.6 opacity, weight 400
+    label_style = "font-size: 14px; margin-bottom: 8px; color: rgba(250, 250, 250, 0.6); font-family: 'Source Sans Pro', sans-serif; font-weight: 400; letter-spacing: normal;"
     box_style_base = "background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;"
     
     with calc_out_cols[0]:
@@ -440,7 +438,7 @@ def run_pivot_tables_app(df):
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # --- Filtering Logic ---
+    # --- Filtering and Table Logic ---
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
