@@ -397,7 +397,6 @@ def run_pivot_tables_app(df):
     annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
         
     with calc_cols[3]:
-        # Updated: Removed hardcoded color and font to match standard Streamlit labels
         st.markdown(f"""
             <div style="font-size: 14px; margin-bottom: 8px;">Annualised Return</div>
             <div style='background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
@@ -406,7 +405,6 @@ def run_pivot_tables_app(df):
         """, unsafe_allow_html=True)
         
     with calc_cols[4]:
-        # Updated: Removed hardcoded color and font to match standard Streamlit labels
         st.markdown(f"""
             <div style="font-size: 14px; margin-bottom: 8px;">Days to Expiration</div>
             <div style='background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
@@ -505,26 +503,28 @@ if "tool" in st.query_params or "ticker" in st.query_params:
     st.query_params.clear()
 
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
-st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
-html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg)!important;}
+
+# UPDATED CSS: Removed global color overrides that broke Light Mode
+st.markdown("""<style>
 .block-container{padding-top:1.2rem;padding-bottom:1rem;}
 .control-box{padding:14px 0; border-radius:10px;}
 .zones-panel{padding:14px 0; border-radius:10px;}
 .zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
 .zone-label{width:100px;font-weight:700; text-align: right;}
 .zone-bar{height:22px;border-radius:6px;min-width:6px}
-.zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
-.zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
+.zone-bull{background:linear-gradient(90deg, #71d28a, #60c57b)}
+.zone-bear{background:linear-gradient(90deg, #f29ca0, #e4878d)}
 .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
 .price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
-.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: var(--line); opacity: 0.6; }
+.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.6; }
 .price-badge { background: #2b3a45; color: #bfe7ff; border: 1px solid #56b6ff; border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; box-shadow: 0 2px 8px rgba(0,0,0,0.35); white-space: nowrap; margin: 0 12px; z-index: 1; }
 .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
 .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
 .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
-th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
+th,td{border:1px solid #3a3f45;padding:8px} 
+th{background:#343a40;text-align:left; color: white !important;}
 .color-dot { width: 14px; height: 14px; border-radius: 3px; }
-.light-note { color: #a1a1a1; font-size: 14px; margin-bottom: 10px; }
+.light-note { color: #808080; font-size: 14px; margin-bottom: 10px; }
 </style>""", unsafe_allow_html=True)
 
 try:
