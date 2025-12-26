@@ -18,8 +18,8 @@ COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=65),
     "Strike": st.column_config.TextColumn("Strike", width=95),
     "Expiry_Table": st.column_config.TextColumn("Exp", width=90),
-    "Contracts": st.column_config.NumberColumn("Qty", width=60, format="%d"),
-    "Dollars": st.column_config.NumberColumn("Dollars", width=110, format="$%d"),
+    "Contracts": st.column_config.NumberColumn("Qty", width=60, format="%,d"),
+    "Dollars": st.column_config.NumberColumn("Dollars", width=110, format="$%,d"),
 }
 
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
@@ -293,11 +293,9 @@ def run_strike_zones_app(df):
         st.warning("No trades match current filters.")
         return
 
-    # Initialize or verify session state for row selection
     if "sz_include_map" not in st.session_state:
         st.session_state["sz_include_map"] = {}
 
-    # Chart data is filtered based on session state "Include" checkboxes
     f_chart_filter = f.index.map(lambda x: st.session_state["sz_include_map"].get(x, True))
     f_chart = f[f_chart_filter].copy()
 
@@ -378,7 +376,6 @@ def run_strike_zones_app(df):
         st.caption("ℹ️ Uncheck rows to exclude them from the Strike Zone visual above.")
         
         f_table = f.copy()
-        # insert boolean "Include" column as the first column
         f_table.insert(0, "Include", [st.session_state["sz_include_map"].get(idx, True) for idx in f.index])
         f_table["Trade Date Str"] = f_table["Trade Date"].dt.strftime("%d %b %y")
         f_table["Expiry Str"] = f_table["Expiry_DT"].dt.strftime("%d %b %y")
@@ -389,15 +386,14 @@ def run_strike_zones_app(df):
                 "Include": st.column_config.CheckboxColumn("Incl", default=True, width="small"),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry",
-                "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
-                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d")
+                "Contracts": st.column_config.NumberColumn("Qty", format="%,d"),
+                "Dollars": st.column_config.NumberColumn("Dollars", format="$%,d")
             },
             hide_index=True,
             use_container_width=True,
             key="sz_editor"
         )
 
-        # Detect changes and force rerun to update graphic
         changes_detected = False
         for i, idx in enumerate(f.index):
             new_val = edited_df.iloc[i]["Include"]
@@ -437,7 +433,6 @@ def run_pivot_tables_app(df):
     coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
     annual_ret = (coc_ret / max(1, dte)) * 365 if dte >= 0 else 0.0
 
-    # Pushing explicitly to session state to ensure real-time UI updates
     st.session_state["calc_out_ann"] = f"{annual_ret:.2f}%"
     st.session_state["calc_out_coc"] = f"{coc_ret:.2f}%"
     st.session_state["calc_out_dte"] = str(max(0, dte))
