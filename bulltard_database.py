@@ -384,7 +384,6 @@ def run_pivot_tables_app(df):
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='margin-bottom: 10px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
-    # Create the 5-column row for calculator
     calc_cols = st.columns(5)
     with calc_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
     with calc_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
@@ -395,7 +394,6 @@ def run_pivot_tables_app(df):
     annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
         
     with calc_cols[3]:
-        # Annualised Return box styled to match Streamlit's internal layout perfectly
         st.markdown(f"""
             <div style="font-size: 14px; margin-bottom: 8px; color: var(--text);">Annualised Return</div>
             <div style='background: rgba(113, 210, 138, 0.1); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
@@ -404,9 +402,8 @@ def run_pivot_tables_app(df):
         """, unsafe_allow_html=True)
         
     with calc_cols[4]:
-        # DTE box styled to match Streamlit's internal layout perfectly
         st.markdown(f"""
-            <div style="font-size: 14px; margin-bottom: 8px; color: var(--text);">Days to Expiry</div>
+            <div style="font-size: 14px; margin-bottom: 8px; color: var(--text);">Days to Expiration</div>
             <div style='background: rgba(113, 210, 138, 0.05); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
                 <span style='font-size: 14px; font-weight: 600; color: #71d28a;'>{max(0, dte)}</span>
             </div>
@@ -422,6 +419,7 @@ def run_pivot_tables_app(df):
     
     st.markdown('</div>', unsafe_allow_html=True)
     
+    # Filtering Logic
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
