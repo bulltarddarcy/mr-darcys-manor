@@ -137,7 +137,7 @@ def run_options_database_app(df):
         exp_range_default = (date.today() + timedelta(days=365))
         db_exp_end = st.date_input("Expiration Range (end)", value=exp_range_default, key="db_exp")
     
-    # Checkboxes row - text wrap prevented by column ratio
+    # Checkbox layout adjusted to prevent wrapping
     ot1, ot2, ot3, ot_pad = st.columns([1.5, 1.5, 1.5, 5.5])
     with ot1: inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
     with ot2: inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
@@ -247,32 +247,39 @@ def run_strike_zones_app(df):
     exp_range_default = (date.today() + timedelta(days=365))
     
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4, gap="medium")
-    with c1: ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
-    with c2: td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
-    with c3: td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
-    with c4: exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
     
-    # Chart config row
-    sc1, sc2, sc3, sc4 = st.columns(4, gap="medium")
+    # Row 1: Primary Data Filters
+    c1, c2, c3, c4 = st.columns(4, gap="small")
+    with c1: ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
+    with c2: td_start = st.date_input("Trade Start", value=None, key="sz_start")
+    with c3: td_end = st.date_input("Trade End", value=None, key="sz_end")
+    with c4: exp_end = st.date_input("Exp. End", value=exp_range_default, key="sz_exp")
+    
+    # Row 2: Streamlined Chart Configuration
+    st.markdown('<div style="margin-top: -15px;"></div>', unsafe_allow_html=True)
+    sc1, sc2, sc3, sc4 = st.columns([1.5, 2, 2.5, 2], gap="small")
+    
     with sc1:
-        st.markdown("**View Mode**")
-        view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], label_visibility="collapsed")
+        view_mode = st.selectbox("View", ["Price Zones", "Expiry Buckets"], label_visibility="visible")
+    
     with sc2:
-        st.markdown("**Zone Width**")
-        width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], label_visibility="collapsed")
-        fixed_size_choice = 10
-        if width_mode == "Fixed": 
-            fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
+        width_mode = st.radio("Sizing", ["Auto", "Fixed"], horizontal=True)
+        if width_mode == "Fixed":
+            fixed_size_choice = st.select_slider("Size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
+        else:
+            fixed_size_choice = 10
+            
     with sc3:
-        st.markdown("**Include Order Type**")
-        inc_calls_bought = st.checkbox("Calls Bought", value=True)
-        inc_puts_sold    = st.checkbox("Puts Sold", value=True)
-        inc_puts_bought  = st.checkbox("Puts Bought", value=True)
+        st.write("Orders:")
+        o_cols = st.columns(3)
+        with o_cols[0]: inc_calls_bought = st.checkbox("CB", value=True, help="Calls Bought")
+        with o_cols[1]: inc_puts_sold = st.checkbox("PS", value=True, help="Puts Sold")
+        with o_cols[2]: inc_puts_bought = st.checkbox("PB", value=True, help="Puts Bought")
+            
     with sc4:
-        st.markdown("**Other Options**")
-        hide_empty      = st.checkbox("Hide Empty Zones", value=True)
-        show_table       = st.checkbox("Show Strike Zone Table", value=True)
+        st.write("Display:")
+        hide_empty = st.checkbox("Hide Empty", value=True)
+        show_table = st.checkbox("Show Table", value=True)
     
     st.markdown("---")
     st.markdown('</div>', unsafe_allow_html=True)
