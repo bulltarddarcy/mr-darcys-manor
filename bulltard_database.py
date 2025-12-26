@@ -137,7 +137,6 @@ def run_options_database_app(df):
         exp_range_default = (date.today() + timedelta(days=365))
         db_exp_end = st.date_input("Expiration Range (end)", value=exp_range_default, key="db_exp")
     
-    # Updated: Instruction text removed and column widths increased to prevent text wrapping
     ot1, ot2, ot3, ot_pad = st.columns([1.5, 1.5, 1.5, 5.5])
     with ot1: inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
     with ot2: inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
@@ -243,7 +242,8 @@ def run_rankings_app(df):
         st.dataframe(bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bear_df))
 
 def run_strike_zones_app(df):
-    st.title("📊 Options Strike Zones")
+    # (1) Renamed page to 📊 Strike Zones
+    st.title("📊 Strike Zones")
     exp_range_default = (date.today() + timedelta(days=365))
     
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
@@ -252,22 +252,29 @@ def run_strike_zones_app(df):
     with c2: td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
     with c3: td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
     with c4: exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
-    st.markdown('</div>', unsafe_allow_html=True)
     
-    with st.sidebar:
+    # (2) Moved sections from sidebar underneath the primary filters
+    st.markdown("---")
+    sc1, sc2, sc3, sc4 = st.columns(4, gap="medium")
+    with sc1:
         st.markdown("**View Mode**")
         view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], label_visibility="collapsed")
+    with sc2:
         st.markdown("**Zone Width**")
         width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], label_visibility="collapsed")
         fixed_size_choice = 10
-        if width_mode == "Fixed": fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
+        if width_mode == "Fixed": 
+            fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
+    with sc3:
         st.markdown("**Include Order Type**")
         inc_calls_bought = st.checkbox("Calls Bought", value=True)
         inc_puts_sold    = st.checkbox("Puts Sold", value=True)
         inc_puts_bought  = st.checkbox("Puts Bought", value=True)
+    with sc4:
         st.markdown("**Other Options**")
         hide_empty      = st.checkbox("Hide Empty Zones", value=True)
         show_table       = st.checkbox("Show Strike Zone Table", value=True)
+    st.markdown('</div>', unsafe_allow_html=True)
         
     f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
     if td_start: f = f[f["Trade Date"].dt.date >= td_start]
@@ -275,7 +282,13 @@ def run_strike_zones_app(df):
     today_val = date.today()
     f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
     order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
-    edit_pool_raw = f[f[order_type_col].isin(["Calls Bought","Puts Sold","Puts Bought"])].copy()
+    
+    # Filtering based on in-page checkboxes
+    allowed_sz_types = []
+    if inc_calls_bought: allowed_sz_types.append("Calls Bought")
+    if inc_puts_sold: allowed_sz_types.append("Puts Sold")
+    if inc_puts_bought: allowed_sz_types.append("Puts Bought")
+    edit_pool_raw = f[f[order_type_col].isin(allowed_sz_types)].copy()
     
     if edit_pool_raw.empty:
         st.warning("No trades match current filters.")
