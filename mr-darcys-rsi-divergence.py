@@ -75,23 +75,27 @@ EMA21_PERIOD = 21
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
-# ADVANCED CSS: Targets the Streamlit theme variables to force-neutralize the Red
+# THE NUCLEAR OPTION FOR CSS: 
+# Overrides the root primary color variable that st.pills uses for its "active" state.
 st.markdown("""
     <style>
-    /* Force change the primary color variable for the pill container */
-    [data-testid="stPills"] {
-        --st-colors-primary: rgb(71, 85, 105);
+    :root {
+        --primary-color: #475569;
     }
-    /* Comprehensive fallback selector for the active pill button */
+    /* Specific override for the pill highlight to ensure Slate Blue */
     div[data-testid="stPills"] button[aria-checked="true"] {
-        background-color: rgb(71, 85, 105) !important;
+        background-color: #475569 !important;
         color: white !important;
-        border-color: rgb(71, 85, 105) !important;
-        box-shadow: none !important;
+        border: 1px solid #475569 !important;
     }
-    /* Target the text color specifically in case of theme overrides */
-    div[data-testid="stPills"] button[aria-checked="true"] p {
+    /* Neutralize the hover effect */
+    div[data-testid="stPills"] button:hover {
+        border-color: #475569 !important;
+        color: #475569 !important;
+    }
+    div[data-testid="stPills"] button[aria-checked="true"]:hover {
         color: white !important;
+        background-color: #334155 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -281,8 +285,8 @@ elif csv_buffer:
         with col2:
             st.subheader("🏷️ Tags Explained")
             st.markdown(f"""
-            * **EMA{EMA_PERIOD}**: Applied to **Bullish** signals when the current price is holding **above** the {EMA_PERIOD}-period EMA.
-            * **EMA{EMA21_PERIOD}**: Applied to **Bearish** signals when the current price is holding **below** the {EMA21_PERIOD}-period EMA.
+            * **EMA{EMA_PERIOD}**: Added to **Bullish** signals if the current price is holding **above** the {EMA_PERIOD}-period EMA.
+            * **EMA{EMA21_PERIOD}**: Added to **Bearish** signals if the current price is holding **below** the {EMA21_PERIOD}-period EMA.
             * **VOL_HIGH**: Volume on the Signal Date was >150% of the **{VOL_SMA_PERIOD}-period** average.
             * **V_GROW**: Volume on the Signal Date is higher than the volume recorded at the first divergence point (P1).
             """)
