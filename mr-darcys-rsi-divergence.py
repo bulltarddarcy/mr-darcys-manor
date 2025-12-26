@@ -75,15 +75,23 @@ st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 st.markdown("""
     <style>
     table { width: 100%; border-collapse: collapse; }
+    
+    /* Header Styling and Alignment */
     thead tr th {
         background-color: #f0f2f6 !important;
         color: #31333f !important;
         padding: 12px !important;
         border-bottom: 2px solid #dee2e6;
     }
+    
+    /* Body Cell Padding */
     tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; }
+
+    /* Alignment Rules for Headers AND Cells */
     .align-left { text-align: left !important; }
     .align-center { text-align: center !important; }
+
+    /* Tag Bubble Styling */
     .tag-bubble {
         display: inline-block;
         padding: 2px 10px;
@@ -261,16 +269,36 @@ if csv_buffer and csv_buffer != "HTML_ERROR":
                     st.subheader(f"{emoji} {s_type} Signals")
                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                     if not tbl_df.empty:
-                        tbl_df['Ticker'] = tbl_df['Ticker'].apply(lambda x: f'<div class="align-left"><b>{x}</b></div>')
-                        tbl_df['Tags'] = tbl_df['Tags'].apply(style_tags)
-                        tbl_df['P1 Date'] = tbl_df['P1 Date'].apply(lambda x: f'<div class="align-center">{x}</div>')
-                        tbl_df['Signal Date'] = tbl_df['Signal Date'].apply(lambda x: f'<div class="align-center">{x}</div>')
-                        tbl_df['RSI'] = tbl_df['RSI'].apply(lambda x: f'<div class="align-center">{x}</div>')
-                        tbl_df['P1 Price'] = tbl_df['P1 Price'].apply(lambda x: f'<div class="align-left">{x}</div>')
-                        tbl_df['P2 Price'] = tbl_df['P2 Price'].apply(lambda x: f'<div class="align-left">{x}</div>')
+                        # Drop columns not needed for view
+                        display_df = tbl_df.drop(columns=['Type', 'Timeframe'])
                         
-                        html_table = tbl_df.drop(columns=['Type', 'Timeframe']).to_html(escape=False, index=False)
-                        st.markdown(html_table, unsafe_allow_html=True)
+                        # Define Column-to-Alignment mapping for headers
+                        align_map = {
+                            'Ticker': 'align-left', 'Tags': 'align-left',
+                            'P1 Price': 'align-left', 'P2 Price': 'align-left',
+                            'P1 Date': 'align-center', 'Signal Date': 'align-center', 'RSI': 'align-center'
+                        }
+
+                        # Construct HTML manually for absolute control over alignment
+                        html = '<table><thead><tr>'
+                        for col in display_df.columns:
+                            cls = align_map.get(col, 'align-center')
+                            html += f'<th class="{cls}">{col}</th>'
+                        html += '</tr></thead><tbody>'
+                        
+                        for _, row in display_df.iterrows():
+                            html += '<tr>'
+                            html += f'<td class="align-left"><b>{row["Ticker"]}</b></td>'
+                            html += f'<td class="align-left">{style_tags(row["Tags"])}</td>'
+                            html += f'<td class="align-center">{row["P1 Date"]}</td>'
+                            html += f'<td class="align-center">{row["Signal Date"]}</td>'
+                            html += f'<td class="align-center">{row["RSI"]}</td>'
+                            html += f'<td class="align-left">{row["P1 Price"]}</td>'
+                            html += f'<td class="align-left">{row["P2 Price"]}</td>'
+                            html += '</tr>'
+                        html += '</tbody></table>'
+                        
+                        st.markdown(html, unsafe_allow_html=True)
                     else: st.write("No signals.")
         else: st.warning("No signals.")
 
@@ -288,7 +316,7 @@ if csv_buffer and csv_buffer != "HTML_ERROR":
         with col2:
             st.subheader("🏷️ Tags Explained")
             st.markdown(f"""
-            * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if the current price is holding **above** (Bullish) or **below** (Bearish) these respective levels.
+            * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if current price is holding **above** (Bullish) or **below** (Bearish) these levels.
             * **VOL_HIGH**: Volume > 150% of {VOL_SMA_PERIOD}-day average.
             * **V_GROW**: Signal Volume > P1 Volume.
             """)
