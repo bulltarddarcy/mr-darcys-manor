@@ -390,17 +390,16 @@ def run_pivot_tables_app(df):
     # ROW: Perfect alignment layout
     calc_cols = st.columns(6)
     
+    # Inputs (Column 0-2)
     with calc_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
     with calc_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
     with calc_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
     
-    # Logic
+    # --- MATH LOGIC MOVED HERE (So outputs update with inputs in real-time) ---
     dte = (c_expiry - date.today()).days
     coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
-    annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
+    annual_ret = (coc_ret / max(1, dte)) * 365 if dte >= 0 else 0.0
         
-    # Standard Streamlit dark mode label styling: 14px, #FAFAFA at 0.6 opacity
-    label_style = "font-size: 14px; margin-bottom: 8px; color: rgba(250, 250, 250, 0.6); font-family: 'Source Sans Pro', sans-serif; font-weight: 400; letter-spacing: normal;"
     # CSS to make output boxes look identical to native Streamlit text inputs but non-interactive
     st.markdown("""
         <style>
@@ -415,6 +414,7 @@ def run_pivot_tables_app(df):
         </style>
     """, unsafe_allow_html=True)
 
+    # Outputs (Column 3-5)
     with calc_cols[3]: st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", key="calc_out_ann")
     with calc_cols[4]: st.text_input("Cash on Cash Return", value=f"{coc_ret:.2f}%", key="calc_out_coc")
     with calc_cols[5]: st.text_input("Days to Expiration", value=str(max(0, dte)), key="calc_out_dte")
