@@ -397,11 +397,13 @@ def run_pivot_tables_app(df):
     annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
         
     with calc_cols[3]:
-        # Using native text_input with disabled=True to match look of preceding widgets
+        # Using native text_input with disabled=True. 
+        # CSS override below ensures color/opacity matches active inputs.
         st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", disabled=True, key="out_ann_ret")
         
     with calc_cols[4]:
-        # Using native text_input with disabled=True to match look of preceding widgets
+        # Using native text_input with disabled=True. 
+        # CSS override below ensures color/opacity matches active inputs.
         st.text_input("Days to Expiration", value=str(max(0, dte)), disabled=True, key="out_dte")
 
     st.markdown("""
@@ -498,11 +500,17 @@ st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎"
 st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
 html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg)!important;}
 
-/* Fix for disabled input text color to prevent fading */
-.stTextInput input:disabled {
+/* Fix for disabled input text color to prevent fading/graying out */
+[data-testid="stWidgetLabel"] p {
+    color: var(--text) !important;
+    opacity: 1 !important;
+}
+
+[data-testid="stTextInput"] input:disabled {
     -webkit-text-fill-color: var(--text) !important;
     color: var(--text) !important;
     opacity: 1 !important;
+    cursor: not-allowed;
 }
 
 .block-container{padding-top:1.2rem;padding-bottom:1rem;}
