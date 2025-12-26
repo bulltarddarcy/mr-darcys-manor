@@ -21,7 +21,6 @@ def get_confirmed_gdrive_data(url):
             
         download_url = "https://docs.google.com/uc?export=download"
         session = requests.Session()
-        
         response = session.get(download_url, params={'id': file_id}, stream=True)
         
         confirm_token = None
@@ -51,10 +50,8 @@ def load_dataset_config():
     try:
         if "URL_CONFIG" not in st.secrets:
             return {"Darcy Data": "URL_DARCY", "S&P 100 Data": "URL_SP100"}
-            
         config_url = st.secrets["URL_CONFIG"]
         buffer = get_confirmed_gdrive_data(config_url)
-        
         if buffer and buffer != "HTML_ERROR":
             lines = buffer.getvalue().splitlines()
             config_dict = {}
@@ -77,6 +74,21 @@ EMA21_PERIOD = 21
 
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
+
+# Custom CSS to change the st.pills highlight color from red to a neutral Slate Blue
+st.markdown("""
+    <style>
+    /* Change background of selected pill */
+    button[data-baseweb="tab"], .st-emotion-cache-12w0qcf {
+        border-radius: 20px;
+    }
+    div[data-testid="stPills"] button[aria-checked="true"] {
+        background-color: #475569 !important;
+        color: white !important;
+    }
+    </style>
+    """, unsafe_allow_Costs=True)
+
 st.title("📈 RSI Divergence Scanner")
 
 # 1. Top Note
@@ -85,7 +97,6 @@ st.info("💡 See bottom of page for strategy logic and tag explanations.")
 # --- Logic Functions ---
 def prepare_data(df):
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
-    
     date_col = next((col for col in df.columns if 'DATE' in col), None)
     close_col = next((col for col in df.columns if 'CLOSE' in col and 'W_' not in col), None)
     vol_col = next((col for col in df.columns if ('VOL' in col or 'VOLUME' in col) and 'W_' not in col), None)
@@ -149,7 +160,7 @@ def find_divergences(df_tf, ticker, timeframe):
                         tags = []
                         if 'EMA8' in latest_p and latest_p['Price'] >= latest_p['EMA8']: tags.append(f"EMA{EMA_PERIOD}")
                         if is_vol_high: tags.append("VOL_HIGH")
-                        if p2['Volume'] > p1['Volume']: tags.append("V_GROWTH")
+                        if p2['Volume'] > p1['Volume']: tags.append("V_GROW")
                         divergences.append({
                             'Ticker': ticker, 'Type': 'Bullish', 'Timeframe': timeframe, 'Tags': ", ".join(tags),
                             'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
@@ -166,7 +177,7 @@ def find_divergences(df_tf, ticker, timeframe):
                         tags = []
                         if 'EMA21' in latest_p and latest_p['Price'] <= latest_p['EMA21']: tags.append(f"EMA{EMA21_PERIOD}")
                         if is_vol_high: tags.append("VOL_HIGH")
-                        if p2['Volume'] > p1['Volume']: tags.append("V_GROWTH")
+                        if p2['Volume'] > p1['Volume']: tags.append("V_GROW")
                         divergences.append({
                             'Ticker': ticker, 'Type': 'Bearish', 'Timeframe': timeframe, 'Tags': ", ".join(tags),
                             'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
@@ -175,7 +186,7 @@ def find_divergences(df_tf, ticker, timeframe):
                         })
     return divergences
 
-# --- Data Selection Row (Toggles) ---
+# --- Data Selection Row ---
 dataset_map = load_dataset_config()
 data_option = st.pills(
     "Select Dataset to Analyze",
@@ -196,7 +207,6 @@ except KeyError as e:
     st.error(f"Missing Secret: Could not find the key '{e}' in your Streamlit Secrets.")
     st.stop()
 
-st.write(f"Connecting to {data_option}...")
 csv_buffer = get_confirmed_gdrive_data(target_url)
 
 if csv_buffer == "HTML_ERROR":
@@ -209,6 +219,17 @@ elif csv_buffer:
         if not t_col:
             st.error(f"Ticker column not found.")
             st.stop()
+
+        # --- VIEW SCANNED TICKERS (The "Low Overhead" approach) ---
+        all_tickers = sorted(master[t_col].unique())
+        with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
+            search_query = st.text_input("Filter ticker list...", placeholder="Type symbol here...").upper()
+            filtered_tickers = [t for t in all_tickers if search_query in t]
+            
+            # Show in 6 columns for clean layout
+            cols = st.columns(6)
+            for idx, ticker in enumerate(filtered_tickers):
+                cols[idx % 6].write(ticker)
 
         raw_results = []
         progress_bar = st.progress(0, text="Scanning tickers...")
@@ -244,17 +265,18 @@ elif csv_buffer:
         with col1:
             st.subheader("📝 Strategy Logic")
             st.markdown(f"""
-            * **Lookback Window**: Scans previous **{DIVERGENCE_LOOKBACK} periods** for price extremes.
-            * **Bullish Divergence**: Price hits a new low in the lookback window, but RSI is higher than its previous low.
-            * **Bearish Divergence**: Price hits a new high in the lookback window, but RSI is lower than its previous high.
-            * **Signal Window**: Scans for signals within the last **{SIGNAL_LOOKBACK_PERIOD} periods**.
+            * **Signal Window**: The scanner looks for valid divergences occurring within the last **{SIGNAL_LOOKBACK_PERIOD} periods** from the most recent data point.
+            * **Lookback Window**: For every point in the Signal Window, the scanner checks the preceding **{DIVERGENCE_LOOKBACK} periods** to establish price highs/lows and RSI extremes.
+            * **Bullish Divergence**: Price hits a new low relative to the Lookback Window, but RSI is higher than the previous RSI low found in that window.
+            * **Bearish Divergence**: Price hits a new high relative to the Lookback Window, but RSI is lower than the previous RSI high found in that window.
             """)
         with col2:
             st.subheader("🏷️ Tags Explained")
             st.markdown(f"""
-            * **EMA{EMA_PERIOD} / EMA{EMA21_PERIOD}**: Price is currently holding above/below the respective EMA.
-            * **VOL_HIGH**: Volume on Signal Date was >150% of **{VOL_SMA_PERIOD}-day** average.
-            * **V_GROWTH**: Volume on Signal Date > Volume on first point (P1).
+            * **EMA{EMA_PERIOD} (Bullish)**: Price is currently holding **above** the {EMA_PERIOD}-period EMA.
+            * **EMA{EMA21_PERIOD} (Bearish)**: Price is currently holding **below** the {EMA21_PERIOD}-period EMA.
+            * **VOL_HIGH**: Volume on the Signal Date was >150% of the **{VOL_SMA_PERIOD}-period** average.
+            * **V_GROW**: Volume on the Signal Date is higher than the volume on the first divergence point (P1).
             """)
 
     except Exception as e:
