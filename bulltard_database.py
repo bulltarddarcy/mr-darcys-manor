@@ -412,12 +412,21 @@ def run_pivot_tables_app(df):
     annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
         
     with calc_c4:
-        # Use text input without disabled=True to avoid grey look
-        # User input in these boxes is ignored because we don't save the result to a variable
-        st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", key="calc_res_ann")
+        # Mocking the text_input style with HTML to allow updates without the "greyed out" disabled look
+        st.markdown(f"""
+            <label style="font-size: 14px; display: block; margin-bottom: 8px;">Annualised Return</label>
+            <div style='background: rgba(113, 210, 138, 0.1); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
+                <span style='font-size: 14px; font-weight: 600; color: #71d28a;'>{annual_ret:.2f}%</span>
+            </div>
+        """, unsafe_allow_html=True)
         
     with calc_c5:
-        st.text_input("Days to Expiry", value=str(max(0, dte)), key="calc_res_dte")
+        st.markdown(f"""
+            <label style="font-size: 14px; display: block; margin-bottom: 8px;">Days to Expiry</label>
+            <div style='background: rgba(113, 210, 138, 0.05); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
+                <span style='font-size: 14px; font-weight: 600; color: #71d28a;'>{max(0, dte)}</span>
+            </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 20px; margin-bottom: 20px; align-items: center;">
@@ -429,6 +438,7 @@ def run_pivot_tables_app(df):
     
     st.markdown('</div>', unsafe_allow_html=True)
     
+    # Filtering Logic (Risk Reversals now use the same filters)
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty:
         st.info("No data found for the selected date range.")
@@ -499,8 +509,7 @@ def run_pivot_tables_app(df):
     with col3:
         st.subheader("Risk Reversals"); tbl = get_p(df_rr_f, is_rr=True)
         if not tbl.empty: 
-            st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT); 
-            st.caption("ℹ️ Reflects matched pairs using active filters.")
+            st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
         else: st.caption("No matched RR pairs found.")
 
 def run_rsi_divergences_app():
@@ -533,8 +542,6 @@ html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg
 .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
 .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
 th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-.legend-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; margin-top: 25px; text-transform: uppercase; letter-spacing: 0.8px; }
-.legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 14px; }
 .color-dot { width: 14px; height: 14px; border-radius: 3px; }
 .light-note { color: #a1a1a1; font-size: 14px; margin-bottom: 10px; }
 </style>""", unsafe_allow_html=True)
