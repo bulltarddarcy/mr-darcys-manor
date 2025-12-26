@@ -287,9 +287,9 @@ def run_strike_zones_app(df):
     if inc_cb: allowed_sz_types.append("Calls Bought")
     if inc_ps: allowed_sz_types.append("Puts Sold")
     if inc_pb: allowed_sz_types.append("Puts Bought")
-    edit_pool_raw = f[f[order_type_col].isin(allowed_sz_types)].copy()
+    f = f[f[order_type_col].isin(allowed_sz_types)]
     
-    if edit_pool_raw.empty:
+    if f.empty:
         st.warning("No trades match current filters.")
         return
         
@@ -362,13 +362,10 @@ def run_strike_zones_app(df):
 
     if show_table:
         st.subheader("Data Table")
-        df_for_editor = edit_pool[cols_to_show].copy()
-        df_for_editor["Dollars"] = df_for_editor["Dollars"].apply(lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}")
-        df_for_editor["Contracts"] = df_for_editor["Contracts"].apply(lambda x: f"{x:,.0f}")
-        edited_df = st.data_editor(df_for_editor, column_config={"Trade Date Display": "Trade Date", "Expiry Display": "Expiry", "Contracts": st.column_config.TextColumn("Qty", width=80), "Dollars": st.column_config.TextColumn("Dollars", width=110), "Included": st.column_config.CheckboxColumn(default=True)}, use_container_width=True, hide_index=True, key="strike_zones_editor")
-        if not edited_df["Included"].equals(df_for_editor["Included"]): 
-            st.session_state[state_key] = edited_df["Included"].tolist()
-            st.rerun()
+        f_disp = f.copy()
+        f_disp["Trade Date"] = f_disp["Trade Date"].dt.strftime("%d %b %y")
+        f_disp["Expiry"] = f_disp["Expiry_DT"].dt.strftime("%d %b %y")
+        st.dataframe(f_disp[["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True, hide_index=True)
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
@@ -386,31 +383,43 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
 
-    # --- COMPACT Puts Sold Calculator Section ---
+    # --- RESTRUCTURED Puts Sold Calculator ---
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
-    # Unified row for inputs and results
-    calc_cols = st.columns([1, 1, 1, 1, 1], gap="small")
-    with calc_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-    with calc_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-    with calc_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
+    # ROW 1: INPUTS
+    calc_in_cols = st.columns(3)
+    with calc_in_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
+    with calc_in_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
+    with calc_in_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
     
+    # Logic
     dte = (c_expiry - date.today()).days
-    annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
+    coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
+    annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
         
-    with calc_cols[3]:
+    # ROW 2: OUTPUTS
+    calc_out_cols = st.columns(3)
+    with calc_out_cols[0]:
         st.markdown(f"""
-            <div style="font-size: 14px; margin-bottom: 8px; color: #808495; font-family: sans-serif;">Annualised Ret.</div>
-            <div style='background: rgba(113, 210, 138, 0.08); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center; justify-content: center;'>
+            <div style="font-size: 14px; margin-bottom: 8px; color: #808495; font-family: sans-serif;">Annualised Return</div>
+            <div style='background: rgba(113, 210, 138, 0.08); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
                 <span style='font-size: 15px; font-weight: 700; color: #71d28a;'>{annual_ret:.2f}%</span>
             </div>
         """, unsafe_allow_html=True)
         
-    with calc_cols[4]:
+    with calc_out_cols[1]:
         st.markdown(f"""
-            <div style="font-size: 14px; margin-bottom: 8px; color: #808495; font-family: sans-serif;">DTE</div>
-            <div style='background: rgba(113, 210, 138, 0.04); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center; justify-content: center;'>
+            <div style="font-size: 14px; margin-bottom: 8px; color: #808495; font-family: sans-serif;">Cash on Cash Return</div>
+            <div style='background: rgba(113, 210, 138, 0.08); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
+                <span style='font-size: 15px; font-weight: 700; color: #71d28a;'>{coc_ret:.2f}%</span>
+            </div>
+        """, unsafe_allow_html=True)
+
+    with calc_out_cols[2]:
+        st.markdown(f"""
+            <div style="font-size: 14px; margin-bottom: 8px; color: #808495; font-family: sans-serif;">Days to Expiration</div>
+            <div style='background: rgba(113, 210, 138, 0.04); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
                 <span style='font-size: 15px; font-weight: 700; color: #71d28a;'>{max(0, dte)}</span>
             </div>
         """, unsafe_allow_html=True)
