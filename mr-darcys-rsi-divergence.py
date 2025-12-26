@@ -75,18 +75,22 @@ EMA21_PERIOD = 21
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
-# UPDATED CSS: Targets the pill selection more broadly to override the default red
+# ADVANCED CSS: Targets the Streamlit theme variables to force-neutralize the Red
 st.markdown("""
     <style>
-    /* Target the selected pill specifically */
+    /* Force change the primary color variable for the pill container */
+    [data-testid="stPills"] {
+        --st-colors-primary: rgb(71, 85, 105);
+    }
+    /* Comprehensive fallback selector for the active pill button */
     div[data-testid="stPills"] button[aria-checked="true"] {
         background-color: rgb(71, 85, 105) !important;
         color: white !important;
         border-color: rgb(71, 85, 105) !important;
+        box-shadow: none !important;
     }
-    /* Ensure the hover state on selected pill doesn't revert to red */
-    div[data-testid="stPills"] button[aria-checked="true"]:hover {
-        background-color: rgb(51, 65, 85) !important;
+    /* Target the text color specifically in case of theme overrides */
+    div[data-testid="stPills"] button[aria-checked="true"] p {
         color: white !important;
     }
     </style>
@@ -269,10 +273,10 @@ elif csv_buffer:
         with col1:
             st.subheader("📝 Strategy Logic")
             st.markdown(f"""
-            * **Signal Window**: The scanner checks for valid signals occurring within the last **{SIGNAL_LOOKBACK_PERIOD} periods** from the most recent data point available.
-            * **Lookback Window**: For every point in the Signal Window, the scanner searches the preceding **{DIVERGENCE_LOOKBACK} periods** to establish historical reference points.
-            * **Bullish Divergence**: Price hits a new low relative to the Lookback Window, but the RSI is higher than the previous RSI low found within that window.
-            * **Bearish Divergence**: Price hits a new high relative to the Lookback Window, but the RSI is lower than the previous RSI high found within that window.
+            * **Signal Window**: The scanner checks for valid signals occurring within the last **{SIGNAL_LOOKBACK_PERIOD} periods** from the most recent data point available in the file.
+            * **Lookback Window**: For every potential signal found in the Signal Window, the scanner searches the preceding **{DIVERGENCE_LOOKBACK} periods** to establish historical reference points for price and RSI.
+            * **Bullish Divergence**: Price hits a new low relative to the Lookback Window, but the RSI is higher than the previous RSI low found within that same window.
+            * **Bearish Divergence**: Price hits a new high relative to the Lookback Window, but the RSI is lower than the previous RSI high found within that same window.
             """)
         with col2:
             st.subheader("🏷️ Tags Explained")
