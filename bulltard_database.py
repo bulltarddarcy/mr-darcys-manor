@@ -293,42 +293,42 @@ def run_strike_zones_app(df):
         st.warning("No trades match current filters.")
         return
 
-    # --- Data Editor Integration ---
-    if "sz_include_map" not in st.session_state:
-        st.session_state["sz_include_map"] = {}
-
-    # Create editable table dataframe
-    f_edit = f.copy()
-    f_edit["Include"] = f_edit.index.map(lambda i: st.session_state["sz_include_map"].get(i, True))
-    f_edit["Trade Date Str"] = f_edit["Trade Date"].dt.strftime("%d %b %y")
-    f_edit["Expiry Str"] = f_edit["Expiry_DT"].dt.strftime("%d %b %y")
+    # Initialize checkbox state
+    if "sz_include_list" not in st.session_state:
+        st.session_state["sz_include_list"] = [True] * len(f)
     
+    # Sync state if length changed (new ticker/date range)
+    if len(st.session_state["sz_include_list"]) != len(f):
+        st.session_state["sz_include_list"] = [True] * len(f)
+
+    # Prepare data for the editor
+    f_display = f.copy()
+    f_display.insert(0, "Include", st.session_state["sz_include_list"])
+    f_display["Trade Date"] = f_display["Trade Date"].dt.strftime("%d %b %y")
+    f_display["Expiry"] = f_display["Expiry_DT"].dt.strftime("%d %b %y")
+
     if show_table:
         st.subheader("Data Table (Uncheck to exclude from graphic)")
-        edited_df = st.data_editor(
-            f_edit[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]],
+        # Use data_editor to allow checking/unchecking
+        edited_f = st.data_editor(
+            f_display[["Include", "Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]],
             column_config={
                 "Include": st.column_config.CheckboxColumn("Incl", default=True, width="small"),
-                "Trade Date Str": "Trade Date",
-                "Expiry Str": "Expiry",
                 "Dollars": st.column_config.NumberColumn("Dollars", format="$%d")
             },
             hide_index=True,
             use_container_width=True,
             key="sz_editor"
         )
-        # Update session state with edited values
-        for idx, row in edited_df.iterrows():
-            st.session_state["sz_include_map"][f.index[idx]] = row["Include"]
-        
-        # Filter 'f' based on updated selections for the chart
-        included_indices = [f.index[idx] for idx, row in edited_df.iterrows() if row["Include"]]
-        f_chart = f.loc[included_indices].copy()
+        # Update session state
+        st.session_state["sz_include_list"] = edited_f["Include"].tolist()
+        # Filter chart data based on checkboxes
+        f_chart = f[edited_f["Include"].values].copy()
     else:
-        f_chart = f[f_edit["Include"].values].copy()
+        f_chart = f[st.session_state["sz_include_list"]].copy()
 
     if f_chart.empty:
-        st.info("Check boxes in the table to see data in the graphic.")
+        st.info("No trades selected. Check rows in the table to display them.")
         return
 
     # --- Graphic Logic ---
@@ -415,7 +415,7 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
 
-    # --- Puts Sold Calculator (Compact 6-Field Single-Row) ---
+    # --- Puts Sold Calculator ---
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
@@ -459,7 +459,6 @@ def run_pivot_tables_app(df):
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # --- Data Filtering Logic ---
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
