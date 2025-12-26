@@ -321,45 +321,44 @@ def run_strike_zones_app(df):
     if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
     st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
 
-    if used.empty: st.info("No trades included.")
-    else:
-        used["Signed Dollars"] = used.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
-        fmt_neg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
+    f["Signed Dollars"] = f.apply(lambda r: (1 if r[order_type_col] in ("Calls Bought","Puts Sold") else -1) * (r["Dollars"] or 0.0), axis=1)
+    fmt_neg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
 
-        if view_mode == "Price Zones":
-            strike_min, strike_max = float(np.nanmin(used["Strike (Actual)"].values)), float(np.nanmax(used["Strike (Actual)"].values))
-            if width_mode == "Auto": zone_w = float(next((s for s in [1, 2, 5, 10, 25, 50, 100] if s >= (max(1e-9, strike_max - strike_min) / 12.0)), 100))
-            else: zone_w = float(fixed_size_choice)
-            n_dn, n_up = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w)), int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
-            lower_edge = spot - n_dn * zone_w
-            total = max(1, n_dn + n_up)
-            used["ZoneIdx"] = used["Strike (Actual)"].apply(lambda x: min(total - 1, max(0, int(math.floor((x - lower_edge) / zone_w)))))
-            agg = used.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
-            zone_df = pd.DataFrame([(z, lower_edge + z*zone_w, lower_edge + (z+1)*zone_w) for z in range(total)], columns=["ZoneIdx","Zone_Low","Zone_High"])
-            zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
-            if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
-            
-            st.markdown('<div class="zones-panel">', unsafe_allow_html=True)
-            for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
-                if r["Zone_Low"] + (zone_w/2) > spot:
-                    color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                    val_str = fmt_neg(r["Net_Dollars"])
-                    st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
-            for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
-                if r["Zone_Low"] + (zone_w/2) < spot:
-                    color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                    val_str = fmt_neg(r["Net_Dollars"])
-                    st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            e = used.copy()
-            e["Bucket"] = pd.cut((pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days), bins=[0, 7, 30, 90, 180, 10000], labels=["0-7d", "8-30d", "31-90d", "91-180d", ">180d"], include_lowest=True)
-            agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
-            for _, r in agg.iterrows():
-                color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
+    if view_mode == "Price Zones":
+        strike_min, strike_max = float(np.nanmin(f["Strike (Actual)"].values)), float(np.nanmax(f["Strike (Actual)"].values))
+        if width_mode == "Auto": zone_w = float(next((s for s in [1, 2, 5, 10, 25, 50, 100] if s >= (max(1e-9, strike_max - strike_min) / 12.0)), 100))
+        else: zone_w = float(fixed_size_choice)
+        
+        n_dn, n_up = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w)), int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
+        lower_edge = spot - n_dn * zone_w
+        total = max(1, n_dn + n_up)
+        f["ZoneIdx"] = f["Strike (Actual)"].apply(lambda x: min(total - 1, max(0, int(math.floor((x - lower_edge) / zone_w)))))
+        agg = f.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
+        zone_df = pd.DataFrame([(z, lower_edge + z*zone_w, lower_edge + (z+1)*zone_w) for z in range(total)], columns=["ZoneIdx","Zone_Low","Zone_High"])
+        zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
+        if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
+        
+        st.markdown('<div class="zones-panel">', unsafe_allow_html=True)
+        for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
+            if r["Zone_Low"] + (zone_w/2) > spot:
+                color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
                 val_str = fmt_neg(r["Net_Dollars"])
-                st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
+        for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
+            if r["Zone_Low"] + (zone_w/2) < spot:
+                color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
+                val_str = fmt_neg(r["Net_Dollars"])
+                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        e = f.copy()
+        e["Bucket"] = pd.cut((pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days), bins=[0, 7, 30, 90, 180, 10000], labels=["0-7d", "8-30d", "31-90d", "91-180d", ">180d"], include_lowest=True)
+        agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
+        for _, r in agg.iterrows():
+            color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
+            val_str = fmt_neg(r["Net_Dollars"])
+            st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
     if show_table:
         st.subheader("Data Table")
@@ -387,49 +386,39 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
 
-    # --- Puts Sold Calculator Section ---
+    # --- Puts Sold Calculator (Clean Reconstruction) ---
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
-    # ROW 1: INPUTS
-    calc_in_cols = st.columns(3)
-    with calc_in_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-    with calc_in_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-    with calc_in_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
+    # ROW 1: Native Streamlit Inputs
+    in_c1, in_c2, in_c3 = st.columns(3)
+    with in_c1: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
+    with in_c2: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
+    with in_c3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
     
-    # Logic
+    # Calculation Logic
     dte = (c_expiry - date.today()).days
     coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
     annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
         
-    # ROW 2: OUTPUTS
-    calc_out_cols = st.columns(3)
-    label_style = "font-size: 14px; margin-bottom: 8px; color: rgba(250, 250, 250, 0.6); font-family: 'Source Sans Pro', sans-serif; font-weight: 400; letter-spacing: normal;"
-    box_style_base = "background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;"
-    
-    with calc_out_cols[0]:
-        st.markdown(f"""
-            <div style="{label_style}">Annualised Return</div>
-            <div style='{box_style_base} background: rgba(113, 210, 138, 0.08);'>
-                <span style='font-size: 14px; font-weight: 700; color: #71d28a;'>{annual_ret:.2f}%</span>
-            </div>
-        """, unsafe_allow_html=True)
-        
-    with calc_out_cols[1]:
-        st.markdown(f"""
-            <div style="{label_style}">Cash on Cash Return</div>
-            <div style='{box_style_base} background: rgba(113, 210, 138, 0.08);'>
-                <span style='font-size: 14px; font-weight: 700; color: #71d28a;'>{coc_ret:.2f}%</span>
-            </div>
-        """, unsafe_allow_html=True)
+    # ROW 2: Native Streamlit Output-styled Inputs (non-interactive via CSS pointer-events)
+    # This matches the native font, alignment, and spacing perfectly.
+    st.markdown("""
+        <style>
+            .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
+                background-color: rgba(113, 210, 138, 0.1) !important;
+                color: #71d28a !important;
+                border: 1px solid #71d28a !important;
+                font-weight: 700 !important;
+                pointer-events: none !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
 
-    with calc_out_cols[2]:
-        st.markdown(f"""
-            <div style="{label_style}">Days to Expiration</div>
-            <div style='{box_style_base} background: rgba(113, 210, 138, 0.04);'>
-                <span style='font-size: 14px; font-weight: 700; color: #71d28a;'>{max(0, dte)}</span>
-            </div>
-        """, unsafe_allow_html=True)
+    out_c1, out_c2, out_c3 = st.columns(3)
+    with out_c1: st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", key="calc_out_ann")
+    with out_c2: st.text_input("Cash on Cash Return", value=f"{coc_ret:.2f}%", key="calc_out_coc")
+    with out_c3: st.text_input("Days to Expiration", value=str(max(0, dte)), key="calc_out_dte")
 
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 20px; margin-bottom: 20px; align-items: center;">
@@ -441,7 +430,7 @@ def run_pivot_tables_app(df):
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # --- Filtering Logic ---
+    # --- Data Filtering Logic ---
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
@@ -450,7 +439,6 @@ def run_pivot_tables_app(df):
     ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
     pb_pool = d_range[d_range[order_type_col] == "Puts Bought"].copy()
     
-    # Matching logic
     keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
     cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
     rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
@@ -500,7 +488,7 @@ def run_pivot_tables_app(df):
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
         return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
 
-    # Table Layout
+    # Pivot Table Layout
     row1_c1, row1_c2, row1_c3 = st.columns(3); fmt = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
     with row1_c1:
         st.subheader("Calls Bought"); tbl = get_p(df_cb_f)
