@@ -271,28 +271,65 @@ def run_strike_zones_app(df):
     with sc4:
         st.markdown("**Other Options**")
         hide_empty      = st.checkbox("Hide Empty Zones", value=True)
-        show_table       = st.checkbox("Show Strike Zone Table", value=True)
+        show_table      = st.checkbox("Show Interactive Data Table", value=True)
     
     st.markdown("---")
     st.markdown('</div>', unsafe_allow_html=True)
         
-    f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
-    if td_start: f = f[f["Trade Date"].dt.date >= td_start]
-    if td_end: f = f[f["Trade Date"].dt.date <= td_end]
+    f_base = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
+    if td_start: f_base = f_base[f_base["Trade Date"].dt.date >= td_start]
+    if td_end: f_base = f_base[f_base["Trade Date"].dt.date <= td_end]
     today_val = date.today()
-    f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
-    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    f_base = f_base[(f_base["Expiry_DT"].dt.date >= today_val) & (f_base["Expiry_DT"].dt.date <= exp_end)]
+    order_type_col = "Order Type" if "Order Type" in f_base.columns else "Order type"
     
     allowed_sz_types = []
     if inc_cb: allowed_sz_types.append("Calls Bought")
     if inc_ps: allowed_sz_types.append("Puts Sold")
     if inc_pb: allowed_sz_types.append("Puts Bought")
-    edit_pool_raw = f[f[order_type_col].isin(allowed_sz_types)].copy()
+    
+    edit_pool_raw = f_base[f_base[order_type_col].isin(allowed_sz_types)].copy()
     
     if edit_pool_raw.empty:
         st.warning("No trades match current filters.")
         return
+
+    # --- NEW INTERACTIVE DATA EDITOR ---
+    if "Include" not in edit_pool_raw.columns:
+        edit_pool_raw.insert(0, "Include", True)
+
+    if show_table:
+        st.subheader("Data Table & Selection")
+        st.caption("Uncheck rows to remove them from the charts below.")
         
+        # We create a display-friendly version for the editor
+        edit_pool_raw["Trade Date Str"] = edit_pool_raw["Trade Date"].dt.strftime("%d %b %y")
+        edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
+        
+        edited_df = st.data_editor(
+            edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]],
+            column_config={
+                "Include": st.column_config.CheckboxColumn("Include", default=True),
+                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
+                "Contracts": st.column_config.NumberColumn("Qty"),
+                "Trade Date Str": "Trade Date",
+                "Expiry Str": "Expiry"
+            },
+            disabled=["Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"],
+            hide_index=True,
+            use_container_width=True,
+            key="sz_editor"
+        )
+        # Filter the active dataframe 'f' based on user selection in editor
+        f = edit_pool_raw[edited_df["Include"]].copy()
+    else:
+        f = edit_pool_raw.copy()
+
+    if f.empty:
+        st.info("Check 'Include' boxes in the table above to visualize data.")
+        return
+
+    # --- STOCK DATA & INDICATORS ---
     @st.cache_data(ttl=300)
     def get_stock_indicators(sym: str):
         try:
@@ -360,13 +397,6 @@ def run_strike_zones_app(df):
             val_str = fmt_neg(r["Net_Dollars"])
             st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
-    if show_table:
-        st.subheader("Data Table")
-        f_disp = f.copy()
-        f_disp["Trade Date"] = f_disp["Trade Date"].dt.strftime("%d %b %y")
-        f_disp["Expiry"] = f_disp["Expiry_DT"].dt.strftime("%d %b %y")
-        st.dataframe(f_disp[["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True, hide_index=True)
-
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
     max_data_date = get_max_trade_date(df)
@@ -387,26 +417,20 @@ def run_pivot_tables_app(df):
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
-    # ROW: Perfect alignment layout
     calc_cols = st.columns(6)
     
     with calc_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
     with calc_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
     with calc_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
     
-    # Logic
     dte = (c_expiry - date.today()).days
     coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
     annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
 
-    # FIX: Push updated values explicitly into session state to force update for widgets with keys
     st.session_state["calc_out_ann"] = f"{annual_ret:.2f}%"
     st.session_state["calc_out_coc"] = f"{coc_ret:.2f}%"
     st.session_state["calc_out_dte"] = str(max(0, dte))
         
-    # Standard Streamlit dark mode label styling: 14px, #FAFAFA at 0.6 opacity
-    label_style = "font-size: 14px; margin-bottom: 8px; color: rgba(250, 250, 250, 0.6); font-family: 'Source Sans Pro', sans-serif; font-weight: 400; letter-spacing: normal;"
-    # CSS to make output boxes look identical to native Streamlit text inputs but non-interactive
     st.markdown("""
         <style>
             .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
@@ -434,7 +458,6 @@ def run_pivot_tables_app(df):
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # --- Data Filtering Logic ---
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
@@ -492,7 +515,6 @@ def run_pivot_tables_app(df):
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
         return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
 
-    # Table Layout
     row1_c1, row1_c2, row1_c3 = st.columns(3); fmt = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
     with row1_c1:
         st.subheader("Calls Bought"); tbl = get_p(df_cb_f)
