@@ -231,7 +231,8 @@ def run_rankings_app(df):
     bull_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
     bear_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[True, True]).head(limit)
     
-    st.caption("Ranking tables vary from Bulltard's as he includes expired trades and these do not. Tickers with the same score are sorted in descending order based on Dollars.")
+    st.caption("ℹ️ Ranking tables vary from Bulltard's as he includes expired trades and these do not.")
+    st.caption("ℹ️ Tickers with the same score are sorted in descending order based on Dollars.")
     
     col_left, col_right = st.columns(2, gap="large")
     with col_left:
@@ -252,7 +253,6 @@ def run_strike_zones_app(df):
     with c3: td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
     with c4: exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
     
-    # Chart configuration sections reverted to original clear layout
     sc1, sc2, sc3, sc4 = st.columns(4, gap="medium")
     with sc1:
         st.markdown("**View Mode**")
@@ -396,7 +396,9 @@ def run_pivot_tables_app(df):
     with c5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
     with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=1, key="pv_ema_filter")
     
+    # Updated: Added 2nd note about table overlap/screen size
     st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="light-note">ℹ️ 🖥️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
     
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-bottom: 15px; align-items: center;">
