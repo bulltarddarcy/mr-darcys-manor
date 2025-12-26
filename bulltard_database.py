@@ -397,22 +397,12 @@ def run_pivot_tables_app(df):
     annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
         
     with calc_cols[3]:
-        # Updated: Removed hardcoded color and font to match standard Streamlit labels
-        st.markdown(f"""
-            <div style="font-size: 14px; margin-bottom: 8px;">Annualised Return</div>
-            <div style='background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
-                <span style='font-size: 14px; font-weight: 600; color: #71d28a;'>{annual_ret:.2f}%</span>
-            </div>
-        """, unsafe_allow_html=True)
+        # Replacing custom Markdown with native text_input (disabled) for perfect matching
+        st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", disabled=True, key="out_ann_ret")
         
     with calc_cols[4]:
-        # Updated: Removed hardcoded color and font to match standard Streamlit labels
-        st.markdown(f"""
-            <div style="font-size: 14px; margin-bottom: 8px;">Days to Expiration</div>
-            <div style='background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
-                <span style='font-size: 14px; font-weight: 600; color: #71d28a;'>{max(0, dte)}</span>
-            </div>
-        """, unsafe_allow_html=True)
+        # Replacing custom Markdown with native text_input (disabled) for perfect matching
+        st.text_input("Days to Expiration", value=str(max(0, dte)), disabled=True, key="out_dte")
 
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 20px; margin-bottom: 20px; align-items: center;">
