@@ -388,7 +388,6 @@ def run_pivot_tables_app(df):
     st.markdown("<h4 style='margin-bottom: 10px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
     calc_cols = st.columns(5)
-    # Applied Light Yellow 3 (#fff2cc) and Light Green 1 (#d9ead3) from Google Sheets
     with calc_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
     with calc_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
     with calc_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
@@ -398,12 +397,22 @@ def run_pivot_tables_app(df):
     annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
         
     with calc_cols[3]:
-        # Annualised Return - Styled Light Green 1
-        st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", key="out_ann_ret")
+        # Updated: Removed hardcoded color and font to match standard Streamlit labels
+        st.markdown(f"""
+            <div style="font-size: 14px; margin-bottom: 8px;">Annualised Return</div>
+            <div style='background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
+                <span style='font-size: 14px; font-weight: 600; color: #71d28a;'>{annual_ret:.2f}%</span>
+            </div>
+        """, unsafe_allow_html=True)
         
     with calc_cols[4]:
-        # Days to Expiration - Styled Light Green 1
-        st.text_input("Days to Expiration", value=str(max(0, dte)), key="out_dte")
+        # Updated: Removed hardcoded color and font to match standard Streamlit labels
+        st.markdown(f"""
+            <div style="font-size: 14px; margin-bottom: 8px;">Days to Expiration</div>
+            <div style='background: white; border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center;'>
+                <span style='font-size: 14px; font-weight: 600; color: #71d28a;'>{max(0, dte)}</span>
+            </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 20px; margin-bottom: 20px; align-items: center;">
@@ -498,24 +507,6 @@ if "tool" in st.query_params or "ticker" in st.query_params:
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
 st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
 html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg)!important;}
-
-/* Fix for Calculator colors to mimic Google Sheets Light Yellow 3 and Light Green 1 */
-/* First three inputs */
-div[key="calc_strike"] input, div[key="calc_premium"] input, div[key="calc_expiry"] input {
-    background-color: #fff2cc !important;
-    color: black !important;
-}
-/* Two output boxes */
-div[key="out_ann_ret"] input, div[key="out_dte"] input {
-    background-color: #d9ead3 !important;
-    color: black !important;
-}
-
-[data-testid="stWidgetLabel"] p {
-    color: var(--text) !important;
-    opacity: 1 !important;
-}
-
 .block-container{padding-top:1.2rem;padding-bottom:1rem;}
 .control-box{padding:14px 0; border-radius:10px;}
 .zones-panel{padding:14px 0; border-radius:10px;}
@@ -532,6 +523,7 @@ div[key="out_ann_ret"] input, div[key="out_dte"] input {
 .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
 .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
 th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
+.color-dot { width: 14px; height: 14px; border-radius: 3px; }
 .light-note { color: #a1a1a1; font-size: 14px; margin-bottom: 10px; }
 </style>""", unsafe_allow_html=True)
 
