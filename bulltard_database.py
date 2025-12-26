@@ -12,6 +12,7 @@ import glob
 import streamlit.components.v1 as components
 import requests
 import time
+import plotly.graph_objects as go
 
 # --- 1. GLOBAL DATA LOADING & UTILITIES ---
 COLUMN_CONFIG_PIVOT = {
@@ -244,6 +245,11 @@ def run_rankings_app(df):
 
 def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
+    
+    # Session State for Selection
+    if "sz_selection" not in st.session_state:
+        st.session_state.sz_selection = None
+    
     exp_range_default = (date.today() + timedelta(days=365))
     
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
@@ -338,34 +344,124 @@ def run_strike_zones_app(df):
         zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
         if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
         
-        st.markdown('<div class="zones-panel">', unsafe_allow_html=True)
-        for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
-            if r["Zone_Low"] + (zone_w/2) > spot:
-                color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                val_str = fmt_neg(r["Net_Dollars"])
-                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
-        for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
-            if r["Zone_Low"] + (zone_w/2) < spot:
-                color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                val_str = fmt_neg(r["Net_Dollars"])
-                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        zs["Zone_Label"] = zs.apply(lambda r: f"${r.Zone_Low:.0f}-${r.Zone_High:.0f}", axis=1)
+        
+        # Interactive Plotly Chart
+        fig = go.Figure()
+        
+        # Bullish Bars (Positive Net Dollars)
+        bull_mask = zs["Net_Dollars"] >= 0
+        fig.add_trace(go.Bar(
+            y=zs[bull_mask]["Zone_Label"],
+            x=zs[bull_mask]["Net_Dollars"],
+            orientation='h',
+            marker_color='#71d28a',
+            name='Bullish',
+            customdata=zs[bull_mask][["ZoneIdx", "Trades"]],
+            hovertemplate="Zone: %{y}<br>Net Dollars: $%{x:,.0f}<br>Trades: %{customdata[1]}<extra></extra>"
+        ))
+        
+        # Bearish Bars (Negative Net Dollars)
+        bear_mask = zs["Net_Dollars"] < 0
+        fig.add_trace(go.Bar(
+            y=zs[bear_mask]["Zone_Label"],
+            x=zs[bear_mask]["Net_Dollars"],
+            orientation='h',
+            marker_color='#f29ca0',
+            name='Bearish',
+            customdata=zs[bear_mask][["ZoneIdx", "Trades"]],
+            hovertemplate="Zone: %{y}<br>Net Dollars: $%{x:,.0f}<br>Trades: %{customdata[1]}<extra></extra>"
+        ))
+
+        fig.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font_color='#e7e7ea',
+            xaxis_title="Net Dollars ($)",
+            yaxis_title=None,
+            height=get_table_height(zs, max_rows=20),
+            margin=dict(l=0, r=0, t=20, b=20),
+            showlegend=False,
+            yaxis={'categoryorder':'array', 'categoryarray': zs.sort_values("ZoneIdx")["Zone_Label"].tolist()},
+            clickmode='event+select'
+        )
+        
+        # Spot Price Indicator
+        fig.add_hline(y=spot, line_dash="dash", line_color="#66b7ff", annotation_text=f"SPOT: ${spot:,.2f}")
+
+        st.caption("🖱️ Click on a bar to filter the Data Table below.")
+        event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="sz_price_chart")
+        
+        if event and event.get("selection") and event["selection"].get("points"):
+            selected_point = event["selection"]["points"][0]
+            st.session_state.sz_selection = selected_point["y"]
+        
     else:
         e = f.copy()
         e["Bucket"] = pd.cut((pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days), bins=[0, 7, 30, 90, 180, 10000], labels=["0-7d", "8-30d", "31-90d", "91-180d", ">180d"], include_lowest=True)
         agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
-        for _, r in agg.iterrows():
-            color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
-            val_str = fmt_neg(r["Net_Dollars"])
-            st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+        
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=agg["Bucket"],
+            x=agg["Net_Dollars"],
+            orientation='h',
+            marker_color=agg["Net_Dollars"].apply(lambda x: '#71d28a' if x >= 0 else '#f29ca0').tolist(),
+            customdata=agg["Trades"],
+            hovertemplate="Bucket: %{y}<br>Net Dollars: $%{x:,.0f}<br>Trades: %{customdata}<extra></extra>"
+        ))
+        
+        fig.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font_color='#e7e7ea',
+            xaxis_title="Net Dollars ($)",
+            height=300,
+            margin=dict(l=0, r=0, t=20, b=20),
+            clickmode='event+select'
+        )
+        
+        st.caption("🖱️ Click on a bar to filter the Data Table below.")
+        event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="sz_expiry_chart")
+        
+        if event and event.get("selection") and event["selection"].get("points"):
+            selected_point = event["selection"]["points"][0]
+            st.session_state.sz_selection = selected_point["y"]
 
     if show_table:
-        st.subheader("Data Table")
+        st.markdown("---")
+        col_header, col_reset = st.columns([4, 1])
+        with col_header:
+            st.subheader("Data Table")
+        
         f_disp = f.copy()
+        
+        # Apply selection filter
+        if st.session_state.sz_selection:
+            with col_reset:
+                if st.button("🔄 Show All Trades", use_container_width=True):
+                    st.session_state.sz_selection = None
+                    st.rerun()
+            
+            if view_mode == "Price Zones":
+                # Match the label string back to the range
+                selected_label = st.session_state.sz_selection
+                row = zs[zs["Zone_Label"] == selected_label].iloc[0]
+                f_disp = f_disp[f_disp["ZoneIdx"] == row["ZoneIdx"]]
+                st.info(f"📍 Showing trades for strike zone: **{selected_label}**")
+            else:
+                f_disp["Bucket"] = pd.cut((pd.to_datetime(f_disp["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days), bins=[0, 7, 30, 90, 180, 10000], labels=["0-7d", "8-30d", "31-90d", "91-180d", ">180d"], include_lowest=True)
+                f_disp = f_disp[f_disp["Bucket"] == st.session_state.sz_selection]
+                st.info(f"📅 Showing trades for expiry bucket: **{st.session_state.sz_selection}**")
+
         f_disp["Trade Date"] = f_disp["Trade Date"].dt.strftime("%d %b %y")
         f_disp["Expiry"] = f_disp["Expiry_DT"].dt.strftime("%d %b %y")
-        st.dataframe(f_disp[["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True, hide_index=True)
+        st.dataframe(
+            f_disp[["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), 
+            use_container_width=True, 
+            hide_index=True,
+            height=get_table_height(f_disp, max_rows=30)
+        )
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
@@ -397,13 +493,9 @@ def run_pivot_tables_app(df):
     annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
         
     with calc_cols[3]:
-        # Using native text_input with disabled=True. 
-        # CSS override below ensures color/opacity matches active inputs.
         st.text_input("Annualised Return", value=f"{annual_ret:.2f}%", disabled=True, key="out_ann_ret")
         
     with calc_cols[4]:
-        # Using native text_input with disabled=True. 
-        # CSS override below ensures color/opacity matches active inputs.
         st.text_input("Days to Expiration", value=str(max(0, dte)), disabled=True, key="out_dte")
 
     st.markdown("""
@@ -516,20 +608,12 @@ html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg
 .block-container{padding-top:1.2rem;padding-bottom:1rem;}
 .control-box{padding:14px 0; border-radius:10px;}
 .zones-panel{padding:14px 0; border-radius:10px;}
-.zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
-.zone-label{width:100px;font-weight:700; text-align: right;}
-.zone-bar{height:22px;border-radius:6px;min-width:6px}
-.zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
-.zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
-.zone-value{min-width:220px;font-variant-numeric:tabular-nums}
 .price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
-.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: var(--line); opacity: 0.6; }
 .price-badge { background: #2b3a45; color: #bfe7ff; border: 1px solid #56b6ff; border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; box-shadow: 0 2px 8px rgba(0,0,0,0.35); white-space: nowrap; margin: 0 12px; z-index: 1; }
 .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
 .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
 .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
 th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-.color-dot { width: 14px; height: 14px; border-radius: 3px; }
 .light-note { color: #a1a1a1; font-size: 14px; margin-bottom: 10px; }
 </style>""", unsafe_allow_html=True)
 
