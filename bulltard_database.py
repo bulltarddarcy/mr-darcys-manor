@@ -342,12 +342,14 @@ def run_strike_zones_app(df):
         for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
             if r["Zone_Low"] + (zone_w/2) > spot:
                 color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{fmt_neg(r["Net_Dollars"])} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                val_str = fmt_neg(r["Net_Dollars"])
+                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>', unsafe_allow_html=True)
         for _, r in zs.sort_values("ZoneIdx", ascending=False).iterrows():
             if r["Zone_Low"] + (zone_w/2) < spot:
                 color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, zs["Net_Dollars"].abs().max()))*420))
-                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{fmt_neg(r["Net_Dollars"])} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+                val_str = fmt_neg(r["Net_Dollars"])
+                st.markdown(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
     else:
         e = f.copy()
@@ -355,14 +357,18 @@ def run_strike_zones_app(df):
         agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
         for _, r in agg.iterrows():
             color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
-            st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{fmt_neg(r["Net_Dollars"])} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+            val_str = fmt_neg(r["Net_Dollars"])
+            st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
     if show_table:
         st.subheader("Data Table")
-        f_disp = f.copy()
-        f_disp["Trade Date"] = f_disp["Trade Date"].dt.strftime("%d %b %y")
-        f_disp["Expiry"] = f_disp["Expiry_DT"].dt.strftime("%d %b %y")
-        st.dataframe(f_disp[["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]].style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}), use_container_width=True, hide_index=True)
+        df_for_editor = edit_pool[cols_to_show].copy()
+        df_for_editor["Dollars"] = df_for_editor["Dollars"].apply(lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}")
+        df_for_editor["Contracts"] = df_for_editor["Contracts"].apply(lambda x: f"{x:,.0f}")
+        edited_df = st.data_editor(df_for_editor, column_config={"Trade Date Display": "Trade Date", "Expiry Display": "Expiry", "Contracts": st.column_config.TextColumn("Qty", width=80), "Dollars": st.column_config.TextColumn("Dollars", width=110), "Included": st.column_config.CheckboxColumn(default=True)}, use_container_width=True, hide_index=True, key="strike_zones_editor")
+        if not edited_df["Included"].equals(df_for_editor["Included"]): 
+            st.session_state[state_key] = edited_df["Included"].tolist()
+            st.rerun()
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
@@ -380,33 +386,34 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
 
-    # --- REBUILT Puts Sold Calculator Section ---
+    # --- COMPACT Puts Sold Calculator Section ---
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
-    st.markdown("<h4 style='margin-bottom: 15px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
+    st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
-    # Unified input row
-    calc_in1, calc_in2, calc_in3 = st.columns([1, 1, 1])
-    with calc_in1: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-    with calc_in2: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-    with calc_in3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
+    # Unified row for inputs and results
+    calc_cols = st.columns([1, 1, 1, 1, 1], gap="small")
+    with calc_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
+    with calc_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
+    with calc_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
     
-    # Logic
     dte = (c_expiry - date.today()).days
     annual_ret = (c_premium / c_strike / dte) * 365 * 100 if dte > 0 else 0.0
-    
-    # Results Row (Metrics Bar Style)
-    st.markdown(f"""
-        <div style="display: flex; gap: 10px; margin-top: 10px;">
-            <div style="flex: 1; background: rgba(113, 210, 138, 0.08); border: 1px solid #71d28a; border-radius: 6px; padding: 12px; text-align: center;">
-                <div style="font-size: 12px; color: #808495; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Annualised Return</div>
-                <div style="font-size: 24px; font-weight: 800; color: #71d28a;">{annual_ret:.2f}%</div>
+        
+    with calc_cols[3]:
+        st.markdown(f"""
+            <div style="font-size: 14px; margin-bottom: 8px; color: #808495; font-family: sans-serif;">Annualised Ret.</div>
+            <div style='background: rgba(113, 210, 138, 0.08); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center; justify-content: center;'>
+                <span style='font-size: 15px; font-weight: 700; color: #71d28a;'>{annual_ret:.2f}%</span>
             </div>
-            <div style="flex: 1; background: rgba(113, 210, 138, 0.04); border: 1px solid #71d28a; border-radius: 6px; padding: 12px; text-align: center;">
-                <div style="font-size: 12px; color: #808495; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Days to Expiration</div>
-                <div style="font-size: 24px; font-weight: 800; color: #71d28a;">{max(0, dte)}</div>
+        """, unsafe_allow_html=True)
+        
+    with calc_cols[4]:
+        st.markdown(f"""
+            <div style="font-size: 14px; margin-bottom: 8px; color: #808495; font-family: sans-serif;">DTE</div>
+            <div style='background: rgba(113, 210, 138, 0.04); border: 1px solid #71d28a; padding: 0 12px; border-radius: 4px; height: 38px; display: flex; align-items: center; justify-content: center;'>
+                <span style='font-size: 15px; font-weight: 700; color: #71d28a;'>{max(0, dte)}</span>
             </div>
-        </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 20px; margin-bottom: 20px; align-items: center;">
@@ -418,7 +425,7 @@ def run_pivot_tables_app(df):
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # --- Filtering and Table Logic ---
+    # --- Filtering Logic ---
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
@@ -476,20 +483,16 @@ def run_pivot_tables_app(df):
         piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
         return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
 
-    # Table Layout
     row1_c1, row1_c2, row1_c3 = st.columns(3); fmt = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
     with row1_c1:
         st.subheader("Calls Bought"); tbl = get_p(df_cb_f)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-        else: st.caption("No individual calls found.")
     with row1_c2:
         st.subheader("Puts Sold"); tbl = get_p(df_ps_f)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-        else: st.caption("No individual puts found.")
     with row1_c3:
         st.subheader("Puts Bought"); tbl = get_p(df_pb_f)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-        else: st.caption("No individual puts found.")
     
     st.markdown("---")
     st.subheader("Risk Reversals")
@@ -528,7 +531,6 @@ html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg
 .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
 .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
 th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-.color-dot { width: 14px; height: 14px; border-radius: 3px; }
 .light-note { color: #a1a1a1; font-size: 14px; margin-bottom: 10px; }
 </style>""", unsafe_allow_html=True)
 
