@@ -586,14 +586,41 @@ try:
 
     # --- NAVIGATION SETUP ---
     # Using st.navigation instead of custom buttons. 
-    # This automatically adds a non-collapsing sidebar menu.
+    # To fix the "Multiple Pages specified with URL pathname <lambda>" error,
+    # we provide a unique url_path for each page that uses a lambda.
     pg = st.navigation({
         "Tools": [
-            st.Page(lambda: run_options_database_app(df_global), title="Options Database", icon="📂", default=True),
-            st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆"),
-            st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯"),
-            st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊"),
-            st.Page(run_rsi_divergences_app, title="RSI Divergences", icon="📈"),
+            st.Page(
+                lambda: run_options_database_app(df_global), 
+                title="Options Database", 
+                icon="📂", 
+                url_path="options_db", 
+                default=True
+            ),
+            st.Page(
+                lambda: run_rankings_app(df_global), 
+                title="Rankings", 
+                icon="🏆", 
+                url_path="rankings"
+            ),
+            st.Page(
+                lambda: run_pivot_tables_app(df_global), 
+                title="Pivot Tables", 
+                icon="🎯", 
+                url_path="pivot_tables"
+            ),
+            st.Page(
+                lambda: run_strike_zones_app(df_global), 
+                title="Strike Zones", 
+                icon="📊", 
+                url_path="strike_zones"
+            ),
+            st.Page(
+                run_rsi_divergences_app, 
+                title="RSI Divergences", 
+                icon="📈", 
+                url_path="rsi_divergences"
+            ),
         ]
     })
 
