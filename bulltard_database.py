@@ -120,9 +120,10 @@ def get_max_trade_date(df):
     return date.today() - timedelta(days=1)
 
 def render_page_header(title, df):
+    # Standard header without any background container boxes
     st.markdown(f"<h1 style='margin-bottom: 0px;'>{title}</h1>", unsafe_allow_html=True)
     last_updated = get_max_trade_date(df).strftime("%d %b %y")
-    st.markdown(f"<p style='color: #808495; margin-top: 0px; margin-bottom: 20px; font-size: 0.9rem;'>Last Updated: {last_updated}</p>", unsafe_allow_html=True)
+    st.markdown(f"<p style='color: #808495; margin-top: 0px; margin-bottom: 25px; font-size: 0.9rem;'>Last Updated: {last_updated}</p>", unsafe_allow_html=True)
 
 # --- 2. APP MODULES ---
 
@@ -142,11 +143,11 @@ def run_options_database_app(df):
         exp_range_default = (date.today() + timedelta(days=365))
         db_exp_end = st.date_input("Expiration Range (end)", value=exp_range_default, key="db_exp")
     
-    # Grouped Checkboxes - narrower columns to pull them closer
-    ot1, ot2, ot3, ot_pad = st.columns([1, 1, 1, 6])
-    with ot1: inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
-    with ot2: inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
-    with ot3: inc_pb = st.checkbox("Puts Bought", value=True, key="db_inc_pb")
+    # Checkboxes grouped tightly
+    check_cols = st.columns([0.15, 0.15, 0.15, 0.55])
+    with check_cols[0]: inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
+    with check_cols[1]: inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
+    with check_cols[2]: inc_pb = st.checkbox("Puts Bought", value=True, key="db_inc_pb")
     st.markdown('</div>', unsafe_allow_html=True)
     
     f = df.copy()
@@ -547,15 +548,10 @@ st.markdown("""
     :root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff;}
     
     /* Global fixes and Tab Position */
-    .block-container{padding-top: 1.5rem !important;}
+    .block-container{padding-top: 2rem !important;}
     
-    /* Header/Nav adjustment - ensuring it's below the Streamlit ceiling */
-    header[data-testid="stHeader"] {z-index: 1000 !important; height: 3rem !important;}
-    
-    .nav-container-outer {
-        padding-top: 2rem !important; /* Pushes the buttons down to avoid overlap */
-        margin-bottom: 10px !important;
-    }
+    /* Remove streamlit header artifacts */
+    header[data-testid="stHeader"] {background: transparent !important;}
 
     .control-box{padding:15px; border-radius:10px; background-color: var(--panel2); border: 1px solid #3a3f45; margin-bottom: 20px;}
     .calc-box {
@@ -575,6 +571,11 @@ st.markdown("""
     }
 
     /* Navigation Styling - Modern Tab Style */
+    .nav-container {
+        padding: 1rem 0 0.5rem 0;
+        margin-bottom: 10px;
+    }
+    
     div.stButton > button.nav-btn {
         background: transparent !important;
         border: none !important;
@@ -623,24 +624,21 @@ try:
 
     nav_items = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
     
-    # Outer div to push content down
-    st.markdown('<div class="nav-container-outer"></div>', unsafe_allow_html=True)
-    
+    st.markdown('<div class="nav-container">', unsafe_allow_html=True)
     cols = st.columns([1.1, 0.8, 1, 1, 1.2, 3])
     for i, item in enumerate(nav_items):
         is_active = st.session_state["app_choice"] == item
         btn_key = f"nav_btn_{item}"
         
-        # Determine CSS class for the active tab
-        css_class = "nav-active" if is_active else "nav-btn"
-        
+        # Apply special class if active
         if cols[i].button(item, key=btn_key, help=f"Go to {item}", 
                           use_container_width=True):
             st.session_state["app_choice"] = item
             st.rerun()
             
-    # Draw the HR divider manually to look cleaner than a control-box border
-    st.markdown("<hr style='margin-top: -10px; margin-bottom: 25px; opacity: 0.1;'>", unsafe_allow_html=True)
+    # Final horizontal rule below tabs
+    st.markdown("<hr style='margin-top: -10px; margin-bottom: 25px; opacity: 0.15; height: 1px; border: none; background-color: #555;'>", unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # --- APP ROUTING ---
     current_choice = st.session_state["app_choice"]
