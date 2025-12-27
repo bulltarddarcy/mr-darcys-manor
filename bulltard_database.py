@@ -189,7 +189,7 @@ def load_dataset_config():
 def style_tags(tag_str):
     if not tag_str: return ''
     tags = tag_str.split(", ")
-    colors = {f"EMA{EMA8_PERIOD}": "#4a90e2", f"EMA{EMA21_PERIOD}": "#9b59b6", "VOL_HIGH": "#e67e22", "V_GROW": "#27ae60"}
+    colors = {f"EMA{EMA8_PERIOD}": "#4a90e2", f"EMA{EMA21_PERIOD}": "#9b59b6", "VOL_HIGH": "#e67e22", "VOL_GROW": "#27ae60"}
     html_str = ''
     for t in tags:
         color = colors.get(t, "#7f8c8d")
@@ -274,7 +274,7 @@ def find_divergences(df_tf, ticker, timeframe):
                         if latest_p['Price'] <= latest_p.get('EMA8', 999999): tags.append(f"EMA{EMA8_PERIOD}")
                         if latest_p['Price'] <= latest_p.get('EMA21', 999999): tags.append(f"EMA{EMA21_PERIOD}")
                     if is_vol_high: tags.append("VOL_HIGH")
-                    if p2['Volume'] > p1['Volume']: tags.append("V_GROW")
+                    if p2['Volume'] > p1['Volume']: tags.append("VOL_GROW")
                     divergences.append({
                         'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 'Tags': ", ".join(tags),
                         'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
@@ -288,8 +288,8 @@ def find_divergences(df_tf, ticker, timeframe):
 
 # --- 2. APP MODULES ---
 
-def run_options_database_app(df):
-    st.title("📂 Options Database")
+def run_database_app(df):
+    st.title("📂 Database")
     max_data_date = get_max_trade_date(df)
     
     # Removed the control-box wrapper
@@ -381,6 +381,21 @@ def run_rankings_app(df):
     smart_stats = f_filtered.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
     smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
     
+    # INCORPORATE MARKET CAP
+    # This addresses the methodology update: $1M flow on small cap > $1M flow on large cap
+    def get_mcap_safe(sym):
+        return get_market_cap(sym)
+
+    # Fetch market cap for the active symbols
+    smart_stats["Market Cap"] = smart_stats["Symbol"].apply(get_mcap_safe)
+    
+    # Avoid division by zero, fill with a high number or filter
+    smart_stats = smart_stats[smart_stats["Market Cap"] > 0]
+    
+    # Calculate Impact % (Basis points of Market Cap would be small, so just % is fine)
+    # This allows the user to see the relative importance of the flow
+    smart_stats["Flow % Cap"] = (smart_stats["Net Sentiment ($)"] / smart_stats["Market Cap"]) * 100
+
     # 2. Momentum Calculation (Last 3 Trading Days Only)
     # Find the last 3 unique dates in the filtered dataset
     unique_dates = sorted(f_filtered["Trade Date"].unique())
@@ -389,6 +404,11 @@ def run_rankings_app(df):
     
     mom_stats = f_momentum.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
     mom_stats.rename(columns={"Signed_Dollars": "3-Day Flow ($)"}, inplace=True)
+    
+    # Merge Mkt Cap into Momentum too for consistent context
+    mom_stats["Market Cap"] = mom_stats["Symbol"].apply(get_mcap_safe)
+    mom_stats = mom_stats[mom_stats["Market Cap"] > 0]
+    mom_stats["Flow % Cap"] = (mom_stats["3-Day Flow ($)"] / mom_stats["Market Cap"]) * 100
 
     # Prepare Tables
     # Bullish: Highest Positive Net Sentiment
@@ -400,10 +420,13 @@ def run_rankings_app(df):
 
     # Formatting Helper
     fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
+    fmt_pct = lambda x: f"{x:,.4f}%"
+    
     smart_col_config = {
         "Symbol": st.column_config.TextColumn("Ticker", width=60),
         "Net Sentiment ($)": st.column_config.NumberColumn("Net Flow", format="$%d", width=100),
-        "3-Day Flow ($)": st.column_config.NumberColumn("3-Day Velocity", format="$%d", width=100)
+        "3-Day Flow ($)": st.column_config.NumberColumn("3-Day Velocity", format="$%d", width=100),
+        "Flow % Cap": st.column_config.NumberColumn("Flow % Cap", format="%.4f%%", width=80)
     }
 
     # Display Smart Money Tables
@@ -411,26 +434,29 @@ def run_rankings_app(df):
     
     with sm1:
         st.markdown("<div style='text-align:center; color: #71d28a; font-weight:bold; margin-bottom:5px;'>High Conviction (Bullish)</div>", unsafe_allow_html=True)
-        st.dataframe(df_smart_bull.style.format({"Net Sentiment ($)": fmt_curr}), use_container_width=True, hide_index=True, height=get_table_height(df_smart_bull), column_config=smart_col_config)
+        st.dataframe(df_smart_bull.style.format({"Net Sentiment ($)": fmt_curr, "Flow % Cap": fmt_pct}), use_container_width=True, hide_index=True, height=get_table_height(df_smart_bull), column_config=smart_col_config)
     
     with sm2:
         st.markdown("<div style='text-align:center; color: #f29ca0; font-weight:bold; margin-bottom:5px;'>High Conviction (Bearish)</div>", unsafe_allow_html=True)
-        st.dataframe(df_smart_bear.style.format({"Net Sentiment ($)": fmt_curr}), use_container_width=True, hide_index=True, height=get_table_height(df_smart_bear), column_config=smart_col_config)
+        st.dataframe(df_smart_bear.style.format({"Net Sentiment ($)": fmt_curr, "Flow % Cap": fmt_pct}), use_container_width=True, hide_index=True, height=get_table_height(df_smart_bear), column_config=smart_col_config)
         
     with sm3:
         st.markdown("<div style='text-align:center; color: #66b7ff; font-weight:bold; margin-bottom:5px;'>Momentum (Hot Now)</div>", unsafe_allow_html=True)
-        st.dataframe(df_smart_mom.style.format({"3-Day Flow ($)": fmt_curr}), use_container_width=True, hide_index=True, height=get_table_height(df_smart_mom), column_config=smart_col_config)
+        st.dataframe(df_smart_mom.style.format({"3-Day Flow ($)": fmt_curr, "Flow % Cap": fmt_pct}), use_container_width=True, hide_index=True, height=get_table_height(df_smart_mom), column_config=smart_col_config)
 
-    with st.expander("ℹ️ About Smart Money Methodology"):
-        st.markdown("""
-        * **Concept:** While standard rankings count the *number* of orders, Smart Money rankings follow the **cash**. A single \$1M order carries more weight here than fifty \$1k orders.
-        * **Net Sentiment:** Calculated as `(Calls Bought + Puts Sold) - Puts Bought`. Green means net buying, Red means net selling.
-        * **Momentum:** Shows the Net Sentiment flow for only the **last 3 trading days**. This highlights tickers seeing immediate, urgent action regardless of their 2-week history.
-        """)
+    # Methodology is now always visible
+    st.markdown("""
+    ℹ️ **About Smart Money Methodology:**
+    * **Concept:** While standard rankings count the *number* of orders, Smart Money rankings follow the **cash**. A single \$1M order carries more weight here than fifty \$1k orders.
+    * **Impact:** The **Flow % Cap** column calculates the Net Flow as a percentage of Market Cap. This helps identify high-conviction trades relative to the company size (e.g. a small cap receiving massive flow vs a mega cap).
+    * **Net Sentiment:** Calculated as `(Calls Bought + Puts Sold) - Puts Bought`. Green means net buying, Red means net selling.
+    * **Momentum:** Shows the Net Sentiment flow for only the **last 3 trading days**. This highlights tickers seeing immediate, urgent action regardless of their 2-week history.
+    """)
 
     # --- SECTION 2: BULLTARD RANKINGS (LEGACY) ---
     st.markdown("---")
-    st.subheader("🐂 Bulltard Rankings (Volume Based)")
+    # Updated to Clown emoji
+    st.subheader("🤡 Bulltard Rankings (Volume Based)")
     
     # Existing Calculations
     counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
@@ -472,46 +498,6 @@ def run_rankings_app(df):
         st.dataframe(bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
 
     st.caption("ℹ️ **Legacy Methodology:** Score = (Calls Bought + Puts Sold) - (Puts Bought). Ranked by Score first, then Dollars. Ranking tables vary from Bulltard's as he includes expired trades and these do not.")
-
-    # --- TRENDING ANALYSIS SECTION (UNCHANGED) ---
-    st.markdown("---")
-    st.markdown("<h3 style='font-size: 1.2rem; margin-bottom: 1rem;'>🔥 Trending Tickers (Rank Movers)</h3>", unsafe_allow_html=True)
-    st.caption("Analyzing rank changes over the last 10 trading days. Positive 'Trend' means the ticker is moving UP the rankings (improvement).")
-    
-    trend_start_date = max_data_date - timedelta(days=14)
-    df_trend = df[(df["Trade Date"].dt.date >= trend_start_date) & (df["Trade Date"].dt.date <= max_data_date)].copy()
-    
-    if not df_trend.empty:
-        df_trend_g = df_trend.groupby(["Trade Date", "Symbol", order_type_col]).size().unstack(fill_value=0)
-        for t_type in target_types:
-            if t_type not in df_trend_g.columns: df_trend_g[t_type] = 0
-            
-        df_trend_g["DailyScore"] = df_trend_g["Calls Bought"] + df_trend_g["Puts Sold"] - df_trend_g["Puts Bought"]
-        daily_scores = df_trend_g["DailyScore"].reset_index()
-        daily_scores["DayRank"] = daily_scores.groupby("Trade Date")["DailyScore"].rank(method="min", ascending=False)
-        rank_matrix = daily_scores.pivot(index="Symbol", columns="Trade Date", values="DayRank")
-        
-        if len(rank_matrix.columns) >= 2:
-            latest_date = rank_matrix.columns[-1]
-            avg_rank = rank_matrix.mean(axis=1)
-            current_rank = rank_matrix[latest_date]
-            trend_df = pd.DataFrame({
-                "Current Rank": current_rank,
-                "Avg Rank (2w)": avg_rank
-            })
-            trend_df["Trend Score"] = trend_df["Avg Rank (2w)"] - trend_df["Current Rank"]
-            trend_df = trend_df.dropna()
-            movers = trend_df.sort_values("Trend Score", ascending=False).head(15)
-            movers = movers.reset_index()
-            
-            st.dataframe(
-                movers.style.format({"Current Rank": "{:.0f}", "Avg Rank (2w)": "{:.1f}", "Trend Score": "{:+.1f}"})
-                .background_gradient(cmap="Greens", subset=["Trend Score"]),
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.info("Not enough data days to calculate trends yet.")
 
 def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
@@ -728,6 +714,7 @@ def run_pivot_tables_app(df):
         with fc6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
         
         st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Market Cap filtering can be buggy. If empty, reset \'Mkt Cap Min\' to 0B.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Scroll down to see the Risk Reversals table.</div>', unsafe_allow_html=True)
 
     # --- RIGHT COLUMN: CALCULATOR ---
     with col_calculator:
@@ -839,7 +826,8 @@ def run_pivot_tables_app(df):
     else: st.caption("No matched RR pairs found.")
 
 def run_rsi_divergences_app():
-    st.title("📈 RSI Divergence Scanner")
+    # Changed Title
+    st.title("📈 RSI Divergences")
     
     # --- Custom RSI-Specific Styles ---
     st.markdown("""
@@ -949,6 +937,7 @@ def run_rsi_divergences_app():
                     * **Divergence Mechanism**: Compares the RSI at a new price extreme to a previous RSI extreme found within the **{DIVERGENCE_LOOKBACK}-period lookback**.
                     * **Bullish Standards**: Price hits a new low while RSI is at least **{RSI_DIFF_THRESHOLD} points higher** than at the previous low. RSI must remain below 50 between points.
                     * **Bearish Standards**: Price hits a new high while RSI is at least **{RSI_DIFF_THRESHOLD} points lower** than at the previous high. RSI must remain above 50 between points.
+                    * **Invalidation**: Bullish signals are invalid if RSI breaks below the P1 low RSI before lifting. Bearish signals invalid if RSI breaks above P1 high RSI.
                     """)
 
                 with f_col2:
@@ -966,7 +955,7 @@ def run_rsi_divergences_app():
                     st.markdown(f"""
                     * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if the current price is trading **above** (Bullish) or **below** (Bearish) these exponential moving averages.
                     * **VOL_HIGH**: Triggered if the signal candle volume is > 150% of the **{VOL_SMA_PERIOD}-period average**.
-                    * **V_GROW**: Triggered if volume at the current signal point (P2) is higher than the volume at the previous extreme (P1).
+                    * **VOL_GROW**: Triggered if volume at the current signal point (P2) is higher than the volume at the previous extreme (P1).
                     """)
         except Exception as e: st.error(f"Error: {e}")
 
@@ -1013,8 +1002,8 @@ try:
     pg = st.navigation({
         "Tools": [
             st.Page(
-                lambda: run_options_database_app(df_global), 
-                title="Options Database", 
+                lambda: run_database_app(df_global), 
+                title="Database", 
                 icon="📂", 
                 url_path="options_db", 
                 default=True
@@ -1047,6 +1036,7 @@ try:
     })
 
     # Add extra info to the sidebar footer
+    st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
     st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
     
     # Execution
