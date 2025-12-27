@@ -35,15 +35,17 @@ MIN_N_THRESHOLD = 5
 def load_and_clean_data(url: str) -> pd.DataFrame:
     df = pd.read_csv(url)
     want = ["Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Error"]
-    # Intersection of columns
-    keep = df.columns.intersection(want)
+    
+    # Filter columns immediately to save memory
+    existing_cols = df.columns
+    keep = [c for c in want if c in existing_cols]
     df = df[keep].copy()
     
     # Vectorized string cleanup
     str_cols = ["Order Type", "Symbol", "Strike", "Expiry"]
-    existing_str_cols = [c for c in str_cols if c in df.columns]
-    if existing_str_cols:
-        df[existing_str_cols] = df[existing_str_cols].astype(str).apply(lambda x: x.str.strip())
+    for c in str_cols:
+        if c in df.columns:
+            df[c] = df[c].astype(str).str.strip()
     
     # Vectorized cleanup for numeric columns
     if "Dollars" in df.columns:
@@ -67,9 +69,10 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce").fillna(0.0)
         
     if "Error" in df.columns:
-        # Boolean mask optimization
+        # Optimized filtering
         err_vals = {"TRUE", "1", "YES"}
-        df = df[~df["Error"].astype(str).str.upper().isin(err_vals)]
+        mask = df["Error"].astype(str).str.upper().isin(err_vals)
+        df = df[~mask]
         
     return df
 
@@ -91,7 +94,6 @@ def is_above_ema21(symbol: str) -> bool:
         h = ticker.history(period="60d")
         if len(h) < 21:
             return True 
-        # Calculate only what is needed
         ema21_last = h["Close"].ewm(span=21, adjust=False).mean().iloc[-1]
         latest_price = h["Close"].iloc[-1]
         return latest_price > ema21_last
@@ -100,22 +102,29 @@ def is_above_ema21(symbol: str) -> bool:
 
 @st.cache_data(ttl=300)
 def get_stock_indicators(sym: str):
-    """Moved to global scope to prevent re-definition and ensure caching works efficiently."""
+    """Optimized to fetch history once."""
     try:
         ticker_obj = yf.Ticker(sym)
-        h = ticker_obj.history(period="60d", interval="1d")
-        if len(h) == 0: return None, None, None, None, None
+        # Fetch 2y once to cover both SMA200 and EMAs
+        h_full = ticker_obj.history(period="2y", interval="1d")
         
-        close = h["Close"]
+        if len(h_full) == 0: return None, None, None, None, None
+        
+        # Calculate SMA200 on full data
+        sma200 = float(h_full["Close"].rolling(window=200).mean().iloc[-1]) if len(h_full) >= 200 else None
+        
+        # Slice for EMAs (need last ~60 days is enough for decent EMA convergence, 
+        # but taking tail ensures we have recent data)
+        h_recent = h_full.iloc[-60:].copy() if len(h_full) > 60 else h_full.copy()
+        
+        if len(h_recent) == 0: return None, None, None, None, None
+        
+        close = h_recent["Close"]
         spot_val = float(close.iloc[-1])
         ema8  = float(close.ewm(span=8, adjust=False).mean().iloc[-1])
         ema21 = float(close.ewm(span=21, adjust=False).mean().iloc[-1])
         
-        # Optimize: Only fetch long history if needed
-        sma200_full = ticker_obj.history(period="2y")["Close"]
-        sma200 = float(sma200_full.rolling(window=200).mean().iloc[-1]) if len(sma200_full) >= 200 else None
-        
-        return spot_val, ema8, ema21, sma200, h
+        return spot_val, ema8, ema21, sma200, h_recent
     except: 
         return None, None, None, None, None
 
@@ -128,16 +137,14 @@ def get_table_height(df, max_rows=30):
 
 def highlight_expiry(val):
     try:
-        # Optimization: Move date calcs out if called in loop, 
-        # but for Pandas styling map, we keep logic contained.
+        if not isinstance(val, str): return ""
+        # Keep internal logic for styling maps
         expiry_date = datetime.strptime(val, "%d %b %y").date()
         today = date.today()
-        # Find next Friday logic
         days_ahead = (4 - today.weekday()) % 7
         this_fri = today + timedelta(days=days_ahead)
         
         if expiry_date < today: return "" 
-        
         if expiry_date == this_fri: return "background-color: #b7e1cd; color: black;" 
         if expiry_date == this_fri + timedelta(days=7): return "background-color: #fce8b2; color: black;" 
         if expiry_date == this_fri + timedelta(days=14): return "background-color: #f4c7c3; color: black;" 
@@ -147,7 +154,6 @@ def highlight_expiry(val):
 def clean_strike_fmt(val):
     try:
         f = float(val)
-        # Check if integer
         if f.is_integer():
             return str(int(f))
         return str(f)
@@ -181,7 +187,6 @@ def get_confirmed_gdrive_data(url):
                 break
         
         if not confirm_token:
-            # Optimized Regex
             match = re.search(r'confirm=([0-9A-Za-z_]+)', response.text)
             if match: confirm_token = match.group(1)
 
@@ -217,38 +222,33 @@ def style_tags(tag_str):
     if not tag_str: return ''
     tags = tag_str.split(", ")
     colors = {f"EMA{EMA8_PERIOD}": "#4a90e2", f"EMA{EMA21_PERIOD}": "#9b59b6", "VOL_HIGH": "#e67e22", "VOL_GROW": "#27ae60"}
-    # Use list join for faster string concatenation
     html_parts = []
     for t in tags:
         color = colors.get(t, "#7f8c8d")
         html_parts.append(f'<span class="tag-bubble" style="background-color: {color};">{t}</span>')
     return "".join(html_parts)
 
-def calculate_ev_data(df, target_rsi, periods, current_price):
-    if df.empty or pd.isna(target_rsi): return None
-    # Pre-calculate date once
-    cutoff_date = df.index.max() - timedelta(days=365 * EV_LOOKBACK_YEARS)
-    hist_df = df[df.index >= cutoff_date].copy()
-    
-    # Vectorized mask
-    mask = (hist_df['RSI'] >= target_rsi - 2) & (hist_df['RSI'] <= target_rsi + 2)
+def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current_price):
+    """Optimized version using Numpy arrays instead of Pandas series."""
+    # Masking in numpy is faster
+    mask = (rsi_array >= target_rsi - 2) & (rsi_array <= target_rsi + 2)
     indices = np.where(mask)[0]
     
     if len(indices) == 0: return None
 
-    # Collect returns efficiently
+    # Calculate exit indices
     exit_indices = indices + periods
-    valid_mask = exit_indices < len(hist_df)
+    # Ensure exit indices are within bounds
+    valid_mask = exit_indices < len(price_array)
     
     if not np.any(valid_mask): return None
     
     valid_starts = indices[valid_mask]
     valid_exits = exit_indices[valid_mask]
     
-    entry_prices = hist_df['Price'].iloc[valid_starts].values
-    exit_prices = hist_df['Price'].iloc[valid_exits].values
+    entry_prices = price_array[valid_starts]
+    exit_prices = price_array[valid_exits]
     
-    # Vectorized return calculation
     # Avoid division by zero
     valid_entries_mask = entry_prices > 0
     if not np.any(valid_entries_mask): return None
@@ -266,7 +266,6 @@ def prepare_data(df):
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
     
     cols = df.columns
-    # Use next with generator is fine here
     date_col = next((c for c in cols if 'DATE' in c), None)
     close_col = next((c for c in cols if 'CLOSE' in c and 'W_' not in c), None)
     vol_col = next((c for c in cols if ('VOL' in c or 'VOLUME' in c) and 'W_' not in c), None)
@@ -302,33 +301,45 @@ def prepare_data(df):
 
 def find_divergences(df_tf, ticker, timeframe):
     divergences = []
-    if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
+    n_rows = len(df_tf)
+    if n_rows < DIVERGENCE_LOOKBACK + 1: return divergences
+    
+    # Convert core columns to numpy for faster lookups in EV calc
+    # Slice historical data for EV calc once
+    cutoff_date = df_tf.index.max() - timedelta(days=365 * EV_LOOKBACK_YEARS)
+    hist_mask = df_tf.index >= cutoff_date
+    rsi_hist = df_tf.loc[hist_mask, 'RSI'].values
+    price_hist = df_tf.loc[hist_mask, 'Price'].values
     
     latest_p = df_tf.iloc[-1]
-    ev30 = calculate_ev_data(df_tf, latest_p['RSI'], 30, latest_p['Price'])
-    ev90 = calculate_ev_data(df_tf, latest_p['RSI'], 90, latest_p['Price'])
+    
+    # Calculate EV for the *current* situation
+    ev30 = calculate_ev_data_numpy(rsi_hist, price_hist, latest_p['RSI'], 30, latest_p['Price'])
+    ev90 = calculate_ev_data_numpy(rsi_hist, price_hist, latest_p['RSI'], 90, latest_p['Price'])
     
     def get_date_str(p): return df_tf.loc[p.name, 'ChartDate'].strftime('%Y-%m-%d') if timeframe.lower() == 'weekly' else p.name.strftime('%Y-%m-%d')
     
-    start_idx = max(DIVERGENCE_LOOKBACK, len(df_tf) - SIGNAL_LOOKBACK_PERIOD)
+    start_idx = max(DIVERGENCE_LOOKBACK, n_rows - SIGNAL_LOOKBACK_PERIOD)
     
-    # Loop over range is necessary for rolling logic
-    for i in range(start_idx, len(df_tf)):
+    # Pre-fetch numpy arrays for the loop window
+    # While we loop with iloc for convenience of full row access, we use vectorized checks where possible
+    for i in range(start_idx, n_rows):
         p2 = df_tf.iloc[i]
         lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
+        
         is_vol_high = int(p2['Volume'] > (p2['VolSMA'] * 1.5)) if not pd.isna(p2['VolSMA']) else 0
         
         for s_type in ['Bullish', 'Bearish']:
             trigger = False
+            p1 = None
+            
             # Check Extremes
             if s_type == 'Bullish':
                 if p2['Low'] < lookback['Low'].min():
-                    # Find min RSI in lookback
                     p1_idx = lookback['RSI'].idxmin()
                     p1 = lookback.loc[p1_idx]
                     
                     if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
-                        # Verify no cross of 50
                         subset = df_tf.loc[p1.name : p2.name, 'RSI']
                         if not (subset > 50).any(): trigger = True
             else: # Bearish
@@ -340,7 +351,7 @@ def find_divergences(df_tf, ticker, timeframe):
                         subset = df_tf.loc[p1.name : p2.name, 'RSI']
                         if not (subset < 50).any(): trigger = True
             
-            if trigger:
+            if trigger and p1 is not None:
                 # Validation of post-signal movement
                 post_df = df_tf.iloc[i + 1 :]
                 valid = True
@@ -350,7 +361,6 @@ def find_divergences(df_tf, ticker, timeframe):
                 
                 if valid:
                     tags = []
-                    # Optimized tag logic
                     if s_type == 'Bullish':
                         if latest_p['Price'] >= latest_p.get('EMA8', 0): tags.append(f"EMA{EMA8_PERIOD}")
                         if latest_p['Price'] >= latest_p.get('EMA21', 0): tags.append(f"EMA{EMA21_PERIOD}")
@@ -464,14 +474,16 @@ def run_rankings_app(df):
         """)
     
     with st.spinner("Processing Smart Money calculations... Please be patient, it is totally worth it!"):
-        # Optimization: Vectorized calculation instead of apply
+        # Optimization: Vectorized calculation
         f_filtered["Signed_Dollars"] = np.where(
             f_filtered[order_type_col].isin(["Calls Bought", "Puts Sold"]), 
             f_filtered["Dollars"], 
             -f_filtered["Dollars"]
         )
         
-        def get_mcap_safe(sym): return get_market_cap(sym)
+        # We must keep using the cached get_market_cap. 
+        # Using a list comprehension is slightly faster than apply for simple function calls in some versions
+        # but apply is generally fine if the function is cached.
         
         smart_stats = f_filtered.groupby("Symbol").agg(
             Signed_Dollars=("Signed_Dollars", "sum"),
@@ -480,7 +492,7 @@ def run_rankings_app(df):
         ).reset_index()
         
         smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
-        smart_stats["Market Cap"] = smart_stats["Symbol"].apply(get_mcap_safe)
+        smart_stats["Market Cap"] = smart_stats["Symbol"].apply(lambda x: get_market_cap(x))
         
         unique_dates = sorted(f_filtered["Trade Date"].unique())
         recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
@@ -499,6 +511,7 @@ def run_rankings_app(df):
                 mn, mx = series.min(), series.max()
                 return (series - mn) / (mx - mn) if (mx != mn) else 0
 
+            # Vectorized clipping
             bull_flow = valid_data["Net Sentiment ($)"].clip(lower=0)
             bull_imp = valid_data["Impact"].clip(lower=0)
             bull_mom = valid_data["Momentum ($)"].clip(lower=0)
@@ -707,7 +720,6 @@ def run_strike_zones_app(df):
         if f.empty:
             st.info("No rows selected. Check the 'Include' boxes below.")
         else:
-            # Using global cached function
             spot, ema8, ema21, sma200, history = get_stock_indicators(ticker)
             if spot is None: spot = 100.0
 
@@ -715,20 +727,19 @@ def run_strike_zones_app(df):
                 if x is None or np.isnan(x): return "—"
                 return f"{(x/spot-1)*100:+.1f}%"
             
-            # List builder for HTML
             badges = [f'<span class="price-badge-header">Price: ${spot:,.2f}</span>']
             if ema8: badges.append(f'<span class="badge">EMA(8): ${ema8:,.2f} ({pct_from_spot(ema8)})</span>')
             if ema21: badges.append(f'<span class="badge">EMA(21): ${ema21:,.2f} ({pct_from_spot(ema21)})</span>')
             if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
             st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
 
-            # Optimization: Vectorized Signed Dollars
             f["Signed Dollars"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), 1, -1) * f["Dollars"].fillna(0.0)
             
             fmt_neg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
 
             if view_mode == "Price Zones":
-                strike_min, strike_max = float(np.nanmin(f["Strike (Actual)"].values)), float(np.nanmax(f["Strike (Actual)"].values))
+                strike_vals = f["Strike (Actual)"].values
+                strike_min, strike_max = float(np.nanmin(strike_vals)), float(np.nanmax(strike_vals))
                 if width_mode == "Auto": 
                     denom = 12.0
                     zone_w = float(next((s for s in [1, 2, 5, 10, 25, 50, 100] if s >= (max(1e-9, strike_max - strike_min) / denom)), 100))
@@ -740,7 +751,6 @@ def run_strike_zones_app(df):
                 lower_edge = spot - n_dn * zone_w
                 total = max(1, n_dn + n_up)
                 
-                # Optimized vectorized binning
                 f["ZoneIdx"] = np.clip(
                     np.floor((f["Strike (Actual)"] - lower_edge) / zone_w).astype(int), 
                     0, 
@@ -754,13 +764,11 @@ def run_strike_zones_app(df):
                 
                 if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
                 
-                # Build HTML list
                 html_out = ['<div class="zones-panel">']
                 
                 max_val = max(1.0, zs["Net_Dollars"].abs().max())
                 sorted_zs = zs.sort_values("ZoneIdx", ascending=False)
                 
-                # Split logic for spot insertion
                 upper_zones = sorted_zs[sorted_zs["Zone_Low"] + (zone_w/2) > spot]
                 lower_zones = sorted_zs[sorted_zs["Zone_Low"] + (zone_w/2) <= spot]
                 
@@ -870,7 +878,6 @@ def run_pivot_tables_app(df):
 
     order_type_col = "Order Type" if "Order Type" in d_range.columns else "Order type"
     
-    # Slice efficiently
     cb_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy()
     ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
     pb_pool = d_range[d_range[order_type_col] == "Puts Bought"].copy()
@@ -879,18 +886,24 @@ def run_pivot_tables_app(df):
     cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
     rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
     
-    rr_rows = []
-    # Optimization: iterate tuples is faster than iterrows
-    for row in rr_matches.itertuples():
-        # idx is row[0]
-        idx = row.Index
-        # Access attributes by name
-        rr_rows.append({'Symbol': row.Symbol, 'Trade Date': row._2, 'Expiry_DT': row.Expiry_DT, 'Contracts': row.Contracts, 'Dollars': row.Dollars_c, 'Strike': clean_strike_fmt(row.Strike_c), 'Pair_ID': idx, 'Pair_Side': 0})
-        rr_rows.append({'Symbol': row.Symbol, 'Trade Date': row._2, 'Expiry_DT': row.Expiry_DT, 'Contracts': row.Contracts, 'Dollars': row.Dollars_p, 'Strike': clean_strike_fmt(row.Strike_p), 'Pair_ID': idx, 'Pair_Side': 1})
-    
-    df_rr = pd.DataFrame(rr_rows)
-
+    # Optimization: Vectorized DataFrame creation instead of loop
     if not rr_matches.empty:
+        # Create Call side frame
+        rr_c = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_c', 'Strike_c']].copy()
+        rr_c.rename(columns={'Dollars_c': 'Dollars', 'Strike_c': 'Strike'}, inplace=True)
+        rr_c['Pair_ID'] = rr_matches.index
+        rr_c['Pair_Side'] = 0
+        
+        # Create Put side frame
+        rr_p = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_p', 'Strike_p']].copy()
+        rr_p.rename(columns={'Dollars_p': 'Dollars', 'Strike_p': 'Strike'}, inplace=True)
+        rr_p['Pair_ID'] = rr_matches.index
+        rr_p['Pair_Side'] = 1
+        
+        # Combine and clean Strike column vectorized
+        df_rr = pd.concat([rr_c, rr_p])
+        df_rr['Strike'] = df_rr['Strike'].apply(clean_strike_fmt)
+        
         match_keys = keys + ['occ']
         def filter_out_matches(pool, matches):
             temp_matches = matches[match_keys].copy()
@@ -899,6 +912,8 @@ def run_pivot_tables_app(df):
             return merged[merged['_remove'].isna()].drop(columns=['_remove'])
         cb_pool = filter_out_matches(cb_pool, rr_matches)
         ps_pool = filter_out_matches(ps_pool, rr_matches)
+    else:
+        df_rr = pd.DataFrame(columns=['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars', 'Strike', 'Pair_ID', 'Pair_Side'])
 
     def apply_f(data):
         if data.empty: return data
@@ -906,7 +921,6 @@ def run_pivot_tables_app(df):
         if ticker_filter: f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
         f = f[f["Dollars"] >= min_notional]
         
-        # Optimize filtering: Pre-fetch checks
         if not f.empty:
             unique_symbols = f["Symbol"].unique()
             valid_symbols = set(unique_symbols)
@@ -931,7 +945,7 @@ def run_pivot_tables_app(df):
             piv = data.groupby(["Symbol", "Strike", "Expiry_DT"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index().merge(sr, on="Symbol")
             piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
         piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
-        # Vectorized symbol display logic
+        
         piv["Symbol_Display"] = np.where(piv["Symbol"] == piv["Symbol"].shift(1), "", piv["Symbol"])
         
         return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
@@ -1029,7 +1043,7 @@ def run_rsi_divergences_app():
                     d_d, d_w = prepare_data(group.copy())
                     if d_d is not None: raw_results.extend(find_divergences(d_d, ticker, 'Daily'))
                     if d_w is not None: raw_results.extend(find_divergences(d_w, ticker, 'Weekly'))
-                    # Optimization: Reduce update frequency for progress bar to avoid UI blocking
+                    
                     if i % 5 == 0 or i == total_groups - 1:
                         progress_bar.progress((i + 1) / total_groups)
                 
@@ -1044,7 +1058,6 @@ def run_rsi_divergences_app():
                             tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                             
                             if not tbl_df.empty:
-                                # Optimized HTML Building (List Join)
                                 html_rows = ['<table class="rsi-table"><thead><tr><th style="width:7%">Ticker</th><th style="width:25%">Tags</th><th style="width:8%">P1 Date</th><th style="width:8%">Signal Date</th><th style="width:8%">RSI</th><th style="width:8%">P1 Price</th><th style="width:8%">P2 Price</th><th style="width:8%">Last Close</th><th style="width:10%">EV 30p</th><th style="width:10%">EV 90p</th></tr></thead><tbody>']
                                 
                                 for row in tbl_df.itertuples():
@@ -1052,17 +1065,14 @@ def run_rsi_divergences_app():
                                         '<tr>',
                                         f'<td style="text-align:left"><b>{row.Ticker}</b></td>',
                                         f'<td style="text-align:left">{style_tags(row.Tags)}</td>',
-                                        f'<td style="text-align:center">{row._5}</td>', # P1 Date is column index 5 (implied) or name
-                                        f'<td style="text-align:center">{row._6}</td>', # Signal Date
+                                        f'<td style="text-align:center">{row._5}</td>', 
+                                        f'<td style="text-align:center">{row._6}</td>', 
                                         f'<td style="text-align:center">{row.RSI}</td>',
-                                        f'<td style="text-align:left">{row._8}</td>', # P1 Price
-                                        f'<td style="text-align:left">{row._9}</td>', # P2 Price
-                                        f'<td style="text-align:left">{row._10}</td>' # Last Close
+                                        f'<td style="text-align:left">{row._8}</td>', 
+                                        f'<td style="text-align:left">{row._9}</td>', 
+                                        f'<td style="text-align:left">{row._10}</td>' 
                                     ]
                                     
-                                    # Handle EV columns
-                                    # Note: itertuples names are mangled if they contain spaces or start with numbers, 
-                                    # but here keys are ev30_raw and ev90_raw
                                     for data in [row.ev30_raw, row.ev90_raw]:
                                         if data:
                                             is_pos = data['return'] > 0
