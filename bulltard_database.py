@@ -240,6 +240,64 @@ def run_rankings_app(df):
         st.markdown("<h3 style='color: #f29ca0; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
         st.dataframe(bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
 
+    # --- TRENDING ANALYSIS SECTION ---
+    st.markdown("---")
+    st.markdown("<h3 style='font-size: 1.2rem; margin-bottom: 1rem;'>🔥 Trending Tickers (Rank Movers)</h3>", unsafe_allow_html=True)
+    st.caption("Analyzing rank changes over the last 10 trading days. Positive 'Trend' means the ticker is moving UP the rankings (improvement).")
+    
+    # Calculate daily trends
+    trend_start_date = max_data_date - timedelta(days=14)
+    df_trend = df[(df["Trade Date"].dt.date >= trend_start_date) & (df["Trade Date"].dt.date <= max_data_date)].copy()
+    
+    if not df_trend.empty:
+        # Group by Date and Symbol to get Daily Score
+        df_trend_g = df_trend.groupby(["Trade Date", "Symbol", order_type_col]).size().unstack(fill_value=0)
+        # Ensure columns exist
+        for t_type in target_types:
+            if t_type not in df_trend_g.columns: df_trend_g[t_type] = 0
+            
+        df_trend_g["DailyScore"] = df_trend_g["Calls Bought"] + df_trend_g["Puts Sold"] - df_trend_g["Puts Bought"]
+        
+        # We need cumulative score up to that date for proper ranking? 
+        # Or just daily ranking? The user asked for "moving up the rankings", usually implies cumulative standing.
+        # Let's compute rank based on Daily Activity for "Trending" context (who is hot NOW).
+        
+        daily_scores = df_trend_g["DailyScore"].reset_index()
+        
+        # Rank daily: Higher score = Rank 1
+        daily_scores["DayRank"] = daily_scores.groupby("Trade Date")["DailyScore"].rank(method="min", ascending=False)
+        
+        # Pivot to get Ranks across days
+        rank_matrix = daily_scores.pivot(index="Symbol", columns="Trade Date", values="DayRank")
+        
+        if len(rank_matrix.columns) >= 2:
+            latest_date = rank_matrix.columns[-1]
+            # Compare latest rank vs Average rank of the period
+            avg_rank = rank_matrix.mean(axis=1)
+            current_rank = rank_matrix[latest_date]
+            
+            # Trend Score: If Avg Rank (e.g. 10) > Current Rank (e.g. 2), Difference is 8 (Positive Improvement)
+            trend_df = pd.DataFrame({
+                "Current Rank": current_rank,
+                "Avg Rank (2w)": avg_rank
+            })
+            trend_df["Trend Score"] = trend_df["Avg Rank (2w)"] - trend_df["Current Rank"]
+            trend_df = trend_df.dropna()
+            
+            # Filter for movers
+            movers = trend_df.sort_values("Trend Score", ascending=False).head(15)
+            movers = movers.reset_index()
+            
+            # Display
+            st.dataframe(
+                movers.style.format({"Current Rank": "{:.0f}", "Avg Rank (2w)": "{:.1f}", "Trend Score": "{:+.1f}"})
+                .background_gradient(cmap="Greens", subset=["Trend Score"]),
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("Not enough data days to calculate trends yet.")
+
 def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
     exp_range_default = (date.today() + timedelta(days=365))
@@ -440,7 +498,8 @@ def run_pivot_tables_app(df):
 
     # --- LEFT COLUMN: FILTERS ---
     with col_filters:
-        st.markdown("<h4 style='font-size: 1rem; margin-bottom: 10px;'>Filters</h4>", unsafe_allow_html=True)
+        # Standardized Header
+        st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>Filters</h4>", unsafe_allow_html=True)
         # Row 1 of Filters
         fc1, fc2, fc3 = st.columns(3)
         with fc1: td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
@@ -457,9 +516,8 @@ def run_pivot_tables_app(df):
 
     # --- RIGHT COLUMN: CALCULATOR ---
     with col_calculator:
-        # WRAPPER FOR BORDER
-        st.markdown('<div style="border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 10px; padding: 15px; background-color: rgba(128, 128, 128, 0.05);">', unsafe_allow_html=True)
-        
+        # Removed the wrapper box entirely as requested
+        # Standardized Header to match Filters exactly
         st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
         
         # Row 1 of Calculator (Inputs)
@@ -481,8 +539,6 @@ def run_pivot_tables_app(df):
         with cc4: st.text_input("Annualised Return", key="calc_out_ann")
         with cc5: st.text_input("Cash on Cash Return", key="calc_out_coc")
         with cc6: st.text_input("Days to Expiration", key="calc_out_dte")
-        
-        st.markdown('</div>', unsafe_allow_html=True) # END WRAPPER
 
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 10px; margin-bottom: 20px; align-items: center;">
