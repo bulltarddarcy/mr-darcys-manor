@@ -36,18 +36,15 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
     df = pd.read_csv(url)
     want = ["Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Error"]
     
-    # Filter columns immediately to save memory
     existing_cols = df.columns
     keep = [c for c in want if c in existing_cols]
     df = df[keep].copy()
     
-    # Vectorized string cleanup
     str_cols = ["Order Type", "Symbol", "Strike", "Expiry"]
     for c in str_cols:
         if c in df.columns:
             df[c] = df[c].astype(str).str.strip()
     
-    # Vectorized cleanup for numeric columns
     if "Dollars" in df.columns:
         df["Dollars"] = (df["Dollars"].astype(str)
                          .str.replace("$", "", regex=False)
@@ -69,7 +66,6 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce").fillna(0.0)
         
     if "Error" in df.columns:
-        # Optimized filtering
         err_vals = {"TRUE", "1", "YES"}
         mask = df["Error"].astype(str).str.upper().isin(err_vals)
         df = df[~mask]
@@ -80,7 +76,6 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
 def get_market_cap(symbol: str) -> float:
     try:
         t = yf.Ticker(symbol)
-        # Try fast_info first (faster attribute access)
         mc = t.fast_info.get('marketCap')
         if mc: return float(mc)
         return float(t.info.get('marketCap', 0))
@@ -102,19 +97,14 @@ def is_above_ema21(symbol: str) -> bool:
 
 @st.cache_data(ttl=300)
 def get_stock_indicators(sym: str):
-    """Optimized to fetch history once."""
     try:
         ticker_obj = yf.Ticker(sym)
-        # Fetch 2y once to cover both SMA200 and EMAs
         h_full = ticker_obj.history(period="2y", interval="1d")
         
         if len(h_full) == 0: return None, None, None, None, None
         
-        # Calculate SMA200 on full data
         sma200 = float(h_full["Close"].rolling(window=200).mean().iloc[-1]) if len(h_full) >= 200 else None
         
-        # Slice for EMAs (need last ~60 days is enough for decent EMA convergence, 
-        # but taking tail ensures we have recent data)
         h_recent = h_full.iloc[-60:].copy() if len(h_full) > 60 else h_full.copy()
         
         if len(h_recent) == 0: return None, None, None, None, None
@@ -138,7 +128,6 @@ def get_table_height(df, max_rows=30):
 def highlight_expiry(val):
     try:
         if not isinstance(val, str): return ""
-        # Keep internal logic for styling maps
         expiry_date = datetime.strptime(val, "%d %b %y").date()
         today = date.today()
         days_ahead = (4 - today.weekday()) % 7
@@ -229,16 +218,12 @@ def style_tags(tag_str):
     return "".join(html_parts)
 
 def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current_price):
-    """Optimized version using Numpy arrays instead of Pandas series."""
-    # Masking in numpy is faster
     mask = (rsi_array >= target_rsi - 2) & (rsi_array <= target_rsi + 2)
     indices = np.where(mask)[0]
     
     if len(indices) == 0: return None
 
-    # Calculate exit indices
     exit_indices = indices + periods
-    # Ensure exit indices are within bounds
     valid_mask = exit_indices < len(price_array)
     
     if not np.any(valid_mask): return None
@@ -249,7 +234,6 @@ def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current
     entry_prices = price_array[valid_starts]
     exit_prices = price_array[valid_exits]
     
-    # Avoid division by zero
     valid_entries_mask = entry_prices > 0
     if not np.any(valid_entries_mask): return None
     
@@ -262,7 +246,6 @@ def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current
     return {"price": ev_price, "n": len(returns), "return": avg_ret}
 
 def prepare_data(df):
-    # Optimize column mapping
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
     
     cols = df.columns
@@ -304,8 +287,6 @@ def find_divergences(df_tf, ticker, timeframe):
     n_rows = len(df_tf)
     if n_rows < DIVERGENCE_LOOKBACK + 1: return divergences
     
-    # Convert core columns to numpy for faster lookups in EV calc
-    # Slice historical data for EV calc once
     cutoff_date = df_tf.index.max() - timedelta(days=365 * EV_LOOKBACK_YEARS)
     hist_mask = df_tf.index >= cutoff_date
     rsi_hist = df_tf.loc[hist_mask, 'RSI'].values
@@ -313,7 +294,6 @@ def find_divergences(df_tf, ticker, timeframe):
     
     latest_p = df_tf.iloc[-1]
     
-    # Calculate EV for the *current* situation
     ev30 = calculate_ev_data_numpy(rsi_hist, price_hist, latest_p['RSI'], 30, latest_p['Price'])
     ev90 = calculate_ev_data_numpy(rsi_hist, price_hist, latest_p['RSI'], 90, latest_p['Price'])
     
@@ -321,8 +301,6 @@ def find_divergences(df_tf, ticker, timeframe):
     
     start_idx = max(DIVERGENCE_LOOKBACK, n_rows - SIGNAL_LOOKBACK_PERIOD)
     
-    # Pre-fetch numpy arrays for the loop window
-    # While we loop with iloc for convenience of full row access, we use vectorized checks where possible
     for i in range(start_idx, n_rows):
         p2 = df_tf.iloc[i]
         lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
@@ -333,7 +311,6 @@ def find_divergences(df_tf, ticker, timeframe):
             trigger = False
             p1 = None
             
-            # Check Extremes
             if s_type == 'Bullish':
                 if p2['Low'] < lookback['Low'].min():
                     p1_idx = lookback['RSI'].idxmin()
@@ -342,7 +319,7 @@ def find_divergences(df_tf, ticker, timeframe):
                     if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
                         subset = df_tf.loc[p1.name : p2.name, 'RSI']
                         if not (subset > 50).any(): trigger = True
-            else: # Bearish
+            else: 
                 if p2['High'] > lookback['High'].max():
                     p1_idx = lookback['RSI'].idxmax()
                     p1 = lookback.loc[p1_idx]
@@ -352,7 +329,6 @@ def find_divergences(df_tf, ticker, timeframe):
                         if not (subset < 50).any(): trigger = True
             
             if trigger and p1 is not None:
-                # Validation of post-signal movement
                 post_df = df_tf.iloc[i + 1 :]
                 valid = True
                 if not post_df.empty:
@@ -474,16 +450,11 @@ def run_rankings_app(df):
         """)
     
     with st.spinner("Processing Smart Money calculations... Please be patient, it is totally worth it!"):
-        # Optimization: Vectorized calculation
         f_filtered["Signed_Dollars"] = np.where(
             f_filtered[order_type_col].isin(["Calls Bought", "Puts Sold"]), 
             f_filtered["Dollars"], 
             -f_filtered["Dollars"]
         )
-        
-        # We must keep using the cached get_market_cap. 
-        # Using a list comprehension is slightly faster than apply for simple function calls in some versions
-        # but apply is generally fine if the function is cached.
         
         smart_stats = f_filtered.groupby("Symbol").agg(
             Signed_Dollars=("Signed_Dollars", "sum"),
@@ -511,7 +482,6 @@ def run_rankings_app(df):
                 mn, mx = series.min(), series.max()
                 return (series - mn) / (mx - mn) if (mx != mn) else 0
 
-            # Vectorized clipping
             bull_flow = valid_data["Net Sentiment ($)"].clip(lower=0)
             bull_imp = valid_data["Impact"].clip(lower=0)
             bull_mom = valid_data["Momentum ($)"].clip(lower=0)
@@ -772,20 +742,35 @@ def run_strike_zones_app(df):
                 upper_zones = sorted_zs[sorted_zs["Zone_Low"] + (zone_w/2) > spot]
                 lower_zones = sorted_zs[sorted_zs["Zone_Low"] + (zone_w/2) <= spot]
                 
-                def make_row(r):
-                    is_bull = r["Net_Dollars"] >= 0
-                    color = "zone-bull" if is_bull else "zone-bear"
-                    w = max(6, int((abs(r['Net_Dollars']) / max_val) * 420))
-                    val_str = fmt_neg(r["Net_Dollars"])
-                    return f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>'
-
                 for _, r in upper_zones.iterrows():
-                    html_out.append(make_row(r))
+                    color = "zone-bull" if r["Net_Dollars"] >= 0 else "zone-bear"
+                    pct = (abs(r['Net_Dollars']) / max_val) * 100
+                    val_str = fmt_neg(r["Net_Dollars"])
+                    html_out.append(f"""
+                    <div class="zone-row">
+                        <div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div>
+                        <div class="zone-wrapper">
+                            <div class="zone-bar {color}" style="width:{pct:.1f}%"></div>
+                            <div class="zone-value">{val_str} | n={int(r.Trades)}</div>
+                        </div>
+                    </div>
+                    """)
                 
                 html_out.append(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>')
                 
                 for _, r in lower_zones.iterrows():
-                    html_out.append(make_row(r))
+                    color = "zone-bull" if r["Net_Dollars"] >= 0 else "zone-bear"
+                    pct = (abs(r['Net_Dollars']) / max_val) * 100
+                    val_str = fmt_neg(r["Net_Dollars"])
+                    html_out.append(f"""
+                    <div class="zone-row">
+                        <div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div>
+                        <div class="zone-wrapper">
+                            <div class="zone-bar {color}" style="width:{pct:.1f}%"></div>
+                            <div class="zone-value">{val_str} | n={int(r.Trades)}</div>
+                        </div>
+                    </div>
+                    """)
                 
                 html_out.append('</div>')
                 st.markdown("".join(html_out), unsafe_allow_html=True)
@@ -801,9 +786,17 @@ def run_strike_zones_app(df):
                 html_out = []
                 for _, r in agg.iterrows():
                     color = "zone-bull" if r["Net_Dollars"] >= 0 else "zone-bear"
-                    w = max(6, int((abs(r['Net_Dollars']) / max_val) * 420))
+                    pct = (abs(r['Net_Dollars']) / max_val) * 100
                     val_str = fmt_neg(r["Net_Dollars"])
-                    html_out.append(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>')
+                    html_out.append(f"""
+                    <div class="zone-row">
+                        <div class="zone-label">{r.Bucket}</div>
+                        <div class="zone-wrapper">
+                            <div class="zone-bar {color}" style="width:{pct:.1f}%"></div>
+                            <div class="zone-value">{val_str} | n={int(r.Trades)}</div>
+                        </div>
+                    </div>
+                    """)
                 
                 st.markdown("".join(html_out), unsafe_allow_html=True)
             
@@ -886,21 +879,17 @@ def run_pivot_tables_app(df):
     cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
     rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
     
-    # Optimization: Vectorized DataFrame creation instead of loop
     if not rr_matches.empty:
-        # Create Call side frame
         rr_c = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_c', 'Strike_c']].copy()
         rr_c.rename(columns={'Dollars_c': 'Dollars', 'Strike_c': 'Strike'}, inplace=True)
         rr_c['Pair_ID'] = rr_matches.index
         rr_c['Pair_Side'] = 0
         
-        # Create Put side frame
         rr_p = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_p', 'Strike_p']].copy()
         rr_p.rename(columns={'Dollars_p': 'Dollars', 'Strike_p': 'Strike'}, inplace=True)
         rr_p['Pair_ID'] = rr_matches.index
         rr_p['Pair_Side'] = 1
         
-        # Combine and clean Strike column vectorized
         df_rr = pd.concat([rr_c, rr_p])
         df_rr['Strike'] = df_rr['Strike'].apply(clean_strike_fmt)
         
@@ -1096,12 +1085,41 @@ st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎"
 st.markdown("""<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
 .zones-panel{padding:14px 0; border-radius:10px;}
-.zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
-.zone-label{width:100px;font-weight:700; text-align: right;}
-.zone-bar{height:22px;border-radius:6px;min-width:6px}
-.zone-bull{background: linear-gradient(90deg, #71d28a, #60c57b)}
-.zone-bear{background: linear-gradient(90deg, #f29ca0, #e4878d)}
-.zone-value{min-width:220px;font-variant-numeric:tabular-nums}
+.zone-row{display:flex; align-items:center; gap:10px; margin:8px 0;}
+.zone-label{width:90px; font-weight:700; text-align:right; flex-shrink: 0; font-size: 13px;}
+.zone-wrapper{
+    flex-grow: 1; 
+    position: relative; 
+    height: 24px; 
+    background-color: rgba(0,0,0,0.03);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.zone-bar{
+    position: absolute;
+    left: 0; 
+    top: 0; 
+    bottom: 0; 
+    z-index: 1;
+    border-radius: 3px;
+    opacity: 0.65;
+}
+.zone-bull{background-color: #71d28a;}
+.zone-bear{background-color: #f29ca0;}
+.zone-value{
+    position: absolute;
+    right: 8px;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    z-index: 2;
+    font-size: 12px; 
+    font-weight: 700;
+    color: #1f1f1f;
+    white-space: nowrap;
+    text-shadow: 0 0 4px rgba(255,255,255,0.8);
+}
 .price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
 .price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.4; }
 .price-badge { background: rgba(102, 183, 255, 0.1); color: #66b7ff; border: 1px solid rgba(102, 183, 255, 0.5); border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; white-space: nowrap; margin: 0 12px; z-index: 1; }
