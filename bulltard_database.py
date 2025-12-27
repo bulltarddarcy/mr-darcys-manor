@@ -120,9 +120,9 @@ def get_max_trade_date(df):
     return date.today() - timedelta(days=1)
 
 def render_page_header(title, df):
-    st.title(title)
+    st.markdown(f"<h1 style='margin-bottom: 0px;'>{title}</h1>", unsafe_allow_html=True)
     last_updated = get_max_trade_date(df).strftime("%d %b %y")
-    st.markdown(f"<p style='color: #808495; margin-top: -15px; margin-bottom: 25px;'>Last Updated: {last_updated}</p>", unsafe_allow_html=True)
+    st.markdown(f"<p style='color: #808495; margin-top: 0px; margin-bottom: 20px; font-size: 0.9rem;'>Last Updated: {last_updated}</p>", unsafe_allow_html=True)
 
 # --- 2. APP MODULES ---
 
@@ -142,7 +142,8 @@ def run_options_database_app(df):
         exp_range_default = (date.today() + timedelta(days=365))
         db_exp_end = st.date_input("Expiration Range (end)", value=exp_range_default, key="db_exp")
     
-    ot1, ot2, ot3, ot_pad = st.columns([1.5, 1.5, 1.5, 5.5])
+    # Grouped Checkboxes - narrower columns to pull them closer
+    ot1, ot2, ot3, ot_pad = st.columns([1, 1, 1, 6])
     with ot1: inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
     with ot2: inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
     with ot3: inc_pb = st.checkbox("Puts Bought", value=True, key="db_inc_pb")
@@ -545,8 +546,17 @@ st.markdown("""
 <style>
     :root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff;}
     
-    /* Global Background & Text Fixes */
-    .block-container{padding-top:1.5rem; padding-bottom:1rem;}
+    /* Global fixes and Tab Position */
+    .block-container{padding-top: 1.5rem !important;}
+    
+    /* Header/Nav adjustment - ensuring it's below the Streamlit ceiling */
+    header[data-testid="stHeader"] {z-index: 1000 !important; height: 3rem !important;}
+    
+    .nav-container-outer {
+        padding-top: 2rem !important; /* Pushes the buttons down to avoid overlap */
+        margin-bottom: 10px !important;
+    }
+
     .control-box{padding:15px; border-radius:10px; background-color: var(--panel2); border: 1px solid #3a3f45; margin-bottom: 20px;}
     .calc-box {
         padding: 15px; 
@@ -564,48 +574,23 @@ st.markdown("""
         font-weight: 700 !important;
     }
 
-    /* Navigation Styling - Tab Style */
-    div.nav-container {
-        display: flex;
-        gap: 30px;
-        border-bottom: 1px solid #3a3f45;
-        margin-bottom: 25px;
-        padding-bottom: 10px;
-    }
-    .nav-item {
-        color: #808495;
-        font-weight: 600;
-        cursor: pointer;
-        padding: 5px 0;
-        border-bottom: 2px solid transparent;
-        transition: all 0.3s;
-    }
-    .nav-item:hover { color: #ffffff; }
-    .nav-active {
-        color: #66b7ff !important;
-        border-bottom: 2px solid #66b7ff !important;
-    }
-
-    /* Clean up default streamlit buttons in Nav */
+    /* Navigation Styling - Modern Tab Style */
     div.stButton > button.nav-btn {
-        background: none !important;
+        background: transparent !important;
         border: none !important;
-        padding: 0 !important;
+        border-bottom: 2px solid transparent !important;
+        border-radius: 0px !important;
         color: #808495 !important;
         font-weight: 600 !important;
-        border-radius: 0 !important;
-        border-bottom: 2px solid transparent !important;
+        padding-bottom: 8px !important;
+        height: auto !important;
     }
     div.stButton > button.nav-btn:hover {
-        color: white !important;
+        color: #ffffff !important;
+        border-bottom: 2px solid #555 !important;
     }
-    div.stButton > button.nav-active-btn {
-        background: none !important;
-        border: none !important;
-        padding: 0 !important;
+    div.stButton > button.nav-active {
         color: #66b7ff !important;
-        font-weight: 700 !important;
-        border-radius: 0 !important;
         border-bottom: 2px solid #66b7ff !important;
     }
 
@@ -632,24 +617,30 @@ try:
     sheet_url = st.secrets["GSHEET_URL"]
     df_global = load_and_clean_data(sheet_url)
 
-    # --- CUSTOM TOP NAVIGATION ---
+    # --- TOP NAVIGATION ---
     if "app_choice" not in st.session_state:
         st.session_state["app_choice"] = "Options Database"
 
     nav_items = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
     
-    # Simple flexbox-like nav using columns
-    cols = st.columns([1, 0.8, 1, 1, 1.2, 3])
+    # Outer div to push content down
+    st.markdown('<div class="nav-container-outer"></div>', unsafe_allow_html=True)
+    
+    cols = st.columns([1.1, 0.8, 1, 1, 1.2, 3])
     for i, item in enumerate(nav_items):
         is_active = st.session_state["app_choice"] == item
         btn_key = f"nav_btn_{item}"
+        
+        # Determine CSS class for the active tab
+        css_class = "nav-active" if is_active else "nav-btn"
+        
         if cols[i].button(item, key=btn_key, help=f"Go to {item}", 
-                          type="secondary", 
-                          use_container_width=True,
-                          on_click=lambda x=item: st.session_state.update({"app_choice": x})):
-            pass # State update handled by on_click
+                          use_container_width=True):
+            st.session_state["app_choice"] = item
+            st.rerun()
             
-    st.markdown("<hr style='margin-top: -5px; margin-bottom: 25px; opacity: 0.2;'>", unsafe_allow_html=True)
+    # Draw the HR divider manually to look cleaner than a control-box border
+    st.markdown("<hr style='margin-top: -10px; margin-bottom: 25px; opacity: 0.1;'>", unsafe_allow_html=True)
 
     # --- APP ROUTING ---
     current_choice = st.session_state["app_choice"]
