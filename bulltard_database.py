@@ -399,71 +399,59 @@ def run_rankings_app(df):
     st.caption("ℹ️ Ranking tables vary from Bulltard's as he includes expired trades and these do not.")
     st.caption("ℹ️ Tickers with the same score are sorted in descending order based on Dollars.")
     
-    col_left, col_right = st.columns(2, gap="large")
-    with col_left:
-        st.markdown("<h3 style='color: #71d28a; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bullish Rankings</h3>", unsafe_allow_html=True)
-        st.dataframe(bull_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bull_df), column_config=rank_col_config)
-    with col_right:
-        st.markdown("<h3 style='color: #f29ca0; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>Bearish Rankings</h3>", unsafe_allow_html=True)
-        st.dataframe(bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
-
-    # --- TRENDING ANALYSIS SECTION ---
-    st.markdown("---")
-    st.markdown("<h3 style='font-size: 1.2rem; margin-bottom: 1rem;'>🔥 Trending Tickers (Rank Movers)</h3>", unsafe_allow_html=True)
-    st.caption("Analyzing rank changes over the last 10 trading days. Positive 'Trend' means the ticker is moving UP the rankings (improvement).")
-    
-    # Calculate daily trends
+    # --- TRENDING CALCULATION (MOVED UP FOR LAYOUT) ---
     trend_start_date = max_data_date - timedelta(days=14)
     df_trend = df[(df["Trade Date"].dt.date >= trend_start_date) & (df["Trade Date"].dt.date <= max_data_date)].copy()
     
+    movers = pd.DataFrame() # Empty default
     if not df_trend.empty:
-        # Group by Date and Symbol to get Daily Score
         df_trend_g = df_trend.groupby(["Trade Date", "Symbol", order_type_col]).size().unstack(fill_value=0)
-        # Ensure columns exist
         for t_type in target_types:
             if t_type not in df_trend_g.columns: df_trend_g[t_type] = 0
-            
+        
         df_trend_g["DailyScore"] = df_trend_g["Calls Bought"] + df_trend_g["Puts Sold"] - df_trend_g["Puts Bought"]
-        
-        # We need cumulative score up to that date for proper ranking? 
-        # Or just daily ranking? The user asked for "moving up the rankings", usually implies cumulative standing.
-        # Let's compute rank based on Daily Activity for "Trending" context (who is hot NOW).
-        
         daily_scores = df_trend_g["DailyScore"].reset_index()
-        
-        # Rank daily: Higher score = Rank 1
         daily_scores["DayRank"] = daily_scores.groupby("Trade Date")["DailyScore"].rank(method="min", ascending=False)
-        
-        # Pivot to get Ranks across days
         rank_matrix = daily_scores.pivot(index="Symbol", columns="Trade Date", values="DayRank")
         
         if len(rank_matrix.columns) >= 2:
             latest_date = rank_matrix.columns[-1]
-            # Compare latest rank vs Average rank of the period
             avg_rank = rank_matrix.mean(axis=1)
             current_rank = rank_matrix[latest_date]
-            
-            # Trend Score: If Avg Rank (e.g. 10) > Current Rank (e.g. 2), Difference is 8 (Positive Improvement)
-            trend_df = pd.DataFrame({
-                "Current Rank": current_rank,
-                "Avg Rank (2w)": avg_rank
-            })
+            trend_df = pd.DataFrame({"Current Rank": current_rank, "Avg Rank (2w)": avg_rank})
             trend_df["Trend Score"] = trend_df["Avg Rank (2w)"] - trend_df["Current Rank"]
-            trend_df = trend_df.dropna()
-            
-            # Filter for movers
-            movers = trend_df.sort_values("Trend Score", ascending=False).head(15)
-            movers = movers.reset_index()
-            
-            # Display
+            movers = trend_df.dropna().sort_values("Trend Score", ascending=False).head(15).reset_index()
+
+    # --- 3-COLUMN LAYOUT ---
+    c_bull, c_bear, c_trend = st.columns(3, gap="medium")
+    
+    with c_bull:
+        st.markdown("<h3 style='color: #71d28a; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>📈 Bullish Rankings</h3>", unsafe_allow_html=True)
+        st.dataframe(bull_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bull_df), column_config=rank_col_config)
+    
+    with c_bear:
+        st.markdown("<h3 style='color: #f29ca0; font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>📉 Bearish Rankings</h3>", unsafe_allow_html=True)
+        st.dataframe(bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
+
+    with c_trend:
+        st.markdown("<h3 style='font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>🔥 Trending Tickers</h3>", unsafe_allow_html=True)
+        if not movers.empty:
+            # Removed background_gradient to avoid matplotlib dependency
+            # Using basic text color map instead
+            def color_trend(val):
+                if val > 0: return 'color: #71d28a; font-weight: bold;'
+                if val < 0: return 'color: #f29ca0; font-weight: bold;'
+                return ''
+                
             st.dataframe(
                 movers.style.format({"Current Rank": "{:.0f}", "Avg Rank (2w)": "{:.1f}", "Trend Score": "{:+.1f}"})
-                .background_gradient(cmap="Greens", subset=["Trend Score"]),
+                .map(color_trend, subset=["Trend Score"]),
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
+                height=get_table_height(movers)
             )
         else:
-            st.info("Not enough data days to calculate trends yet.")
+            st.info("Insufficient data for trend analysis.")
 
 def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
@@ -680,6 +668,7 @@ def run_pivot_tables_app(df):
         with fc6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
         
         st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Market Cap filtering can be buggy. If empty, reset \'Mkt Cap Min\' to 0B.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="light-note">ℹ️ Scroll to the bottom to see Risk Reversals.</div>', unsafe_allow_html=True)
 
     # --- RIGHT COLUMN: CALCULATOR ---
     with col_calculator:
