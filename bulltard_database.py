@@ -64,7 +64,7 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Expiry_DT"] = pd.to_datetime(df["Expiry"], errors="coerce")
         
     if "Strike (Actual)" in df.columns:
-        df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)", errors="coerce"]).fillna(0.0)
+        df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce").fillna(0.0)
         
     if "Error" in df.columns:
         # Boolean mask optimization
