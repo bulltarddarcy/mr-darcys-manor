@@ -142,7 +142,6 @@ def run_options_database_app(df):
         exp_range_default = (date.today() + timedelta(days=365))
         db_exp_end = st.date_input("Expiration Range (end)", value=exp_range_default, key="db_exp")
     
-    # Tight checkbox layout
     check_cols = st.columns([0.15, 0.15, 0.15, 0.55])
     with check_cols[0]: inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
     with check_cols[1]: inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
@@ -190,6 +189,10 @@ def run_rankings_app(df):
     with c1: rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
     with c2: rank_end = st.date_input("Trade End Date", value=max_data_date, key="rank_end")
     with c3: limit = st.number_input("Limit", value=20, min_value=1, max_value=200, key="rank_limit")
+    
+    # Restored Rankings Notes
+    st.caption("ℹ️ Ranking tables vary from Bulltard's as he includes expired trades and these do not.")
+    st.caption("ℹ️ Tickers with the same score are sorted in descending order based on Dollars.")
     st.markdown('</div>', unsafe_allow_html=True)
     
     f = df.copy()
@@ -249,24 +252,27 @@ def run_strike_zones_app(df):
     render_page_header("📊 Strike Zones", df)
     exp_range_default = (date.today() + timedelta(days=365))
     
-    # Side-by-side Layout: Filters Left, Controls Right
+    # --- TOP CONTROL BAR ---
     input_col, toggle_col = st.columns([1.1, 1], gap="large")
     
     with input_col:
         st.markdown('<div class="control-box">', unsafe_allow_html=True)
         st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>🔍 Data Filters</h4>", unsafe_allow_html=True)
-        f1, f2 = st.columns(2)
-        with f1:
-            ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
-            td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
-        with f2:
-            td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
-            exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
+        
+        # Grid Reorganization: Row 1 = Ticker/Exp, Row 2 = Start/End
+        f_row1_c1, f_row1_c2 = st.columns(2)
+        with f_row1_c1: ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
+        with f_row1_c2: exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
+        
+        f_row2_c1, f_row2_c2 = st.columns(2)
+        with f_row2_c1: td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
+        with f_row2_c2: td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
         st.markdown('</div>', unsafe_allow_html=True)
 
     with toggle_col:
         st.markdown('<div class="calc-box">', unsafe_allow_html=True)
         st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem; color: #66b7ff;'>⚙️ Visual Controls</h4>", unsafe_allow_html=True)
+        
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown("**View Mode**")
@@ -282,12 +288,13 @@ def run_strike_zones_app(df):
             inc_cb = st.checkbox("Calls Bought", value=True)
             inc_ps = st.checkbox("Puts Sold", value=True)
             inc_pb = st.checkbox("Puts Bought", value=True)
-        st.markdown("<hr style='margin: 10px 0; opacity: 0.1;'>", unsafe_allow_html=True)
-        opt1, opt2 = st.columns(2)
-        with opt1: hide_empty = st.checkbox("Hide Empty Zones", value=True)
-        with opt2: show_table = st.checkbox("Show Table", value=True)
-        st.markdown('</div>', unsafe_allow_html=True)
         
+        # Simplified footer - hidden controls removed
+        hide_empty = True 
+        show_table = True
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- DATA PROCESSING ---
     f_base = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
     if td_start: f_base = f_base[f_base["Trade Date"].dt.date >= td_start]
     if td_end: f_base = f_base[f_base["Trade Date"].dt.date <= td_end]
@@ -310,6 +317,7 @@ def run_strike_zones_app(df):
     edit_pool_raw["Trade Date Str"] = edit_pool_raw["Trade Date"].dt.strftime("%d %b %y")
     edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
 
+    # Instruction Note
     st.markdown('<div style="color: #808495; font-size: 0.85rem; margin-bottom: 15px; margin-top: 10px;">ℹ️ You can remove individual trades (ie outliers) from the graphic by unchecking them in the data table below.</div>', unsafe_allow_html=True)
     
     visual_placeholder = st.container()
@@ -400,106 +408,6 @@ def run_strike_zones_app(df):
                 color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
                 val_str = fmt_neg(r["Net_Dollars"])
                 st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
-
-def run_pivot_tables_app(df):
-    render_page_header("🎯 Pivot Tables", df)
-    max_data_date = get_max_trade_date(df)
-    main_col, calc_col = st.columns([1.1, 1], gap="large")
-    with main_col:
-        st.markdown('<div class="control-box">', unsafe_allow_html=True)
-        st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>🔍 Data Filters</h4>", unsafe_allow_html=True)
-        f1, f2 = st.columns(2)
-        with f1: 
-            td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
-            ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
-            min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
-        with f2:
-            td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
-            min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=0, key="pv_notional")]
-            ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
-        st.markdown('</div>', unsafe_allow_html=True)
-    with calc_col:
-        st.markdown('<div class="calc-box">', unsafe_allow_html=True)
-        st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem; color: #71d28a;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
-        c_i1, c_i2, c_i3 = st.columns(3)
-        with c_i1: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-        with c_i2: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-        with c_i3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
-        dte = (c_expiry - date.today()).days
-        coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
-        annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
-        st.session_state["calc_out_ann"] = f"{annual_ret:.2f}%"
-        st.session_state["calc_out_coc"] = f"{coc_ret:.2f}%"
-        st.session_state["calc_out_dte"] = str(max(0, dte))
-        c_o1, c_o2, c_o3 = st.columns(3)
-        with c_o1: st.text_input("Annualised", key="calc_out_ann", disabled=True)
-        with c_o2: st.text_input("Cash on Cash", key="calc_out_coc", disabled=True)
-        with c_o3: st.text_input("DTE", key="calc_out_dte", disabled=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown("""
-    <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 5px; margin-bottom: 20px; align-items: center; padding-left: 5px;">
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 12px; height: 12px; border-radius: 2px; background:#b7e1cd"></div> This Fri</div>
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 12px; height: 12px; border-radius: 2px; background:#fce8b2"></div> Next Fri</div>
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 12px; height: 12px; border-radius: 2px; background:#f4c7c3"></div> Two Fri</div>
-        <div style="color: #666; font-style: italic; margin-left: 20px;">ℹ️ Market Cap / EMA data can be delayed.</div>
-    </div>
-    """, unsafe_allow_html=True)
-    d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
-    if d_range.empty: return
-    order_type_col = "Order Type" if "Order Type" in d_range.columns else "Order type"
-    cb_pool, ps_pool, pb_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy(), d_range[d_range[order_type_col] == "Puts Sold"].copy(), d_range[d_range[order_type_col] == "Puts Bought"].copy()
-    keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
-    cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
-    rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
-    rr_rows = []
-    for idx, row in rr_matches.iterrows():
-        rr_rows.append({'Symbol': row['Symbol'], 'Trade Date': row['Trade Date'], 'Expiry_DT': row['Expiry_DT'], 'Contracts': row['Contracts'], 'Dollars': row['Dollars_c'], 'Strike': clean_strike_fmt(row['Strike_c']), 'Pair_ID': idx, 'Pair_Side': 0})
-        rr_rows.append({'Symbol': row['Symbol'], 'Trade Date': row['Trade Date'], 'Expiry_DT': row['Expiry_DT'], 'Contracts': row['Contracts'], 'Dollars': row['Dollars_p'], 'Strike': clean_strike_fmt(row['Strike_p']), 'Pair_ID': idx, 'Pair_Side': 1})
-    df_rr = pd.DataFrame(rr_rows)
-    if not rr_matches.empty:
-        match_keys = keys + ['occ']
-        def filter_out_matches(pool, matches):
-            temp_matches = matches[match_keys].copy(); temp_matches['_remove'] = True
-            merged = pool.merge(temp_matches, on=match_keys, how='left')
-            return merged[merged['_remove'].isna()].drop(columns=['_remove'])
-        cb_pool, ps_pool = filter_out_matches(cb_pool, rr_matches), filter_out_matches(ps_pool, rr_matches)
-    def apply_f(data):
-        if data.empty: return data
-        f = data.copy()
-        if ticker_filter: f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
-        f = f[f["Dollars"] >= min_notional]
-        if not f.empty and min_mkt_cap > 0:
-            unique_symbols = f["Symbol"].unique()
-            valid_symbols = [s for s in unique_symbols if get_market_cap(s) >= float(min_mkt_cap)]
-            f = f[f["Symbol"].isin(valid_symbols)]
-        if not f.empty and ema_filter == "Yes":
-            unique_symbols = f["Symbol"].unique()
-            valid_ema_symbols = [s for s in unique_symbols if is_above_ema21(s)]
-            f = f[f["Symbol"].isin(valid_ema_symbols)]
-        return f
-    df_cb_f, df_ps_f, df_pb_f, df_rr_f = apply_f(cb_pool), apply_f(ps_pool), apply_f(pb_pool), apply_f(df_rr)
-    def get_p(data, is_rr=False):
-        if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
-        sr = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
-        if is_rr: piv = data.merge(sr, on="Symbol").sort_values(by=["Total_Sym_Dollars", "Pair_ID", "Pair_Side"], ascending=[False, True, True])
-        else:
-            piv = data.groupby(["Symbol", "Strike", "Expiry_DT"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index().merge(sr, on="Symbol")
-            piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
-        piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
-        piv["Symbol_Display"] = piv["Symbol"]; piv.loc[piv["Symbol"] == piv["Symbol"].shift(1), "Symbol_Display"] = ""
-        return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
-    row1_c1, row1_c2, row1_c3 = st.columns(3); fmt = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
-    with row1_c1:
-        st.subheader("Calls Bought"); tbl = get_p(df_cb_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-    with row1_c2:
-        st.subheader("Puts Sold"); tbl = get_p(df_ps_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-    with row1_c3:
-        st.subheader("Puts Bought"); tbl = get_p(df_pb_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
-    st.markdown("---"); st.subheader("Risk Reversals"); tbl_rr = get_p(df_rr_f, is_rr=True)
-    if not tbl_rr.empty: st.dataframe(tbl_rr.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl_rr), column_config=COLUMN_CONFIG_PIVOT)
 
 def run_rsi_divergences_app(df):
     render_page_header("📈 RSI Divergences", df)
