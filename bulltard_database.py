@@ -1150,14 +1150,27 @@ def run_rsi_percentiles_app():
     dataset_map = load_dataset_config()
     options = list(dataset_map.keys()) + ["Live Drive Map (Individual Files)"]
     
-    data_option = st.selectbox("Select Dataset", options=options, index=0)
+    # Use pills for selection (mimicking Divergences tab)
+    data_option = st.pills("Select Dataset", options=options, selection_mode="single", default=options[0])
+    
+    with st.expander("ℹ️ Strategy Logic & Explanations"):
+        st.markdown('<div class="footer-header">📊 PERCENTILE LOGIC</div>', unsafe_allow_html=True)
+        st.markdown("""
+        * **Historical Context**: The algorithm analyzes up to **10 years** of daily price history for each ticker to establish its unique RSI behavior.
+        * **Percentile Thresholds**: It calculates the **10th Percentile** (Oversold) and **90th Percentile** (Overbought) levels specific to that stock.
+        * **Signal Trigger**: 
+            * **Bullish (Leaving Oversold)**: Triggered when the RSI crosses **ABOVE** the 10th percentile threshold (recovering from extreme lows).
+            * **Bearish (Leaving Overbought)**: Triggered when the RSI crosses **BELOW** the 90th percentile threshold (cooling off from extreme highs).
+        * **Scan Window**: The system checks the last **10 trading periods** to catch recent signals.
+        """)
     
     scan_limit = 50
     if data_option == "Live Drive Map (Individual Files)":
         st.info("⚠️ This mode fetches individual files from Google Drive. It is slower than compiled datasets.")
         scan_limit = st.slider("Max Tickers to Scan (Prevent Timeout)", 10, 200, 50)
     
-    if st.button("Run Analysis"):
+    # Auto-run analysis when a dataset is selected (button removed)
+    if data_option:
         results = []
         status_text = st.empty()
         progress_bar = st.progress(0)
@@ -1233,16 +1246,8 @@ def run_rsi_percentiles_app():
                 
                 for r in res_df.itertuples():
                     cls = "signal-bull" if "Bullish" in r.Type else "signal-bear"
-                    row_html = f"""
-                    <tr style="border-bottom: 1px solid #f0f0f0;">
-                        <td style="padding: 10px;">{r.Date}</td>
-                        <td style="padding: 10px; font-weight:bold;">{r.Ticker}</td>
-                        <td style="padding: 10px;"><span class="signal-badge {cls}">{r.Type}</span></td>
-                        <td style="padding: 10px;">{r.RSI:.1f}</td>
-                        <td style="padding: 10px;">{r.Threshold:.1f}</td>
-                        <td style="padding: 10px; color: #666;">{r.Percentile}</td>
-                    </tr>
-                    """
+                    # Fix: Removed indentation from the f-string to prevent markdown code-block rendering
+                    row_html = f'<tr style="border-bottom: 1px solid #f0f0f0;"><td style="padding: 10px;">{r.Date}</td><td style="padding: 10px; font-weight:bold;">{r.Ticker}</td><td style="padding: 10px;"><span class="signal-badge {cls}">{r.Type}</span></td><td style="padding: 10px;">{r.RSI:.1f}</td><td style="padding: 10px;">{r.Threshold:.1f}</td><td style="padding: 10px; color: #666;">{r.Percentile}</td></tr>'
                     html_rows.append(row_html)
                 
                 html_rows.append("</tbody></table>")
