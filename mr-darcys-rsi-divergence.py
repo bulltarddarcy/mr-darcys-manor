@@ -76,11 +76,12 @@ st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
 st.markdown("""
     <style>
+    /* Synchronized Note Styling to match Streamlit default UI font size */
     .top-note {
         color: #888888;
-        font-size: 16px;
-        margin-bottom: 5px;
-        font-family: 'Source Sans Pro', sans-serif;
+        font-size: 14px; /* Matches 'Select Dataset' / standard UI text */
+        margin-bottom: 2px;
+        font-family: inherit; /* Inherits Streamlit system font */
     }
     
     table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2rem; }
@@ -224,8 +225,11 @@ if data_option:
             master = pd.read_csv(csv_buffer)
             date_col = next((col for col in master.columns if 'DATE' in col.upper()), None)
             last_updated_str = pd.to_datetime(master[date_col]).max().strftime('%Y-%m-%d') if date_col else "Unknown"
+            
+            # Synchronized Header Notes using top-note class
             st.markdown('<div class="top-note">ℹ️ See bottom of page for strategy logic and tag explanations.</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="top-note">📅 Last Updated: {last_updated_str}</div>', unsafe_allow_html=True)
+            
             t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
             all_tickers = sorted(master[t_col].unique())
             with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
@@ -265,7 +269,6 @@ if data_option:
                                     data = row[ev_key]
                                     if data:
                                         is_pos = data['return'] > 0
-                                        # Profitability Color Logic
                                         cls = ("ev-positive" if is_pos else "ev-negative") if s_type == 'Bullish' else ("ev-positive" if not is_pos else "ev-negative")
                                         # Rounded to 1 decimal place (.1f)
                                         html += f'<td class="{cls}">{data["return"]*100:+.1f}% <br><small>(${data["price"]:,.2f}, N={data["n"]})</small></td>'
