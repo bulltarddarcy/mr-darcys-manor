@@ -256,23 +256,29 @@ def run_strike_zones_app(df):
         
         st.markdown("---")
         
-        st.markdown("**View Mode**")
-        view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], label_visibility="collapsed")
+        # Split remaining settings into two sub-columns
+        # Left sub: View/Width | Right sub: Checkboxes
+        c_sub1, c_sub2 = st.columns(2)
         
-        st.markdown("**Zone Width**")
-        width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], label_visibility="collapsed")
-        if width_mode == "Fixed": 
-            fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
-        else: fixed_size_choice = 10
+        with c_sub1:
+            st.markdown("**View Mode**")
+            view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], label_visibility="collapsed")
+            
+            st.markdown("**Zone Width**")
+            width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], label_visibility="collapsed")
+            if width_mode == "Fixed": 
+                fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
+            else: fixed_size_choice = 10
         
-        st.markdown("**Include Order Type**")
-        inc_cb = st.checkbox("Calls Bought", value=True)
-        inc_ps = st.checkbox("Puts Sold", value=True)
-        inc_pb = st.checkbox("Puts Bought", value=True)
-        
-        st.markdown("**Other Options**")
-        hide_empty      = st.checkbox("Hide Empty Zones", value=True)
-        show_table      = st.checkbox("Show Interactive Data Table", value=True)
+        with c_sub2:
+            st.markdown("**Include**")
+            inc_cb = st.checkbox("Calls Bought", value=True)
+            inc_ps = st.checkbox("Puts Sold", value=True)
+            inc_pb = st.checkbox("Puts Bought", value=True)
+            
+        # Hardcoded defaults since "Other Options" UI was removed
+        hide_empty = True
+        show_table = True
     
     # Use a container in the right column to act as a placeholder for the charts
     with col_visuals:
@@ -418,6 +424,20 @@ def run_pivot_tables_app(df):
     # --- SPLIT LAYOUT: FILTERS (LEFT) | CALCULATOR (RIGHT) ---
     col_filters, col_calculator = st.columns([1, 1], gap="medium")
     
+    # --- MOVED STYLES HERE TO PREVENT LAYOUT SHIFT ---
+    st.markdown("""
+        <style>
+            .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
+                background-color: rgba(113, 210, 138, 0.1) !important;
+                color: #71d28a !important;
+                border: 1px solid #71d28a !important;
+                font-weight: 700 !important;
+                pointer-events: none !important;
+                cursor: default !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
     # --- LEFT COLUMN: FILTERS ---
     with col_filters:
         st.markdown("<h4 style='font-size: 1rem; margin-bottom: 10px;'>Filters</h4>", unsafe_allow_html=True)
@@ -437,7 +457,10 @@ def run_pivot_tables_app(df):
 
     # --- RIGHT COLUMN: CALCULATOR ---
     with col_calculator:
-        st.markdown("<h4 style='font-size: 1rem; margin-bottom: 10px;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
+        # WRAPPER FOR BORDER
+        st.markdown('<div style="border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 10px; padding: 15px; background-color: rgba(128, 128, 128, 0.05);">', unsafe_allow_html=True)
+        
+        st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
         
         # Row 1 of Calculator (Inputs)
         cc1, cc2, cc3 = st.columns(3)
@@ -452,25 +475,14 @@ def run_pivot_tables_app(df):
         st.session_state["calc_out_ann"] = f"{annual_ret:.2f}%"
         st.session_state["calc_out_coc"] = f"{coc_ret:.2f}%"
         st.session_state["calc_out_dte"] = str(max(0, dte))
-            
-        st.markdown("""
-            <style>
-                .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
-                    background-color: rgba(113, 210, 138, 0.1) !important;
-                    color: #71d28a !important;
-                    border: 1px solid #71d28a !important;
-                    font-weight: 700 !important;
-                    pointer-events: none !important;
-                    cursor: default !important;
-                }
-            </style>
-        """, unsafe_allow_html=True)
 
         # Row 2 of Calculator (Outputs)
         cc4, cc5, cc6 = st.columns(3)
         with cc4: st.text_input("Annualised Return", key="calc_out_ann")
         with cc5: st.text_input("Cash on Cash Return", key="calc_out_coc")
         with cc6: st.text_input("Days to Expiration", key="calc_out_dte")
+        
+        st.markdown('</div>', unsafe_allow_html=True) # END WRAPPER
 
     st.markdown("""
     <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 10px; margin-bottom: 20px; align-items: center;">
@@ -640,7 +652,7 @@ try:
     })
 
     # Add extra info to the sidebar footer
-    st.sidebar.markdown("---")
+    # Removed the st.markdown("---") to avoid double lines.
     st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
     
     # Execution
