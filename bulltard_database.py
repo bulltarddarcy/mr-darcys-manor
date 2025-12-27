@@ -391,7 +391,7 @@ def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
     signals = []
     if len(df) < 200: return signals
     
-    # Restrict to last 10 years for percentile calculation
+    # 1. Enforce 10 Year Max Lookback for both Percentiles AND EV
     cutoff = df.index.max() - timedelta(days=365*10)
     hist_df = df[df.index >= cutoff].copy()
     
@@ -400,13 +400,14 @@ def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
     p10 = hist_df['RSI'].quantile(0.10)
     p90 = hist_df['RSI'].quantile(0.90)
     
-    # Check last N periods
+    # Check last N periods from the FULL df (as recent price might be needed)
     if len(df) < periods_to_scan + 2: return signals
     
-    # We need full arrays for EV calculation
-    rsi_vals = df['RSI'].values
-    price_vals = df['Price'].values
+    # We need arrays restricted to the 10y window for EV calculation
+    rsi_vals = hist_df['RSI'].values
+    price_vals = hist_df['Price'].values
     
+    # Scan window is the most recent data
     scan_window = df.iloc[-(periods_to_scan+1):]
     
     for i in range(1, len(scan_window)):
@@ -414,29 +415,33 @@ def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
         curr = scan_window.iloc[i]
         
         s_type = None
+        desc_str = ""
         thresh_val = 0.0
         
         # Bullish Exit: Previously < p10, Now >= p10 (Leaving bottom)
         if prev['RSI'] < p10 and curr['RSI'] >= p10:
             s_type = 'Bullish'
+            desc_str = "Leaving Low 10%"
             thresh_val = p10
             
         # Bearish Exit: Previously > p90, Now <= p90 (Leaving top)
         elif prev['RSI'] > p90 and curr['RSI'] <= p90:
             s_type = 'Bearish'
+            desc_str = "Leaving High 90%"
             thresh_val = p90
             
         if s_type:
-            # Calculate EV for 30 periods
+            # Calculate EV using the 10-year restricted arrays
             ev_res = calculate_ev_data_numpy(rsi_vals, price_vals, curr['RSI'], 30, curr['Price'])
             
             # Filter: Only include if N >= 5
             if ev_res and ev_res['n'] >= 5:
                 raw_ret = ev_res['return']
                 
-                # Color Logic
-                # Bullish is Green if Return > 0
-                # Bearish is Green if Return < 0 (Shorting profitable)
+                # Color Logic:
+                # Bullish Signal (Leaving Low 10%) + Positive Return (>0) = GREEN (Trade is supported)
+                # Bearish Signal (Leaving High 90%) + Negative Return (<0) = GREEN (Trade is supported - short profitable)
+                # Anything else = RED (Historical EV opposes the signal)
                 is_green = (s_type == 'Bullish' and raw_ret > 0) or (s_type == 'Bearish' and raw_ret < 0)
                 row_class = "row-green" if is_green else "row-red"
                 
@@ -444,9 +449,11 @@ def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
                     'Ticker': ticker,
                     'Date': curr.name.strftime('%Y-%m-%d'),
                     'RSI': curr['RSI'],
+                    'Signal': desc_str,
                     'Threshold': thresh_val,
                     'EV_Text': f"{raw_ret*100:+.1f}% (N={ev_res['n']})",
-                    'Row_Class': row_class
+                    'Row_Class': row_class,
+                    'Date_Obj': curr.name.date() # Store for comparison later
                 })
             
     return signals
@@ -1154,7 +1161,7 @@ def run_rsi_divergences_app():
 def run_rsi_percentiles_app():
     st.title("🔢 RSI Percentiles")
     
-    # CSS for full row coloring
+    # CSS for full row coloring + Date highlight
     st.markdown("""
         <style>
         .rsi-p-table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -1166,6 +1173,15 @@ def run_rsi_percentiles_app():
         .row-red { background-color: #fce8e6; color: #c5221f; }
         
         .row-green td, .row-red td { border-bottom: 1px solid white !important; }
+        
+        /* Date Highlighting */
+        .latest-date-highlight {
+            background-color: rgba(0,0,0,0.06);
+            border: 1px solid rgba(0,0,0,0.1);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-weight: 700;
+        }
         </style>
     """, unsafe_allow_html=True)
     
@@ -1181,10 +1197,10 @@ def run_rsi_percentiles_app():
         * **Signal Trigger**: 
             * **Bullish**: RSI crosses **ABOVE** the 10th percentile (Leaving Oversold).
             * **Bearish**: RSI crosses **BELOW** the 90th percentile (Leaving Overbought).
-        * **EV 30p**: The expected return 30 days later based on historical matches.
+        * **EV 30p**: The expected return 30 days later based on historical matches (also 10-year max lookback).
         * **Color Logic**:
-            * 🟢 **Green**: The historical EV supports the trade (Positive return for Bullish, Negative return for Bearish).
-            * 🔴 **Red**: The historical EV opposes the trade.
+            * 🟢 **Green**: Indicates historical profitability. For Bullish signals (Leaving Low 10%), this means EV > 0. For Bearish signals (Leaving High 90%), this means EV < 0 (Shorting is profitable).
+            * 🔴 **Red**: Indicates historical loss. The historical EV contradicts the trade direction.
         * **Filter**: Signals with less than 5 historical matches (N<5) are excluded.
         """)
     
@@ -1197,6 +1213,7 @@ def run_rsi_percentiles_app():
         results = []
         status_text = st.empty()
         progress_bar = st.progress(0)
+        max_date_in_set = date.min
         
         try:
             if data_option == "Live Drive Map (Individual Files)":
@@ -1222,6 +1239,8 @@ def run_rsi_percentiles_app():
                             df_raw = pd.read_csv(csv_buffer)
                             d_d, _ = prepare_data(df_raw)
                             if d_d is not None:
+                                # Track max date for highlighting
+                                max_date_in_set = max(max_date_in_set, d_d.index.max().date())
                                 sigs = find_rsi_percentile_signals(d_d, ticker)
                                 results.extend(sigs)
                         progress_bar.progress((i + 1) / total)
@@ -1235,6 +1254,12 @@ def run_rsi_percentiles_app():
                 if csv_buffer and csv_buffer != "HTML_ERROR":
                     master = pd.read_csv(csv_buffer)
                     t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+                    
+                    # Grab max date from the whole dataset first (approx)
+                    date_col_raw = next((c for c in master.columns if 'DATE' in c), None)
+                    if date_col_raw:
+                        max_date_in_set = pd.to_datetime(master[date_col_raw]).max().date()
+                    
                     grouped = master.groupby(t_col)
                     grouped_list = list(grouped)
                     total = len(grouped_list)
@@ -1257,10 +1282,15 @@ def run_rsi_percentiles_app():
                 
                 st.subheader(f"Found {len(res_df)} Opportunities")
                 
-                html_rows = ['<table class="rsi-p-table"><thead><tr><th>Date</th><th>Ticker</th><th>RSI</th><th>Threshold</th><th>EV 30p</th></tr></thead><tbody>']
+                html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Signal</th><th>RSI</th><th>Threshold</th><th>EV 30p</th></tr></thead><tbody>']
                 
                 for r in res_df.itertuples():
-                    row_html = f'<tr class="{r.Row_Class}"><td>{r.Date}</td><td>{r.Ticker}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td><td>{r.EV_Text}</td></tr>'
+                    date_display = r.Date
+                    # Highlight if date matches the latest date in dataset
+                    if r.Date_Obj == max_date_in_set:
+                        date_display = f'<span class="latest-date-highlight">{r.Date}</span>'
+                        
+                    row_html = f'<tr class="{r.Row_Class}"><td><b>{r.Ticker}</b></td><td>{date_display}</td><td>{r.Signal}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td><td>{r.EV_Text}</td></tr>'
                     html_rows.append(row_html)
                 
                 html_rows.append("</tbody></table>")
