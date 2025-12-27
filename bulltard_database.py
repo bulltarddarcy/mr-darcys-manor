@@ -244,35 +244,41 @@ def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
     exp_range_default = (date.today() + timedelta(days=365))
     
-    # Removed the control-box wrapper
-    c1, c2, c3, c4 = st.columns(4, gap="medium")
-    with c1: ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
-    with c2: td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
-    with c3: td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
-    with c4: exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
+    # --- LAYOUT: LEFT SIDEBAR (SETTINGS) | RIGHT COLUMN (GRAPHICS) ---
+    col_settings, col_visuals = st.columns([1, 2.5], gap="large")
     
-    sc1, sc2, sc3, sc4 = st.columns(4, gap="medium")
-    with sc1:
+    with col_settings:
+        st.markdown("### Settings")
+        ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
+        td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
+        td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
+        exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
+        
+        st.markdown("---")
+        
         st.markdown("**View Mode**")
         view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], label_visibility="collapsed")
-    with sc2:
+        
         st.markdown("**Zone Width**")
         width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], label_visibility="collapsed")
         if width_mode == "Fixed": 
             fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
         else: fixed_size_choice = 10
-    with sc3:
+        
         st.markdown("**Include Order Type**")
         inc_cb = st.checkbox("Calls Bought", value=True)
         inc_ps = st.checkbox("Puts Sold", value=True)
         inc_pb = st.checkbox("Puts Bought", value=True)
-    with sc4:
+        
         st.markdown("**Other Options**")
         hide_empty      = st.checkbox("Hide Empty Zones", value=True)
         show_table      = st.checkbox("Show Interactive Data Table", value=True)
     
-    st.markdown("---")
-        
+    # Use a container in the right column to act as a placeholder for the charts
+    with col_visuals:
+        chart_container = st.container()
+
+    # --- DATA PROCESSING ---
     f_base = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
     if td_start: f_base = f_base[f_base["Trade Date"].dt.date >= td_start]
     if td_end: f_base = f_base[f_base["Trade Date"].dt.date <= td_end]
@@ -288,7 +294,8 @@ def run_strike_zones_app(df):
     edit_pool_raw = f_base[f_base[order_type_col].isin(allowed_sz_types)].copy()
     
     if edit_pool_raw.empty:
-        st.warning("No trades match current filters.")
+        with col_visuals:
+            st.warning("No trades match current filters.")
         return
 
     # --- TRACKING SELECTIONS ---
@@ -298,19 +305,25 @@ def run_strike_zones_app(df):
     edit_pool_raw["Trade Date Str"] = edit_pool_raw["Trade Date"].dt.strftime("%d %b %y")
     edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
 
-    visual_placeholder = st.container()
-
+    # --- DATA TABLE (BOTTOM) ---
     if show_table:
+        # Prepare display DF for editor: convert numbers to strings for formatting
+        editor_input = edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]].copy()
+        
+        # Format columns with commas
+        editor_input["Dollars"] = editor_input["Dollars"].apply(lambda x: f"${x:,.0f}")
+        editor_input["Contracts"] = editor_input["Contracts"].apply(lambda x: f"{x:,.0f}")
+
         st.markdown("---")
         st.subheader("Data Table & Selection")
-        st.caption("Uncheck rows to remove them from the charts above.")
         
         edited_df = st.data_editor(
-            edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]],
+            editor_input,
             column_config={
                 "Include": st.column_config.CheckboxColumn("Include", default=True),
-                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
-                "Contracts": st.column_config.NumberColumn("Qty"),
+                # Changed to TextColumn to support the pre-formatted strings
+                "Dollars": st.column_config.TextColumn("Dollars"),
+                "Contracts": st.column_config.TextColumn("Qty"),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry"
             },
@@ -319,11 +332,13 @@ def run_strike_zones_app(df):
             use_container_width=True,
             key="sz_editor"
         )
+        # Apply mask to original numeric data
         f = edit_pool_raw[edited_df["Include"]].copy()
     else:
         f = edit_pool_raw.copy()
 
-    with visual_placeholder:
+    # --- VISUALS RENDERING (IN RIGHT COLUMN) ---
+    with chart_container:
         if f.empty:
             st.info("No rows selected. Check the 'Include' boxes below.")
         else:
@@ -393,60 +408,72 @@ def run_strike_zones_app(df):
                     color, w = ("zone-bull" if r["Net_Dollars"]>=0 else "zone-bear"), max(6, int((abs(r['Net_Dollars'])/max(1.0, agg["Net_Dollars"].abs().max()))*420))
                     val_str = fmt_neg(r["Net_Dollars"])
                     st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
+            
+            st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them in the Data Tables box below.")
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
     max_data_date = get_max_trade_date(df)
             
-    # Removed the control-box wrapper
-    c1, c2, c3, c4, c5, c6 = st.columns(6, gap="small")
-    with c1: td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
-    with c2: td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
-    with c3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
-    with c4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=0, key="pv_notional")]
-    with c5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
-    with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
+    # --- SPLIT LAYOUT: FILTERS (LEFT) | CALCULATOR (RIGHT) ---
+    col_filters, col_calculator = st.columns([1, 1], gap="medium")
     
-    st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
-    st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
-
-    # --- Puts Sold Calculator ---
-    st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
-    st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
-    
-    calc_cols = st.columns(6)
-    
-    with calc_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-    with calc_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-    with calc_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
-    
-    dte = (c_expiry - date.today()).days
-    coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
-    annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
-
-    st.session_state["calc_out_ann"] = f"{annual_ret:.2f}%"
-    st.session_state["calc_out_coc"] = f"{coc_ret:.2f}%"
-    st.session_state["calc_out_dte"] = str(max(0, dte))
+    # --- LEFT COLUMN: FILTERS ---
+    with col_filters:
+        st.markdown("<h4 style='font-size: 1rem; margin-bottom: 10px;'>Filters</h4>", unsafe_allow_html=True)
+        # Row 1 of Filters
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1: td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
+        with fc2: td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
+        with fc3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
         
-    st.markdown("""
-        <style>
-            .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
-                background-color: rgba(113, 210, 138, 0.1) !important;
-                color: #71d28a !important;
-                border: 1px solid #71d28a !important;
-                font-weight: 700 !important;
-                pointer-events: none !important;
-                cursor: default !important;
-            }
-        </style>
-    """, unsafe_allow_html=True)
+        # Row 2 of Filters
+        fc4, fc5, fc6 = st.columns(3)
+        with fc4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=0, key="pv_notional")]
+        with fc5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
+        with fc6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
+        
+        st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Market Cap filtering can be buggy. If empty, reset \'Mkt Cap Min\' to 0B.</div>', unsafe_allow_html=True)
 
-    with calc_cols[3]: st.text_input("Annualised Return", key="calc_out_ann")
-    with calc_cols[4]: st.text_input("Cash on Cash Return", key="calc_out_coc")
-    with calc_cols[5]: st.text_input("Days to Expiration", key="calc_out_dte")
+    # --- RIGHT COLUMN: CALCULATOR ---
+    with col_calculator:
+        st.markdown("<h4 style='font-size: 1rem; margin-bottom: 10px;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
+        
+        # Row 1 of Calculator (Inputs)
+        cc1, cc2, cc3 = st.columns(3)
+        with cc1: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
+        with cc2: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
+        with cc3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
+        
+        dte = (c_expiry - date.today()).days
+        coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
+        annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
+
+        st.session_state["calc_out_ann"] = f"{annual_ret:.2f}%"
+        st.session_state["calc_out_coc"] = f"{coc_ret:.2f}%"
+        st.session_state["calc_out_dte"] = str(max(0, dte))
+            
+        st.markdown("""
+            <style>
+                .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
+                    background-color: rgba(113, 210, 138, 0.1) !important;
+                    color: #71d28a !important;
+                    border: 1px solid #71d28a !important;
+                    font-weight: 700 !important;
+                    pointer-events: none !important;
+                    cursor: default !important;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+
+        # Row 2 of Calculator (Outputs)
+        cc4, cc5, cc6 = st.columns(3)
+        with cc4: st.text_input("Annualised Return", key="calc_out_ann")
+        with cc5: st.text_input("Cash on Cash Return", key="calc_out_coc")
+        with cc6: st.text_input("Days to Expiration", key="calc_out_dte")
 
     st.markdown("""
-    <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 20px; margin-bottom: 20px; align-items: center;">
+    <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 10px; margin-bottom: 20px; align-items: center;">
         <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#b7e1cd"></div> This Friday</div>
         <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#fce8b2"></div> Next Friday</div>
         <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#f4c7c3"></div> Two Fridays</div>
