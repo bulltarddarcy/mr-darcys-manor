@@ -119,10 +119,15 @@ def get_max_trade_date(df):
             return valid_dates.max().date()
     return date.today() - timedelta(days=1)
 
+def render_page_header(title, df):
+    st.title(title)
+    last_updated = get_max_trade_date(df).strftime("%d %b %y")
+    st.markdown(f"<p style='color: #808495; margin-top: -15px; margin-bottom: 25px;'>Last Updated: {last_updated}</p>", unsafe_allow_html=True)
+
 # --- 2. APP MODULES ---
 
 def run_options_database_app(df):
-    st.title("📂 Options Database")
+    render_page_header("📂 Options Database", df)
     max_data_date = get_max_trade_date(df)
     
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
@@ -175,7 +180,7 @@ def run_options_database_app(df):
     st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=True, hide_index=True, height=get_table_height(f_display, max_rows=30))
 
 def run_rankings_app(df):
-    st.title("🏆 Rankings")
+    render_page_header("🏆 Rankings", df)
     max_data_date = get_max_trade_date(df)
     start_default = max_data_date - timedelta(days=14)
     
@@ -243,7 +248,7 @@ def run_rankings_app(df):
         st.dataframe(bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
 
 def run_strike_zones_app(df):
-    st.title("📊 Strike Zones")
+    render_page_header("📊 Strike Zones", df)
     exp_range_default = (date.today() + timedelta(days=365))
     
     st.markdown('<div class="control-box">', unsafe_allow_html=True)
@@ -398,68 +403,62 @@ def run_strike_zones_app(df):
                     st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
 
 def run_pivot_tables_app(df):
-    st.title("🎯 Pivot Tables")
+    render_page_header("🎯 Pivot Tables", df)
     max_data_date = get_max_trade_date(df)
             
-    st.markdown('<div class="control-box">', unsafe_allow_html=True)
-    c1, c2, c3, c4, c5, c6 = st.columns(6, gap="small")
-    with c1: td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
-    with c2: td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
-    with c3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
-    with c4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=0, key="pv_notional")]
-    with c5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
-    with c6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
-    
-    st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
-    st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
+    # Main filtering and calculator split
+    main_col, calc_col = st.columns([1.1, 1], gap="large")
 
-    # --- Puts Sold Calculator ---
-    st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
-    st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
-    
-    calc_cols = st.columns(6)
-    
-    with calc_cols[0]: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-    with calc_cols[1]: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-    with calc_cols[2]: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
-    
-    dte = (c_expiry - date.today()).days
-    coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
-    annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
+    with main_col:
+        st.markdown('<div class="control-box">', unsafe_allow_html=True)
+        st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>🔍 Data Filters</h4>", unsafe_allow_html=True)
+        f1, f2 = st.columns(2)
+        with f1: 
+            td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
+            ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
+            min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
+        with f2:
+            td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
+            min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=0, key="pv_notional")]
+            ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    st.session_state["calc_out_ann"] = f"{annual_ret:.2f}%"
-    st.session_state["calc_out_coc"] = f"{coc_ret:.2f}%"
-    st.session_state["calc_out_dte"] = str(max(0, dte))
+    with calc_col:
+        st.markdown('<div class="calc-box">', unsafe_allow_html=True)
+        st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem; color: #71d28a;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
         
-    st.markdown("""
-        <style>
-            .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
-                background-color: rgba(113, 210, 138, 0.1) !important;
-                color: #71d28a !important;
-                border: 1px solid #71d28a !important;
-                font-weight: 700 !important;
-                pointer-events: none !important;
-                cursor: default !important;
-            }
-        </style>
-    """, unsafe_allow_html=True)
+        c_i1, c_i2, c_i3 = st.columns(3)
+        with c_i1: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
+        with c_i2: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
+        with c_i3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
+        
+        dte = (c_expiry - date.today()).days
+        coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
+        annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
 
-    with calc_cols[3]: st.text_input("Annualised Return", key="calc_out_ann")
-    with calc_cols[4]: st.text_input("Cash on Cash Return", key="calc_out_coc")
-    with calc_cols[5]: st.text_input("Days to Expiration", key="calc_out_dte")
+        st.session_state["calc_out_ann"] = f"{annual_ret:.2f}%"
+        st.session_state["calc_out_coc"] = f"{coc_ret:.2f}%"
+        st.session_state["calc_out_dte"] = str(max(0, dte))
+            
+        c_o1, c_o2, c_o3 = st.columns(3)
+        with c_o1: st.text_input("Annualised", key="calc_out_ann", disabled=True)
+        with c_o2: st.text_input("Cash on Cash", key="calc_out_coc", disabled=True)
+        with c_o3: st.text_input("DTE", key="calc_out_dte", disabled=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("""
-    <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 20px; margin-bottom: 20px; align-items: center;">
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#b7e1cd"></div> This Friday</div>
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#fce8b2"></div> Next Friday</div>
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#f4c7c3"></div> Two Fridays</div>
+    <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 5px; margin-bottom: 20px; align-items: center; padding-left: 5px;">
+        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 12px; height: 12px; border-radius: 2px; background:#b7e1cd"></div> This Fri</div>
+        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 12px; height: 12px; border-radius: 2px; background:#fce8b2"></div> Next Fri</div>
+        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 12px; height: 12px; border-radius: 2px; background:#f4c7c3"></div> Two Fri</div>
+        <div style="color: #666; font-style: italic; margin-left: 20px;">ℹ️ Market Cap / EMA data can be delayed.</div>
     </div>
     """, unsafe_allow_html=True)
     
-    st.markdown('</div>', unsafe_allow_html=True)
-    
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
-    if d_range.empty: return
+    if d_range.empty: 
+        st.info("No data found for the selected trade dates.")
+        return
 
     order_type_col = "Order Type" if "Order Type" in d_range.columns else "Order type"
     cb_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy()
@@ -533,84 +532,124 @@ def run_pivot_tables_app(df):
         st.dataframe(tbl_rr.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl_rr), column_config=COLUMN_CONFIG_PIVOT)
     else: st.caption("No matched RR pairs found.")
 
-def run_rsi_divergences_app():
-    st.title("📈 RSI Divergences")
+def run_rsi_divergences_app(df):
+    render_page_header("📈 RSI Divergences", df)
     st.markdown("""<style>div.stLinkButton > a { background: linear-gradient(45deg, #ff00ff, #00ffff, #ff0000, #ffff00, #00ff00); background-size: 400% 400%; animation: tie-dye 10s ease infinite; border: none; color: white !important; font-weight: bold; padding: 15px 30px; border-radius: 10px; text-decoration: none; display: inline-block; transition: transform 0.2s; } div.stLinkButton > a:hover { transform: scale(1.05); } @keyframes tie-dye { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }</style>""", unsafe_allow_html=True)
     st.link_button("🌈 🚀 Click to travel to the new RSI Divergence website 🚀 🌈", "https://mr-darcys-rsi-divergence.streamlit.app/")
 
 # --- 3. MAIN EXECUTION ---
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
 
-# Handle navigation session state
-if "app_choice" not in st.session_state:
-    st.session_state["app_choice"] = "Options Database"
+# Apply cleaner aesthetics
+st.markdown("""
+<style>
+    :root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff;}
+    
+    /* Global Background & Text Fixes */
+    .block-container{padding-top:1.5rem; padding-bottom:1rem;}
+    .control-box{padding:15px; border-radius:10px; background-color: var(--panel2); border: 1px solid #3a3f45; margin-bottom: 20px;}
+    .calc-box {
+        padding: 15px; 
+        border-radius: 10px; 
+        background-color: rgba(113, 210, 138, 0.03); 
+        border: 1px solid rgba(113, 210, 138, 0.2); 
+        margin-bottom: 20px;
+    }
 
-# Apply global aesthetics and button styling
-st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
-html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg)!important;}
-.block-container{padding-top:1.2rem;padding-bottom:1rem;}
-.control-box{padding:14px 20px; border-radius:10px; background-color: var(--panel2); border: 1px solid #3a3f45; margin-bottom: 20px;}
-.zones-panel{padding:14px 0; border-radius:10px;}
-.zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
-.zone-label{width:100px;font-weight:700; text-align: right;}
-.zone-bar{height:22px;border-radius:6px;min-width:6px}
-.zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
-.zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
-.zone-value{min-width:220px;font-variant-numeric:tabular-nums}
-.price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
-.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: var(--line); opacity: 0.6; }
-.price-badge { background: #2b3a45; color: #bfe7ff; border: 1px solid #56b6ff; border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; box-shadow: 0 2px 8px rgba(0,0,0,0.35); white-space: nowrap; margin: 0 12px; z-index: 1; }
-.metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
-.badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
-.price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
-th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-.light-note { color: #a1a1a1; font-size: 14px; margin-bottom: 10px; }
+    /* Calculator Output Styling */
+    .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
+        background-color: rgba(113, 210, 138, 0.1) !important;
+        color: #71d28a !important;
+        border: 1px solid rgba(113, 210, 138, 0.4) !important;
+        font-weight: 700 !important;
+    }
 
-/* Dashboard-style Navigation Buttons */
-div.stButton > button {
-    width: 100%;
-    background-color: #2a2d31;
-    color: #a1a1a1;
-    border: 1px solid #3a3f45;
-    border-radius: 8px;
-    padding: 8px 5px;
-    font-weight: 600;
-    font-size: 0.95rem;
-    transition: all 0.2s ease-in-out;
-}
-div.stButton > button:hover {
-    border-color: var(--line);
-    color: var(--line);
-}
-div.stButton > button:active, div.stButton > button:focus {
-    background-color: #3b3f45 !important;
-    border-color: var(--line) !important;
-    color: #ffffff !important;
-}
-</style>""", unsafe_allow_html=True)
+    /* Navigation Styling - Tab Style */
+    div.nav-container {
+        display: flex;
+        gap: 30px;
+        border-bottom: 1px solid #3a3f45;
+        margin-bottom: 25px;
+        padding-bottom: 10px;
+    }
+    .nav-item {
+        color: #808495;
+        font-weight: 600;
+        cursor: pointer;
+        padding: 5px 0;
+        border-bottom: 2px solid transparent;
+        transition: all 0.3s;
+    }
+    .nav-item:hover { color: #ffffff; }
+    .nav-active {
+        color: #66b7ff !important;
+        border-bottom: 2px solid #66b7ff !important;
+    }
+
+    /* Clean up default streamlit buttons in Nav */
+    div.stButton > button.nav-btn {
+        background: none !important;
+        border: none !important;
+        padding: 0 !important;
+        color: #808495 !important;
+        font-weight: 600 !important;
+        border-radius: 0 !important;
+        border-bottom: 2px solid transparent !important;
+    }
+    div.stButton > button.nav-btn:hover {
+        color: white !important;
+    }
+    div.stButton > button.nav-active-btn {
+        background: none !important;
+        border: none !important;
+        padding: 0 !important;
+        color: #66b7ff !important;
+        font-weight: 700 !important;
+        border-radius: 0 !important;
+        border-bottom: 2px solid #66b7ff !important;
+    }
+
+    /* Strike Zone Visuals */
+    .zones-panel{padding:14px 0; border-radius:10px;}
+    .zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
+    .zone-label{width:100px;font-weight:700; text-align: right;}
+    .zone-bar{height:22px;border-radius:6px;min-width:6px}
+    .zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
+    .zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
+    .zone-value{min-width:220px;font-variant-numeric:tabular-nums}
+    .price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
+    .price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: var(--line); opacity: 0.6; }
+    .price-badge { background: #2b3a45; color: #bfe7ff; border: 1px solid #56b6ff; border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; box-shadow: 0 2px 8px rgba(0,0,0,0.35); white-space: nowrap; margin: 0 12px; z-index: 1; }
+    .metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
+    .badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
+    .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
+    th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
+</style>
+""", unsafe_allow_html=True)
 
 try:
     # Load data
     sheet_url = st.secrets["GSHEET_URL"]
     df_global = load_and_clean_data(sheet_url)
-    last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
 
-    # --- CUSTOM TOP NAVIGATION BAR ---
-    st.markdown('<div class="control-box">', unsafe_allow_html=True)
-    nav_cols = st.columns([1.5, 1.2, 1.2, 1.2, 1.5, 2.5], gap="small")
+    # --- CUSTOM TOP NAVIGATION ---
+    if "app_choice" not in st.session_state:
+        st.session_state["app_choice"] = "Options Database"
+
+    nav_items = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
     
-    tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
-    
-    for i, tool in enumerate(tools):
-        # Apply a visual indicator (dot) to the active tool button
-        label = f"● {tool}" if st.session_state["app_choice"] == tool else tool
-        if nav_cols[i].button(label, key=f"nav_{tool}", use_container_width=True):
-            st.session_state["app_choice"] = tool
-            st.rerun()
+    # Simple flexbox-like nav using columns
+    cols = st.columns([1, 0.8, 1, 1, 1.2, 3])
+    for i, item in enumerate(nav_items):
+        is_active = st.session_state["app_choice"] == item
+        btn_key = f"nav_btn_{item}"
+        if cols[i].button(item, key=btn_key, help=f"Go to {item}", 
+                          type="secondary", 
+                          use_container_width=True,
+                          on_click=lambda x=item: st.session_state.update({"app_choice": x})):
+            pass # State update handled by on_click
             
-    with nav_cols[5]:
-        st.markdown(f"<div style='text-align: right; color: #a1a1a1; font-size: 0.85rem; line-height: 2.5;'><b>Last Updated:</b> {last_updated_date}</div>", unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("<hr style='margin-top: -5px; margin-bottom: 25px; opacity: 0.2;'>", unsafe_allow_html=True)
 
     # --- APP ROUTING ---
     current_choice = st.session_state["app_choice"]
@@ -624,7 +663,7 @@ try:
     elif current_choice == "Strike Zones":
         run_strike_zones_app(df_global)
     elif current_choice == "RSI Divergences":
-        run_rsi_divergences_app()
+        run_rsi_divergences_app(df_global)
     
 except Exception as e: 
     st.error(f"Error initializing dashboard: {e}")
