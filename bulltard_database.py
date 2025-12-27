@@ -125,7 +125,7 @@ def run_options_database_app(df):
     st.title("📂 Options Database")
     max_data_date = get_max_trade_date(df)
     
-    st.markdown('<div class="control-box">', unsafe_allow_html=True)
+    # Removed the control-box wrapper
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
         default_ticker = st.session_state.get("db_ticker", "")
@@ -141,7 +141,6 @@ def run_options_database_app(df):
     with ot1: inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
     with ot2: inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
     with ot3: inc_pb = st.checkbox("Puts Bought", value=True, key="db_inc_pb")
-    st.markdown('</div>', unsafe_allow_html=True)
     
     f = df.copy()
     if db_ticker: f = f[f["Symbol"].astype(str).str.upper().eq(db_ticker)]
@@ -179,12 +178,11 @@ def run_rankings_app(df):
     max_data_date = get_max_trade_date(df)
     start_default = max_data_date - timedelta(days=14)
     
-    st.markdown('<div class="control-box">', unsafe_allow_html=True)
+    # Removed the control-box wrapper
     c1, c2, c3, c_pad = st.columns([1.2, 1.2, 0.8, 3], gap="small")
     with c1: rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
     with c2: rank_end = st.date_input("Trade End Date", value=max_data_date, key="rank_end")
     with c3: limit = st.number_input("Limit", value=20, min_value=1, max_value=200, key="rank_limit")
-    st.markdown('</div>', unsafe_allow_html=True)
     
     f = df.copy()
     if rank_start: f = f[f["Trade Date"].dt.date >= rank_start]
@@ -246,7 +244,7 @@ def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
     exp_range_default = (date.today() + timedelta(days=365))
     
-    st.markdown('<div class="control-box">', unsafe_allow_html=True)
+    # Removed the control-box wrapper
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1: ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
     with c2: td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
@@ -274,7 +272,6 @@ def run_strike_zones_app(df):
         show_table      = st.checkbox("Show Interactive Data Table", value=True)
     
     st.markdown("---")
-    st.markdown('</div>', unsafe_allow_html=True)
         
     f_base = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
     if td_start: f_base = f_base[f_base["Trade Date"].dt.date >= td_start]
@@ -401,7 +398,7 @@ def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
     max_data_date = get_max_trade_date(df)
             
-    st.markdown('<div class="control-box">', unsafe_allow_html=True)
+    # Removed the control-box wrapper
     c1, c2, c3, c4, c5, c6 = st.columns(6, gap="small")
     with c1: td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
     with c2: td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
@@ -455,8 +452,6 @@ def run_pivot_tables_app(df):
         <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#f4c7c3"></div> Two Fridays</div>
     </div>
     """, unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
     
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
@@ -546,14 +541,7 @@ st.markdown("""<style>
 /* Adaptive variables using Streamlit native theme hooks */
 .block-container{padding-top:1.2rem;padding-bottom:1rem;}
 
-/* Box used for filters - uses translucent backgrounds to adapt to any theme */
-.control-box {
-    padding: 14px 20px; 
-    border-radius: 10px; 
-    background-color: rgba(128, 128, 128, 0.05); 
-    border: 1px solid rgba(128, 128, 128, 0.2); 
-    margin-bottom: 20px;
-}
+/* Removed control-box CSS entirely */
 
 .zones-panel{padding:14px 0; border-radius:10px;}
 .zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
