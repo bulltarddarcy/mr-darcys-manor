@@ -1187,7 +1187,6 @@ def run_rsi_percentiles_app():
     data_option = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed")
     
     with st.expander("ℹ️ Strategy Logic & Explanations"):
-        st.markdown('<div class="footer-header">📊 PERCENTILE LOGIC</div>', unsafe_allow_html=True)
         st.markdown("""
         * **Historical Context**: The algorithm analyzes up to **10 years** of daily price history.
         * **Signal Trigger**: 
