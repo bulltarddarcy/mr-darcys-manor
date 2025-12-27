@@ -511,12 +511,19 @@ def run_rankings_app(df):
             
             fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
             
-            # UPDATED: Changed Trade Count -> Qty and Last Trade -> Last
+            # UPDATED: Reverted Score to ProgressColumn and shrunk widths to fit mobile
             sm_config = {
-                "Symbol": st.column_config.TextColumn("Ticker", width=60),
-                "Net Sentiment ($)": st.column_config.TextColumn("Net Flow", width=100),
-                "Trade_Count": st.column_config.NumberColumn("Qty", width=80, format="%d"), 
-                "Last Trade": st.column_config.TextColumn("Last", width=80),
+                "Symbol": st.column_config.TextColumn("Ticker", width=50),
+                "Net Sentiment ($)": st.column_config.TextColumn("Net Flow", width=85),
+                "Trade_Count": st.column_config.NumberColumn("Qty", width=40, format="%d"),
+                "Last Trade": st.column_config.TextColumn("Last", width=50),
+                "Score": st.column_config.ProgressColumn(
+                    "Score",
+                    format="%d",
+                    min_value=0,
+                    max_value=100,
+                    width=None 
+                ),
             }
 
             sm1, sm2 = st.columns(2, gap="large")
@@ -526,10 +533,8 @@ def run_rankings_app(df):
                 disp_bull = top_bulls[["Symbol", "Score_Bull", "Net Sentiment ($)", "Trade_Count", "Last Trade"]].copy()
                 disp_bull.rename(columns={"Score_Bull": "Score"}, inplace=True)
                 
-                # UPDATED: Added pandas style bar (green)
                 st.dataframe(
-                    disp_bull.style.format({"Net Sentiment ($)": fmt_curr, "Score": "{:.0f}"})
-                    .bar(subset=["Score"], color="#71d28a", vmin=0, vmax=100),
+                    disp_bull.style.format({"Net Sentiment ($)": fmt_curr}),
                     use_container_width=True, 
                     hide_index=True, 
                     height=get_table_height(disp_bull), 
@@ -541,10 +546,8 @@ def run_rankings_app(df):
                 disp_bear = top_bears[["Symbol", "Score_Bear", "Net Sentiment ($)", "Trade_Count", "Last Trade"]].copy()
                 disp_bear.rename(columns={"Score_Bear": "Score"}, inplace=True)
                 
-                # UPDATED: Added pandas style bar (red) for consistency
                 st.dataframe(
-                    disp_bear.style.format({"Net Sentiment ($)": fmt_curr, "Score": "{:.0f}"})
-                    .bar(subset=["Score"], color="#f29ca0", vmin=0, vmax=100),
+                    disp_bear.style.format({"Net Sentiment ($)": fmt_curr}),
                     use_container_width=True, 
                     hide_index=True, 
                     height=get_table_height(disp_bear), 
@@ -781,7 +784,6 @@ def run_strike_zones_app(df):
                 st.markdown("".join(html_out), unsafe_allow_html=True)
             
             st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them in the Data Tables box below.")
-            # UPDATED: Removed the mobile view caption here
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
