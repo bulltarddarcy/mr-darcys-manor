@@ -66,7 +66,7 @@ st.set_page_config(page_title="RSI Analysis Pro", layout="wide")
 st.markdown("""
     <style>
     table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; font-family: monospace; }
-    thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 10px !important; border-bottom: 2px solid #dee2e6; }
+    thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 10px !important; border-bottom: 2px solid #dee2e6; text-align: left; }
     tbody tr td { padding: 8px !important; border-bottom: 1px solid #eee; }
     .analysis-card { background-color: #ffffff; border: 1px solid #e1e4e8; border-radius: 10px; padding: 25px; margin-bottom: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
     .pos-val { color: #27ae60; font-weight: bold; }
@@ -97,8 +97,6 @@ def prepare_data(df):
     
     d_rsi_col, d_ema8_col, d_ema21_col = 'RSI_14', 'EMA_8', 'EMA_21'
     w_close_col, w_vol_col, w_rsi_col = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
-    w_ema8_col, w_ema21_col = 'W_EMA_8', 'W_EMA_21'
-    w_high_col, w_low_col = 'W_HIGH', 'W_LOW'
 
     if not all([date_col, close_col, vol_col, high_col, low_col]): return None, None
 
@@ -111,11 +109,10 @@ def prepare_data(df):
     df_d = df_d.dropna(subset=['Price', 'RSI'])
 
     df_w = None
-    if all(c in df.columns for c in [w_close_col, w_vol_col, w_high_col, w_low_col, w_rsi_col]):
-        df_w = df[[w_close_col, w_vol_col, w_high_col, w_low_col, w_rsi_col, w_ema8_col, w_ema21_col]].copy()
-        df_w.rename(columns={w_close_col: 'Price', w_vol_col: 'Volume', w_high_col: 'High', w_low_col: 'Low', w_rsi_col: 'RSI', w_ema8_col: 'EMA8', w_ema21_col: 'EMA21'}, inplace=True)
+    if all(c in df.columns for c in [w_close_col, w_vol_col, w_rsi_col]):
+        df_w = df[[w_close_col, w_vol_col, w_rsi_col]].copy()
+        df_w.rename(columns={w_close_col: 'Price', w_vol_col: 'Volume', w_rsi_col: 'RSI'}, inplace=True)
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
-        df_w['ChartDate'] = df_w.index - pd.Timedelta(days=4)
         df_w = df_w.dropna(subset=['Price', 'RSI'])
     
     return df_d, df_w
@@ -135,13 +132,28 @@ def calculate_win_rates(df, current_rsi, tol=2):
             results.append({"Days": w, "Win Rate": f"{(sum(1 for r in rets if r > 0) / len(rets)) * 100:.1f}%", "Avg": np.mean(rets) * 100, "Med": np.median(rets) * 100})
     return results, len(matches)
 
-# --- App Logic ---
-st.title("📈 RSI Analysis Dashboard")
+def find_divergences(df_tf, ticker, timeframe):
+    divergences = []
+    if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
+    start_idx = max(DIVERGENCE_LOOKBACK, len(df_tf) - SIGNAL_LOOKBACK_PERIOD)
+    
+    for i in range(start_idx, len(df_tf)):
+        p2 = df_tf.iloc[i]
+        lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
+        
+        if p2['Low'] < lookback['Low'].min():
+            p1 = lookback.loc[lookback['RSI'].idxmin()]
+            if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
+                divergences.append({'Ticker': ticker, 'Type': 'Bullish', 'Timeframe': timeframe, 'P1 Date': p1.name.strftime('%Y-%m-%d'), 'Signal Date': p2.name.strftime('%Y-%m-%d'), 'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}", 'P1 Price': f"${p1['Low']:,.2f}", 'P2 Price': f"${p2['Low']:,.2f}"})
+    return divergences
+
+# --- App Structure ---
+st.title("📈 RSI Multi-Analysis Dashboard")
 dataset_map = load_dataset_config()
 data_option = st.pills("Select Dataset", options=list(dataset_map.keys()), selection_mode="single", default=list(dataset_map.keys())[0])
 
-# Navigation via Tabs (More visible than Sidebar)
-tab1, tab2 = st.tabs(["Divergence Scanner", "RSI Forward Win Rates"])
+# Navigation via Tabs (Reliable visibility)
+tab_div, tab_win = st.tabs(["📊 Divergence Scanner", "🎯 Forward Win Rates"])
 
 if data_option:
     secret_key = dataset_map[data_option]
@@ -152,14 +164,20 @@ if data_option:
         master = pd.read_csv(csv_buffer)
         t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), 'TICKER')
 
-        with tab1:
-            st.markdown('<div class="grey-note">ℹ️ Scans for Bullish and Bearish RSI Divergences.</div>', unsafe_allow_html=True)
-            # Re-insert original Divergence scanning logic here if needed. 
-            # (Truncated for brevity, but this is where your prepare_data and find_divergences loop goes)
-            st.write("Divergence Scanner Active.")
+        with tab_div:
+            st.markdown('<div class="grey-note">ℹ️ Scans for Bullish RSI Divergences within the last 25 periods.</div>', unsafe_allow_html=True)
+            all_divs = []
+            for ticker, group in master.groupby(t_col):
+                d_d, _ = prepare_data(group)
+                if d_d is not None:
+                    all_divs.extend(find_divergences(d_d, ticker, 'Daily'))
+            if all_divs:
+                st.table(pd.DataFrame(all_divs))
+            else:
+                st.write("No signals found.")
 
-        with tab2:
-            st.header("🎯 Forward Returns Analysis (NFLX Test)")
+        with tab_win:
+            st.header("Forward Returns Analysis (NFLX Test)")
             # TESTING LOCK: NFLX ONLY
             target_tickers = ["NFLX"]
             for ticker in target_tickers:
