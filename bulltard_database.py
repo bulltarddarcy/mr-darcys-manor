@@ -451,20 +451,21 @@ def run_rankings_app(df):
             valid_data["Last Trade"] = valid_data["Last_Trade"].dt.strftime("%d %b")
 
             # Prepare Result Tables
-            top_bulls = valid_data.sort_values(by="Score_Bull", ascending=False).head(limit)
-            top_bears = valid_data.sort_values(by="Score_Bear", ascending=False).head(limit)
+            # TIE BREAKER: If Score is equal, Sort by absolute magnitude of Net Sentiment
+            # Bulls: Descending Score, Descending Sentiment (More Positive)
+            top_bulls = valid_data.sort_values(by=["Score_Bull", "Net Sentiment ($)"], ascending=[False, False]).head(limit)
+            # Bears: Descending Score, Ascending Sentiment (More Negative)
+            top_bears = valid_data.sort_values(by=["Score_Bear", "Net Sentiment ($)"], ascending=[False, True]).head(limit)
             
             # Formatting Helper
             fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
             
-            # Column Configuration
+            # Column Configuration (removed Score columns to allow pandas styling to work)
             sm_config = {
                 "Symbol": st.column_config.TextColumn("Ticker", width=60),
                 "Net Sentiment ($)": st.column_config.TextColumn("Net Flow", width=100),
-                "Trade_Count": st.column_config.NumberColumn("Qty", width=50, format="%d"),
-                "Last Trade": st.column_config.TextColumn("Last", width=60),
-                "Score_Bull": st.column_config.NumberColumn("Score", width=70, format="%.0f"),
-                "Score_Bear": st.column_config.NumberColumn("Score", width=70, format="%.0f"),
+                "Trade_Count": st.column_config.NumberColumn("Trade Count", width=80, format="%d"),
+                "Last Trade": st.column_config.TextColumn("Last Trade", width=80),
             }
 
             # Display
@@ -473,12 +474,13 @@ def run_rankings_app(df):
             with sm1:
                 st.markdown("<div style='text-align:left; color: #71d28a; font-weight:bold; margin-bottom:5px;'>Top Bullish Scores</div>", unsafe_allow_html=True)
                 disp_bull = top_bulls[["Symbol", "Score_Bull", "Net Sentiment ($)", "Trade_Count", "Last Trade"]].copy()
+                disp_bull.rename(columns={"Score_Bull": "Score"}, inplace=True)
                 
                 # Apply Style with Green Bar using Pandas Styling
                 st.dataframe(
                     disp_bull.style
-                    .format({"Net Sentiment ($)": fmt_curr})
-                    .bar(subset=["Score_Bull"], color="#71d28a", vmin=0, vmax=100),
+                    .format({"Net Sentiment ($)": fmt_curr, "Score": "{:.0f}"})
+                    .bar(subset=["Score"], color="#71d28a", vmin=0, vmax=100),
                     use_container_width=True, 
                     hide_index=True, 
                     height=get_table_height(disp_bull), 
@@ -488,12 +490,13 @@ def run_rankings_app(df):
             with sm2:
                 st.markdown("<div style='text-align:left; color: #f29ca0; font-weight:bold; margin-bottom:5px;'>Top Bearish Scores</div>", unsafe_allow_html=True)
                 disp_bear = top_bears[["Symbol", "Score_Bear", "Net Sentiment ($)", "Trade_Count", "Last Trade"]].copy()
+                disp_bear.rename(columns={"Score_Bear": "Score"}, inplace=True)
                 
                 # Apply Style with Red Bar (default/custom) using Pandas Styling
                 st.dataframe(
                     disp_bear.style
-                    .format({"Net Sentiment ($)": fmt_curr})
-                    .bar(subset=["Score_Bear"], color="#f29ca0", vmin=0, vmax=100),
+                    .format({"Net Sentiment ($)": fmt_curr, "Score": "{:.0f}"})
+                    .bar(subset=["Score"], color="#f29ca0", vmin=0, vmax=100),
                     use_container_width=True, 
                     hide_index=True, 
                     height=get_table_height(disp_bear), 
@@ -528,8 +531,8 @@ def run_rankings_app(df):
     
     rank_col_config = {
         "Symbol": st.column_config.TextColumn("Sym", width=40),
-        "Trade Count": st.column_config.NumberColumn("Qty", width=40),
-        "Last Trade": st.column_config.TextColumn("Last", width=70),
+        "Trade Count": st.column_config.NumberColumn("Trade Count", width=40),
+        "Last Trade": st.column_config.TextColumn("Last Trade", width=70),
         "Dollars": st.column_config.TextColumn("Dollars", width=90),
         "Score": st.column_config.NumberColumn("Score", width=40),
     }
