@@ -76,27 +76,28 @@ st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
 st.markdown("""
     <style>
-    /* Synchronized Note Styling to match Streamlit default UI font size */
+    /* Synchronized Note Styling */
     .top-note {
         color: #888888;
-        font-size: 14px; /* Matches 'Select Dataset' / standard UI text */
+        font-size: 14px;
         margin-bottom: 2px;
-        font-family: inherit; /* Inherits Streamlit system font */
+        font-family: inherit;
     }
     
     table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2rem; }
     thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
     
-    th:nth-child(1) { width: 7%; }  
-    th:nth-child(2) { width: 15%; } 
-    th:nth-child(3) { width: 9%; }  
-    th:nth-child(4) { width: 9%; }  
-    th:nth-child(5) { width: 7%; }  
-    th:nth-child(6) { width: 9%; }  
-    th:nth-child(7) { width: 9%; }  
-    th:nth-child(8) { width: 9%; } 
-    th:nth-child(9) { width: 13%; } 
-    th:nth-child(10) { width: 13%; } 
+    /* Column Width Adjustments */
+    th:nth-child(1) { width: 7%; }  /* Ticker */
+    th:nth-child(2) { width: 25%; } /* Tags - Increased to prevent wrapping */
+    th:nth-child(3) { width: 8%; }  /* P1 Date */
+    th:nth-child(4) { width: 8%; }  /* Signal Date */
+    th:nth-child(5) { width: 8%; }  /* RSI */
+    th:nth-child(6) { width: 8%; }  /* P1 Price */
+    th:nth-child(7) { width: 8%; }  /* P2 Price */
+    th:nth-child(8) { width: 8%; }  /* Last Close */
+    th:nth-child(9) { width: 10%; } /* EV 30p */
+    th:nth-child(10) { width: 10%; }/* EV 90p */
     
     tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; }
     .align-left { text-align: left !important; }
@@ -209,7 +210,8 @@ def find_divergences(df_tf, ticker, timeframe):
                         'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
                         'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
                         'P1 Price': f"${p1['Low' if s_type=='Bullish' else 'High']:,.2f}", 
-                        'P2 Price': f"${p2['Low' if s_type=='Bullish' else 'High']:,.2f}", 'Last Close': f"${latest_p['Price']:,.2f}",
+                        'P2 Price': f"${p2['Low' if s_type=='Bullish' else 'High']:,.2f}", 
+                        'Last Close': f"${latest_p['Price']:,.2f}",
                         'ev30_raw': ev30, 'ev90_raw': ev90
                     })
     return divergences
@@ -227,7 +229,6 @@ if data_option:
             date_col = next((col for col in master.columns if 'DATE' in col.upper()), None)
             last_updated_str = pd.to_datetime(master[date_col]).max().strftime('%Y-%m-%d') if date_col else "Unknown"
             
-            # Synchronized Header Notes using top-note class
             st.markdown('<div class="top-note">ℹ️ See bottom of page for strategy logic and tag explanations.</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="top-note">📅 Last Updated: {last_updated_str}</div>', unsafe_allow_html=True)
             
@@ -246,6 +247,7 @@ if data_option:
                 if d_d is not None: raw_results.extend(find_divergences(d_d, ticker, 'Daily'))
                 if d_w is not None: raw_results.extend(find_divergences(d_w, ticker, 'Weekly'))
                 progress_bar.progress((i + 1) / len(grouped))
+            
             if raw_results:
                 res_df = pd.DataFrame(raw_results).sort_values(by='Signal Date', ascending=False)
                 consolidated = res_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
@@ -272,7 +274,6 @@ if data_option:
                                     if data:
                                         is_pos = data['return'] > 0
                                         cls = ("ev-positive" if is_pos else "ev-negative") if s_type == 'Bullish' else ("ev-positive" if not is_pos else "ev-negative")
-                                        # Rounded to 1 decimal place (.1f)
                                         html += f'<td class="{cls}">{data["return"]*100:+.1f}% <br><small>(${data["price"]:,.2f}, N={data["n"]})</small></td>'
                                     else: html += '<td class="ev-neutral">N/A</td>'
                                 html += '</tr>'
