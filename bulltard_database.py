@@ -295,29 +295,19 @@ def run_strike_zones_app(df):
         return
 
     # --- TRACKING SELECTIONS ---
-    # We add an Include column to the raw pool if it doesn't exist
     if "Include" not in edit_pool_raw.columns:
         edit_pool_raw.insert(0, "Include", True)
     
-    # We need to capture the state of the editor. Streamlit's data_editor returns the 
-    # dataframe reflecting the changes, but we want the charts to update based on it.
-    # To keep the charts at the top, we use an empty placeholder or simply process 
-    # the selection before rendering visuals.
-    
-    # Pre-process display strings
     edit_pool_raw["Trade Date Str"] = edit_pool_raw["Trade Date"].dt.strftime("%d %b %y")
     edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
 
-    # --- 1. RENDER VISUALS (UPPER PORTION) ---
     visual_placeholder = st.container()
 
-    # --- 2. RENDER INTERACTIVE TABLE (LOWER PORTION) ---
     if show_table:
         st.markdown("---")
         st.subheader("Data Table & Selection")
         st.caption("Uncheck rows to remove them from the charts above.")
         
-        # Display editor at the bottom
         edited_df = st.data_editor(
             edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]],
             column_config={
@@ -332,12 +322,10 @@ def run_strike_zones_app(df):
             use_container_width=True,
             key="sz_editor"
         )
-        # Identify the active rows for the charts
         f = edit_pool_raw[edited_df["Include"]].copy()
     else:
         f = edit_pool_raw.copy()
 
-    # --- 3. EXECUTE CHART LOGIC (INTO THE TOP CONTAINER) ---
     with visual_placeholder:
         if f.empty:
             st.info("No rows selected. Check the 'Include' boxes below.")
@@ -425,7 +413,7 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="light-note">ℹ️ Market Cap filtering can occasionally be buggy. If the tables are not populating, reset \'Mkt Cap Min\' to 0B and then try again.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note">ℹ️ If tables appear overlapped, try using a wider monitor or reducing your browser zoom level for an optimal view.</div>', unsafe_allow_html=True)
 
-    # --- Puts Sold Calculator (Compact 6-Field Single-Row) ---
+    # --- Puts Sold Calculator ---
     st.markdown("<hr style='margin: 15px 0; opacity: 0.2;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='margin-bottom: 12px; font-size: 1rem;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
     
@@ -551,12 +539,16 @@ def run_rsi_divergences_app():
     st.link_button("🌈 🚀 Click to travel to the new RSI Divergence website 🚀 🌈", "https://mr-darcys-rsi-divergence.streamlit.app/")
 
 # --- 3. MAIN EXECUTION ---
+# Configure page BEFORE calling other streamlit functions
+st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
+
+# Check for query params to handle deep links
 if "tool" in st.query_params or "ticker" in st.query_params:
     st.session_state["app_choice_internal"] = st.query_params.get("tool")
     st.session_state["db_ticker"] = st.query_params.get("ticker")
-    st.query_params.clear()
+    # Note: st.query_params.clear() can trigger a rerun; removed to prevent loops
 
-st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
+# CSS Styling (Includes custom styling for the top-bar navigation)
 st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
 html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg)!important;}
 .block-container{padding-top:1.2rem;padding-bottom:1rem;}
@@ -576,27 +568,62 @@ html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg
 .price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
 th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
 .light-note { color: #a1a1a1; font-size: 14px; margin-bottom: 10px; }
+
+/* Styling for the Tabs at top */
+.stTabs [data-baseweb="tab-list"] { gap: 12px; }
+.stTabs [data-baseweb="tab"] {
+    height: 50px;
+    background-color: #2a2d31;
+    border-radius: 5px 5px 0 0;
+    padding: 10px 20px;
+    color: #a1a1a1;
+}
+.stTabs [aria-selected="true"] { 
+    background-color: #3b3f45 !important; 
+    color: #66b7ff !important;
+    border-bottom: 2px solid #66b7ff !important;
+}
 </style>""", unsafe_allow_html=True)
 
 try:
     sheet_url = st.secrets["GSHEET_URL"]
     df_global = load_and_clean_data(sheet_url)
     last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
-    with st.sidebar:
-        st.markdown(f"**Last Updated:** {last_updated_date}")
-        st.header("Select Tool")
-        tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
-        default_tool_idx = 0
-        if "app_choice_internal" in st.session_state:
-            try: default_tool_idx = tools.index(st.session_state["app_choice_internal"])
-            except: pass
-            del st.session_state["app_choice_internal"]
-        app_choice = st.selectbox("Select Tool", tools, index=default_tool_idx, label_visibility="collapsed")
+
+    # Display "Last Updated" in a top-right column layout instead of sidebar
+    hcol1, hcol2 = st.columns([7, 3])
+    with hcol2:
+        st.markdown(f"<div style='text-align: right; padding-top: 10px; color: #888;'><b>Last Updated:</b> {last_updated_date}</div>", unsafe_allow_html=True)
+
+    # PAGE OPTIONS AS TABS
+    tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
     
-    if app_choice == "Options Database": run_options_database_app(df_global)
-    elif app_choice == "Rankings": run_rankings_app(df_global)
-    elif app_choice == "Pivot Tables": run_pivot_tables_app(df_global)
-    elif app_choice == "RSI Divergences": run_rsi_divergences_app()
-    else: run_strike_zones_app(df_global)
+    # Logic to select tab based on query params or previous session state
+    initial_tab_idx = 0
+    if "app_choice_internal" in st.session_state:
+        try:
+            initial_tab_idx = tools.index(st.session_state["app_choice_internal"])
+        except:
+            pass
+
+    # Render Tabs
+    # We use st.tabs to replace the sidebar selectbox entirely
+    tabs = st.tabs(tools)
+
+    with tabs[0]:
+        run_options_database_app(df_global)
     
-except Exception as e: st.error(f"Error: {e}")
+    with tabs[1]:
+        run_rankings_app(df_global)
+        
+    with tabs[2]:
+        run_pivot_tables_app(df_global)
+        
+    with tabs[3]:
+        run_strike_zones_app(df_global)
+        
+    with tabs[4]:
+        run_rsi_divergences_app()
+    
+except Exception as e: 
+    st.error(f"Error loading application: {e}")
