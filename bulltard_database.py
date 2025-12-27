@@ -370,105 +370,117 @@ def run_rankings_app(df):
     st.markdown("---")
     st.subheader("🧠 Smart Money (Multivariate Score)")
     
-    # 1. Base Sentiment
-    f_filtered["Signed_Dollars"] = f_filtered.apply(
-        lambda x: x["Dollars"] if x[order_type_col] in ["Calls Bought", "Puts Sold"] else -x["Dollars"], axis=1
-    )
-    
-    # 2. Get Market Cap for calculation
-    def get_mcap_safe(sym): return get_market_cap(sym)
-    
-    # Group By Symbol
-    smart_stats = f_filtered.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
-    smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
-    smart_stats["Market Cap"] = smart_stats["Symbol"].apply(get_mcap_safe)
-    
-    # 3. Calculate Momentum (3-Day Flow)
-    unique_dates = sorted(f_filtered["Trade Date"].unique())
-    recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
-    f_momentum = f_filtered[f_filtered["Trade Date"].isin(recent_dates)]
-    mom_stats = f_momentum.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
-    mom_stats.rename(columns={"Signed_Dollars": "Momentum ($)"}, inplace=True)
-    
-    # Merge Momentum into Main
-    smart_stats = smart_stats.merge(mom_stats, on="Symbol", how="left").fillna(0)
-    
-    # 4. SCORING LOGIC
-    # Weights: Net Flow (40%), Flow % Cap (Impact) (30%), Momentum (30%)
-    
-    # Filter valid market caps to avoid division errors
-    valid_data = smart_stats[smart_stats["Market Cap"] > 0].copy()
-    
-    if not valid_data.empty:
-        valid_data["Impact"] = valid_data["Net Sentiment ($)"] / valid_data["Market Cap"]
+    # SPINNER FOR LOADING
+    with st.spinner("Processing Smart Money calculations..."):
+        # 1. Base Sentiment
+        f_filtered["Signed_Dollars"] = f_filtered.apply(
+            lambda x: x["Dollars"] if x[order_type_col] in ["Calls Bought", "Puts Sold"] else -x["Dollars"], axis=1
+        )
         
-        # Normalize columns 0-1 (Min-Max) for the scoring
-        # For Bearish scoring, we flip the sign (looking for largest negative numbers)
+        # 2. Get Market Cap for calculation
+        def get_mcap_safe(sym): return get_market_cap(sym)
         
-        def normalize(series):
-            return (series - series.min()) / (series.max() - series.min()) if (series.max() != series.min()) else 0
+        # Group By Symbol
+        smart_stats = f_filtered.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
+        smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
+        smart_stats["Market Cap"] = smart_stats["Symbol"].apply(get_mcap_safe)
+        
+        # 3. Calculate Momentum (3-Day Flow)
+        unique_dates = sorted(f_filtered["Trade Date"].unique())
+        recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
+        f_momentum = f_filtered[f_filtered["Trade Date"].isin(recent_dates)]
+        mom_stats = f_momentum.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
+        mom_stats.rename(columns={"Signed_Dollars": "Momentum ($)"}, inplace=True)
+        
+        # Merge Momentum into Main
+        smart_stats = smart_stats.merge(mom_stats, on="Symbol", how="left").fillna(0)
+        
+        # 4. SCORING LOGIC
+        # Weights: Net Flow (40%), Flow % Cap (Impact) (30%), Momentum (30%)
+        
+        # Filter valid market caps to avoid division errors
+        valid_data = smart_stats[smart_stats["Market Cap"] > 0].copy()
+        
+        if not valid_data.empty:
+            valid_data["Impact"] = valid_data["Net Sentiment ($)"] / valid_data["Market Cap"]
+            
+            # Normalize columns 0-1 (Min-Max) for the scoring
+            
+            def normalize(series):
+                return (series - series.min()) / (series.max() - series.min()) if (series.max() != series.min()) else 0
 
-        # --- BULLISH SCORE ---
-        # Higher Positive Flow, Higher Impact, Higher Positive Momentum = Higher Score
-        # We clip negatives to 0 so bearish flows don't mess up bullish ranking
-        bull_flow = valid_data["Net Sentiment ($)"].clip(lower=0)
-        bull_imp = valid_data["Impact"].clip(lower=0)
-        bull_mom = valid_data["Momentum ($)"].clip(lower=0)
-        
-        valid_data["Score_Bull"] = (
-            (0.40 * normalize(bull_flow)) + 
-            (0.30 * normalize(bull_imp)) + 
-            (0.30 * normalize(bull_mom))
-        ) * 100
+            # --- BULLISH SCORE ---
+            # Higher Positive Flow, Higher Impact, Higher Positive Momentum = Higher Score
+            bull_flow = valid_data["Net Sentiment ($)"].clip(lower=0)
+            bull_imp = valid_data["Impact"].clip(lower=0)
+            bull_mom = valid_data["Momentum ($)"].clip(lower=0)
+            
+            valid_data["Score_Bull"] = (
+                (0.40 * normalize(bull_flow)) + 
+                (0.30 * normalize(bull_imp)) + 
+                (0.30 * normalize(bull_mom))
+            ) * 100
 
-        # --- BEARISH SCORE ---
-        # Higher NEGATIVE Flow, Higher Negative Impact = Higher Score
-        # We invert signs so we can normalize positive magnitudes
-        bear_flow = -valid_data["Net Sentiment ($)"].clip(upper=0)
-        bear_imp = -valid_data["Impact"].clip(upper=0)
-        bear_mom = -valid_data["Momentum ($)"].clip(upper=0)
-        
-        valid_data["Score_Bear"] = (
-            (0.40 * normalize(bear_flow)) + 
-            (0.30 * normalize(bear_imp)) + 
-            (0.30 * normalize(bear_mom))
-        ) * 100
-        
-        # Prepare Result Tables
-        top_bulls = valid_data.sort_values(by="Score_Bull", ascending=False).head(limit)
-        top_bears = valid_data.sort_values(by="Score_Bear", ascending=False).head(limit)
-        
-        # Formatting
-        # Accounting format: ($1,000)
-        fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
-        fmt_score = lambda x: f"{x:.0f}"
-        
-        sm_config = {
-            "Symbol": st.column_config.TextColumn("Ticker", width=60),
-            "Score_Bull": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=100, format="%.0f"),
-            "Score_Bear": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=100, format="%.0f"),
-            "Net Sentiment ($)": st.column_config.TextColumn("Net Flow", width=100),
-        }
+            # --- BEARISH SCORE ---
+            # Higher NEGATIVE Flow, Higher Negative Impact = Higher Score
+            bear_flow = -valid_data["Net Sentiment ($)"].clip(upper=0)
+            bear_imp = -valid_data["Impact"].clip(upper=0)
+            bear_mom = -valid_data["Momentum ($)"].clip(upper=0)
+            
+            valid_data["Score_Bear"] = (
+                (0.40 * normalize(bear_flow)) + 
+                (0.30 * normalize(bear_imp)) + 
+                (0.30 * normalize(bear_mom))
+            ) * 100
+            
+            # Prepare Result Tables
+            top_bulls = valid_data.sort_values(by="Score_Bull", ascending=False).head(limit)
+            top_bears = valid_data.sort_values(by="Score_Bear", ascending=False).head(limit)
+            
+            # Formatting Helper
+            fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
+            
+            # Column Configuration (for simple Text cols, NOT bars, we use pandas style bars)
+            sm_config = {
+                "Symbol": st.column_config.TextColumn("Ticker", width=60),
+                "Net Sentiment ($)": st.column_config.TextColumn("Net Flow", width=100),
+            }
 
-        # Display
-        sm1, sm2 = st.columns(2, gap="large")
-        
-        with sm1:
-            st.markdown("<div style='text-align:center; color: #71d28a; font-weight:bold; margin-bottom:5px;'>Top Bullish Scores</div>", unsafe_allow_html=True)
-            # Format the dollars before display
-            disp_bull = top_bulls[["Symbol", "Score_Bull", "Net Sentiment ($)"]].copy()
-            disp_bull["Net Sentiment ($)"] = disp_bull["Net Sentiment ($)"].apply(fmt_curr)
-            st.dataframe(disp_bull, use_container_width=True, hide_index=True, height=get_table_height(disp_bull), column_config=sm_config)
-        
-        with sm2:
-            st.markdown("<div style='text-align:center; color: #f29ca0; font-weight:bold; margin-bottom:5px;'>Top Bearish Scores</div>", unsafe_allow_html=True)
-            disp_bear = top_bears[["Symbol", "Score_Bear", "Net Sentiment ($)"]].copy()
-            disp_bear["Net Sentiment ($)"] = disp_bear["Net Sentiment ($)"].apply(fmt_curr)
-            # Map column name to match config key if needed, or just use config to display
-            st.dataframe(disp_bear, use_container_width=True, hide_index=True, height=get_table_height(disp_bear), column_config=sm_config)
+            # Display
+            sm1, sm2 = st.columns(2, gap="large")
+            
+            with sm1:
+                st.markdown("<div style='text-align:center; color: #71d28a; font-weight:bold; margin-bottom:5px;'>Top Bullish Scores</div>", unsafe_allow_html=True)
+                disp_bull = top_bulls[["Symbol", "Score_Bull", "Net Sentiment ($)"]].copy()
+                
+                # Apply Style with Green Bar using Pandas Styling
+                st.dataframe(
+                    disp_bull.style
+                    .format({"Net Sentiment ($)": fmt_curr, "Score_Bull": "{:.0f}"})
+                    .bar(subset=["Score_Bull"], color="#71d28a", vmin=0, vmax=100),
+                    use_container_width=True, 
+                    hide_index=True, 
+                    height=get_table_height(disp_bull), 
+                    column_config=sm_config
+                )
+            
+            with sm2:
+                st.markdown("<div style='text-align:center; color: #f29ca0; font-weight:bold; margin-bottom:5px;'>Top Bearish Scores</div>", unsafe_allow_html=True)
+                disp_bear = top_bears[["Symbol", "Score_Bear", "Net Sentiment ($)"]].copy()
+                
+                # Apply Style with Red Bar (default/custom) using Pandas Styling
+                st.dataframe(
+                    disp_bear.style
+                    .format({"Net Sentiment ($)": fmt_curr, "Score_Bear": "{:.0f}"})
+                    .bar(subset=["Score_Bear"], color="#f29ca0", vmin=0, vmax=100),
+                    use_container_width=True, 
+                    hide_index=True, 
+                    height=get_table_height(disp_bear), 
+                    column_config=sm_config
+                )
 
-    else:
-        st.warning("Not enough data with valid Market Caps to generate scores.")
+        else:
+            st.warning("Not enough data with valid Market Caps to generate scores.")
 
     # Methodology
     st.markdown("""
@@ -505,7 +517,7 @@ def run_rankings_app(df):
         "Symbol": st.column_config.TextColumn("Sym", width=40),
         "Trade Count": st.column_config.NumberColumn("Qty", width=40),
         "Last Trade": st.column_config.TextColumn("Last", width=70),
-        "Dollars": st.column_config.TextColumn("Dollars", width=90), # Changed to Text for custom formatting
+        "Dollars": st.column_config.TextColumn("Dollars", width=90),
         "Score": st.column_config.NumberColumn("Score", width=40),
     }
     fmt_currency_legacy = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
@@ -517,7 +529,6 @@ def run_rankings_app(df):
     col_left, col_right = st.columns(2, gap="large")
     with col_left:
         st.markdown("<h4 style='color: #71d28a; margin:0;'>Bullish Volume</h4>", unsafe_allow_html=True)
-        # Apply formatting to Dollars column manually before display to ensure ($X) format
         b_disp = bull_df.copy()
         b_disp["Dollars"] = b_disp["Dollars"].apply(fmt_currency_legacy)
         st.dataframe(b_disp.style.format({"Trade Count": "{:,.0f}", "Score": fmt_score_legacy}), use_container_width=True, hide_index=True, height=get_table_height(bull_df), column_config=rank_col_config)
@@ -858,7 +869,8 @@ def run_pivot_tables_app(df):
 def run_rsi_divergences_app():
     # Changed Title
     st.title("📈 RSI Divergences")
-    
+    st.caption("ℹ️ On mobile, set your browser to View Desktop Site")
+
     # --- Custom RSI-Specific Styles ---
     st.markdown("""
         <style>
@@ -886,7 +898,36 @@ def run_rsi_divergences_app():
         """, unsafe_allow_html=True)
         
     dataset_map = load_dataset_config()
-    data_option = st.pills("Select Dataset", options=list(dataset_map.keys()), selection_mode="single", default=list(dataset_map.keys())[0])
+
+    with st.expander("ℹ️ Strategy Logic & Tag Explanations"):
+        f_col1, f_col2, f_col3 = st.columns(3)
+        with f_col1:
+            st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+            * **Signal Identification**: Scans for price extremes (New Low for Bullish, New High for Bearish) within a **{SIGNAL_LOOKBACK_PERIOD}-period window**.
+            * **Divergence Mechanism**: Compares the RSI at a new price extreme to a previous RSI extreme found within the **{DIVERGENCE_LOOKBACK}-period lookback**.
+            * **Bullish Standards**: Price hits a new low while RSI is at least **{RSI_DIFF_THRESHOLD} points higher** than at the previous low. RSI must remain below 50 between points.
+            * **Bearish Standards**: Price hits a new high while RSI is at least **{RSI_DIFF_THRESHOLD} points lower** than at the previous high. RSI must remain above 50 between points.
+            * **Invalidation**: Bullish signals are invalid if RSI breaks below the P1 low RSI before lifting. Bearish signals invalid if RSI breaks above P1 high RSI.
+            """)
+        with f_col2:
+            st.markdown('<div class="footer-header">🔮 EXPECTED VALUE (EV) ANALYSIS</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+            * **Data Pool**: Analyzes the **entire 3-year historical dataset** to find matching RSI environments.
+            * **RSI Matching**: Identifies historical instances where the RSI was within **±2 points** of the current RSI level.
+            * **Forward Projection**: Calculates the **Average (Mean)** percentage return for those matching instances exactly 30 and 90 periods into the future.
+            * **Statistical Filter**: EV is only displayed if at least **{MIN_N_THRESHOLD} historical matches (N)** are found to ensure reliability.
+            * **Color Coding**: 🟢 Green supports the trade direction (Bullish positive / Bearish negative). 🔴 Red indicates a contrary historical outcome.
+            """)
+        with f_col3:
+            st.markdown('<div class="footer-header">🏷️ TECHNICAL TAGS</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+            * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if the current price is trading **above** (Bullish) or **below** (Bearish) these exponential moving averages.
+            * **VOL_HIGH**: Triggered if the signal candle volume is > 150% of the **{VOL_SMA_PERIOD}-period average**.
+            * **VOL_GROW**: Triggered if volume at the current signal point (P2) is higher than the volume at the previous extreme (P1).
+            """)
+
+    data_option = st.pills("Dataset", options=list(dataset_map.keys()), selection_mode="single", default=list(dataset_map.keys())[0], label_visibility="collapsed")
 
     if data_option:
         try:
@@ -894,11 +935,6 @@ def run_rsi_divergences_app():
             csv_buffer = get_confirmed_gdrive_data(target_url)
             if csv_buffer and csv_buffer != "HTML_ERROR":
                 master = pd.read_csv(csv_buffer)
-                date_col = next((col for col in master.columns if 'DATE' in col.upper()), None)
-                last_updated_str = pd.to_datetime(master[date_col]).max().strftime('%Y-%m-%d') if date_col else "Unknown"
-                
-                st.markdown('<div class="top-note">ℹ️ See bottom of page for strategy logic and tag explanations.</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="top-note">📅 Last Updated: {last_updated_str}</div>', unsafe_allow_html=True)
                 
                 t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                 all_tickers = sorted(master[t_col].unique())
@@ -957,37 +993,6 @@ def run_rsi_divergences_app():
                             else: st.write("No signals.")
                 else: st.warning("No signals.")
                 
-                # --- Updated Robust Footer ---
-                st.divider()
-                f_col1, f_col2, f_col3 = st.columns(3)
-                
-                with f_col1:
-                    st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
-                    st.markdown(f"""
-                    * **Signal Identification**: Scans for price extremes (New Low for Bullish, New High for Bearish) within a **{SIGNAL_LOOKBACK_PERIOD}-period window**.
-                    * **Divergence Mechanism**: Compares the RSI at a new price extreme to a previous RSI extreme found within the **{DIVERGENCE_LOOKBACK}-period lookback**.
-                    * **Bullish Standards**: Price hits a new low while RSI is at least **{RSI_DIFF_THRESHOLD} points higher** than at the previous low. RSI must remain below 50 between points.
-                    * **Bearish Standards**: Price hits a new high while RSI is at least **{RSI_DIFF_THRESHOLD} points lower** than at the previous high. RSI must remain above 50 between points.
-                    * **Invalidation**: Bullish signals are invalid if RSI breaks below the P1 low RSI before lifting. Bearish signals invalid if RSI breaks above P1 high RSI.
-                    """)
-
-                with f_col2:
-                    st.markdown('<div class="footer-header">🔮 EXPECTED VALUE (EV) ANALYSIS</div>', unsafe_allow_html=True)
-                    st.markdown(f"""
-                    * **Data Pool**: Analyzes the **entire 3-year historical dataset** to find matching RSI environments.
-                    * **RSI Matching**: Identifies historical instances where the RSI was within **±2 points** of the current RSI level.
-                    * **Forward Projection**: Calculates the **Average (Mean)** percentage return for those matching instances exactly 30 and 90 periods into the future.
-                    * **Statistical Filter**: EV is only displayed if at least **{MIN_N_THRESHOLD} historical matches (N)** are found to ensure reliability.
-                    * **Color Coding**: 🟢 Green supports the trade direction (Bullish positive / Bearish negative). 🔴 Red indicates a contrary historical outcome.
-                    """)
-
-                with f_col3:
-                    st.markdown('<div class="footer-header">🏷️ TECHNICAL TAGS</div>', unsafe_allow_html=True)
-                    st.markdown(f"""
-                    * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if the current price is trading **above** (Bullish) or **below** (Bearish) these exponential moving averages.
-                    * **VOL_HIGH**: Triggered if the signal candle volume is > 150% of the **{VOL_SMA_PERIOD}-period average**.
-                    * **VOL_GROW**: Triggered if volume at the current signal point (P2) is higher than the volume at the previous extreme (P1).
-                    """)
         except Exception as e: st.error(f"Error: {e}")
 
 # --- 3. MAIN EXECUTION ---
