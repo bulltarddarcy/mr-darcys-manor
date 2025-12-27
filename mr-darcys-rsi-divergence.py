@@ -76,6 +76,7 @@ st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
 st.markdown("""
     <style>
+    /* Synchronized Note Styling to match standard UI font size */
     .top-note {
         color: #888888;
         font-size: 14px;
@@ -86,6 +87,7 @@ st.markdown("""
     table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2rem; }
     thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
     
+    /* Column widths */
     th:nth-child(1) { width: 8%; }  
     th:nth-child(2) { width: 22%; } 
     th:nth-child(3) { width: 10%; }  
@@ -100,6 +102,7 @@ st.markdown("""
     .align-left { text-align: left !important; }
     .align-center { text-align: center !important; }
     
+    /* Color coding for EV results */
     .ev-positive { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
     .ev-negative { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
     .ev-neutral { color: #5f6368; }
@@ -124,21 +127,29 @@ def style_tags(tag_str):
     return html_str
 
 def calculate_ev_data(df, target_rsi, periods, current_price):
+    """
+    Revised EV Logic: Uses absolute position mapping within the ticker's history
+    to find accurate forward returns for RSI matches within +/- 2 range.
+    """
     if df.empty or pd.isna(target_rsi): return None
-    cutoff_date = df.index.max() - timedelta(days=365 * EV_LOOKBACK_YEARS)
-    hist_df = df[df.index >= cutoff_date].copy()
     
-    # Matching Logic: Within +/- 2 of the target RSI
-    mask = (hist_df['RSI'] >= target_rsi - 2) & (hist_df['RSI'] <= target_rsi + 2)
-    indices = np.where(mask)[0]
+    # Pool history up to 10 years back from the most recent date
+    latest_date = df.index.max()
+    cutoff_date = latest_date - pd.DateOffset(years=EV_LOOKBACK_YEARS)
+    
+    # Match against all history except the current day (to find historical outcomes)
+    hist_pool = df[df.index < latest_date].copy()
+    mask = (hist_pool['RSI'] >= target_rsi - 2) & (hist_pool['RSI'] <= target_rsi + 2)
+    match_dates = hist_pool[mask].index
     
     returns = []
-    for idx in indices:
-        # Check forward window availability
-        if idx + periods < len(hist_df):
-            entry_p = hist_df.iloc[idx]['Price']
-            exit_p = hist_df.iloc[idx + periods]['Price']
-            if entry_p > 0: 
+    for d in match_dates:
+        # Get absolute row position in the full dataframe
+        idx = df.index.get_loc(d)
+        if idx + periods < len(df):
+            entry_p = df.iloc[idx]['Price']
+            exit_p = df.iloc[idx + periods]['Price']
+            if entry_p > 0:
                 returns.append((exit_p - entry_p) / entry_p)
                 
     if not returns or len(returns) < MIN_N_THRESHOLD: return None
@@ -157,7 +168,7 @@ def prepare_data(df):
     
     d_rsi_col, d_ema8_col, d_ema21_col = 'RSI_14', 'EMA_8', 'EMA_21'
     if not all([date_col, close_col, vol_col, high_col, low_col]): return None, None
-    
+
     df.index = pd.to_datetime(df[date_col])
     df = df.sort_index()
     
@@ -165,12 +176,11 @@ def prepare_data(df):
     df_d.rename(columns={close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low', d_rsi_col: 'RSI', d_ema8_col: 'EMA8', d_ema21_col: 'EMA21'}, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     df_d = df_d.dropna(subset=['Price', 'RSI'])
-    
-    # Process weekly data if available in columns starting with 'W_'
-    w_close_col = 'W_CLOSE'
-    if w_close_col in df.columns:
-        df_w = df[[w_close_col, 'W_VOLUME', 'W_HIGH', 'W_LOW', 'W_RSI_14', 'W_EMA_8', 'W_EMA_21']].copy()
-        df_w.rename(columns={w_close_col: 'Price', 'W_VOLUME': 'Volume', 'W_HIGH': 'High', 'W_LOW': 'Low', 'W_RSI_14': 'RSI', 'W_EMA_8': 'EMA8', 'W_EMA_21': 'EMA21'}, inplace=True)
+
+    # Weekly processing if W_ columns are found
+    if 'W_CLOSE' in df.columns:
+        df_w = df[['W_CLOSE', 'W_VOLUME', 'W_HIGH', 'W_LOW', 'W_RSI_14', 'W_EMA_8', 'W_EMA_21']].copy()
+        df_w.rename(columns={'W_CLOSE': 'Price', 'W_VOLUME': 'Volume', 'W_HIGH': 'High', 'W_LOW': 'Low', 'W_RSI_14': 'RSI', 'W_EMA_8': 'EMA8', 'W_EMA_21': 'EMA21'}, inplace=True)
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
         df_w['ChartDate'] = df_w.index - pd.Timedelta(days=4)
         df_w = df_w.dropna(subset=['Price', 'RSI'])
@@ -183,7 +193,7 @@ def find_divergences(df_tf, ticker, timeframe):
     if len(df_tf) < DIVERGENCE_LOOKBACK + 1: return divergences
     latest_p = df_tf.iloc[-1]
     
-    # Calculate EV based on the most recent RSI (e.g., 12/26/2025)
+    # Calculate EV metrics once per ticker based on most recent RSI
     ev30 = calculate_ev_data(df_tf, latest_p['RSI'], 30, latest_p['Price'])
     ev90 = calculate_ev_data(df_tf, latest_p['RSI'], 90, latest_p['Price'])
 
@@ -212,7 +222,6 @@ def find_divergences(df_tf, ticker, timeframe):
                 
                 if valid:
                     tags = []
-                    # Filter for tags based on price relationship to EMAs
                     if s_type == 'Bullish':
                         if latest_p['Price'] >= latest_p.get('EMA8', 0): tags.append(f"EMA{EMA8_PERIOD}")
                         if latest_p['Price'] >= latest_p.get('EMA21', 0): tags.append(f"EMA{EMA21_PERIOD}")
@@ -305,25 +314,26 @@ if data_option:
             with f_col1:
                 st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
                 st.markdown(f"""
-                * **Signal Identification**: Scans for price extremes within a **{SIGNAL_LOOKBACK_PERIOD}-period window**.
-                * **Divergence Mechanism**: Compares the current RSI at a new extreme to a previous extreme within the **{DIVERGENCE_LOOKBACK}-period lookback**.
-                * **Standards**: RSI must not cross the 50 midline between divergence points.
+                * **Signal Identification**: Scans for price extremes (New Low for Bullish, New High for Bearish) within a **{SIGNAL_LOOKBACK_PERIOD}-period window**.
+                * **Divergence Mechanism**: Compares the current RSI at a new extreme to a previous extreme found within the **{DIVERGENCE_LOOKBACK}-period lookback**.
+                * **Standards**: RSI must remain on the same side of the 50-midline between points. Bullish signals require price to hit a new low while RSI creates a higher low.
                 """)
 
             with f_col2:
                 st.markdown('<div class="footer-header">🔮 EXPECTED VALUE (EV) ANALYSIS</div>', unsafe_allow_html=True)
                 st.markdown(f"""
-                * **Data Pool**: Analyzes the last **{EV_LOOKBACK_YEARS} years** of historical data.
-                * **RSI Matching**: Identifies every day where the RSI was within **±2 points** of the most recent RSI (e.g., 12/26/2025).
-                * **Forward Projection**: Calculates the **Average (Mean)** return for those instances exactly 30 and 90 trading days later.
-                * **Statistical Filter**: EV displays only if at least **{MIN_N_THRESHOLD} occurrences (N)** are found.
+                * **Data Pool**: Analyzes the last **{EV_LOOKBACK_YEARS} years** of historical trading data.
+                * **RSI Matching**: Identifies every historical day where the ticker's RSI was within **±2 points** of the current level.
+                * **Forward Projection**: Calculates the **Average (Mean)** percentage return for those matching instances exactly 30 and 90 trading days later.
+                * **Statistical Filter**: Results are only displayed if at least **{MIN_N_THRESHOLD} historical occurrences (N)** are found to ensure confidence.
+                * **Color Coding**: 🟢 Green supports the trade direction (Bullish positive / Bearish negative). 🔴 Red indicates a contrary historical outcome.
                 """)
 
             with f_col3:
                 st.markdown('<div class="footer-header">🏷️ TECHNICAL TAGS</div>', unsafe_allow_html=True)
                 st.markdown(f"""
-                * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if the latest price is trading above (Bullish) or below (Bearish) these EMAs.
-                * **VOL_HIGH**: Triggered if the signal candle volume is > 150% of the **{VOL_SMA_PERIOD}-period average**.
-                * **V_GROW**: Triggered if volume at P2 is higher than volume at P1.
+                * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if the latest price is holding above (Bullish) or below (Bearish) these exponential moving averages.
+                * **VOL_HIGH**: The signal candle volume is > 150% of its **{VOL_SMA_PERIOD}-period average**.
+                * **V_GROW**: Volume at the current signal point (P2) is higher than volume at the previous extreme (P1).
                 """)
     except Exception as e: st.error(f"Error: {e}")
