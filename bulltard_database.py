@@ -420,6 +420,10 @@ def run_rankings_app(df):
             current_rank = rank_matrix[latest_date]
             trend_df = pd.DataFrame({"Current Rank": current_rank, "Avg Rank (2w)": avg_rank})
             trend_df["Trend Score"] = trend_df["Avg Rank (2w)"] - trend_df["Current Rank"]
+            
+            # --- FILTER FOR BULLISH HOTNESS ONLY (Positive Trend) ---
+            trend_df = trend_df[trend_df["Trend Score"] > 0]
+            
             movers = trend_df.dropna().sort_values("Trend Score", ascending=False).head(15).reset_index()
 
     # --- 3-COLUMN LAYOUT ---
@@ -434,14 +438,12 @@ def run_rankings_app(df):
         st.dataframe(bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
 
     with c_trend:
-        st.markdown("<h3 style='font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>🔥 Trending Tickers</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0;'>🔥 Trending (Bullish Momentum)</h3>", unsafe_allow_html=True)
         if not movers.empty:
             # Removed background_gradient to avoid matplotlib dependency
             # Using basic text color map instead
             def color_trend(val):
-                if val > 0: return 'color: #71d28a; font-weight: bold;'
-                if val < 0: return 'color: #f29ca0; font-weight: bold;'
-                return ''
+                return 'color: #71d28a; font-weight: bold;'
                 
             st.dataframe(
                 movers.style.format({"Current Rank": "{:.0f}", "Avg Rank (2w)": "{:.1f}", "Trend Score": "{:+.1f}"})
@@ -450,6 +452,8 @@ def run_rankings_app(df):
                 hide_index=True,
                 height=get_table_height(movers)
             )
+            
+            st.caption("ℹ️ **Trend Score Calculation:** This metric identifies tickers accelerating up the Bullish Leaderboard. It is calculated by subtracting the ticker's **Current Rank** from its **2-Week Average Rank**. A positive score indicates the ticker is ranking higher (more bullish flow) today than usual.")
         else:
             st.info("Insufficient data for trend analysis.")
 
