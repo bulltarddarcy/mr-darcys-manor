@@ -69,41 +69,54 @@ RSI_DIFF_THRESHOLD = 2
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
 EV_LOOKBACK_YEARS = 10
+MIN_N_THRESHOLD = 5
 
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
 st.markdown("""
     <style>
+    /* Synchronized Font Styling for Top Notes */
+    .top-note {
+        color: #888888;
+        font-size: 16px;
+        margin-bottom: 5px;
+        font-family: 'Source Sans Pro', sans-serif;
+    }
+    
     table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2rem; }
     thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
     
-    th:nth-child(1) { width: 8%; }  /* Ticker */
-    th:nth-child(2) { width: 22%; } /* Tags */
-    th:nth-child(3) { width: 10%; } /* P1 Date */
-    th:nth-child(4) { width: 10%; } /* Signal Date */
-    th:nth-child(5) { width: 8%; }  /* RSI */
-    th:nth-child(6) { width: 10%; } /* P1 Price */
-    th:nth-child(7) { width: 10%; } /* P2 Price */
-    th:nth-child(8) { width: 11%; } /* EV 30p */
-    th:nth-child(9) { width: 11%; } /* EV 90p */
+    /* Adjusted column widths for new longer EV text */
+    th:nth-child(1) { width: 7%; }  /* Ticker */
+    th:nth-child(2) { width: 18%; } /* Tags */
+    th:nth-child(3) { width: 9%; }  /* P1 Date */
+    th:nth-child(4) { width: 9%; }  /* Signal Date */
+    th:nth-child(5) { width: 7%; }  /* RSI */
+    th:nth-child(6) { width: 9%; }  /* P1 Price */
+    th:nth-child(7) { width: 9%; }  /* P2 Price */
+    th:nth-child(8) { width: 16%; } /* EV 30p */
+    th:nth-child(9) { width: 16%; } /* EV 90p */
     
-    tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; }
+    tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; }
     .align-left { text-align: left !important; }
     .align-center { text-align: center !important; }
     
-    /* Gentle Color Shades for EV */
+    /* Gentle Color Shades for EV cells */
     .ev-positive { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
     .ev-negative { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
     .ev-neutral { color: #5f6368; }
 
-    .tag-bubble { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 13px; font-weight: 600; margin: 2px 4px 2px 0; color: white; white-space: nowrap; }
-    .grey-note { color: #888888; font-size: 16px; margin-bottom: 5px; }
-    .update-note { color: #555555; font-size: 14px; margin-bottom: 20px; font-weight: bold; }
+    .tag-bubble { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; margin: 2px 4px 2px 0; color: white; white-space: nowrap; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("📈 RSI Divergence Scanner")
+
+# Manual Cache Clear to help with script/data refresh issues
+if st.sidebar.button("🔄 Force Refresh"):
+    st.cache_data.clear()
+    st.rerun()
 
 # --- Helpers ---
 def style_tags(tag_str):
@@ -117,9 +130,7 @@ def style_tags(tag_str):
     return html_str
 
 def calculate_ev_data(df, target_rsi, periods, current_price):
-    """Calculates EV by averaging historical % returns for similar RSI levels."""
-    if df.empty or pd.isna(target_rsi):
-        return None
+    if df.empty or pd.isna(target_rsi): return None
     
     cutoff_date = df.index.max() - timedelta(days=365 * EV_LOOKBACK_YEARS)
     hist_df = df[df.index >= cutoff_date].copy()
@@ -133,14 +144,13 @@ def calculate_ev_data(df, target_rsi, periods, current_price):
             exit_p = hist_df.iloc[idx + periods]['Price']
             if entry_p > 0: returns.append((exit_p - entry_p) / entry_p)
     
-    if not returns: return None
+    if not returns or len(returns) < MIN_N_THRESHOLD: 
+        return None
     
-    # We use the Mean (Average) to capture the true mathematical Expected Value
     avg_ret = np.mean(returns)
     ev_price = current_price * (1 + avg_ret)
     return {"price": ev_price, "n": len(returns), "return": avg_ret}
 
-# --- Logic Functions ---
 def prepare_data(df):
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
     date_col = next((col for col in df.columns if 'DATE' in col), None)
@@ -237,14 +247,15 @@ if data_option:
         if csv_buffer and csv_buffer != "HTML_ERROR":
             master = pd.read_csv(csv_buffer)
             
-            # (1) Handle "Last Updated" Date
+            # Last Updated Logic
             date_col = next((col for col in master.columns if 'DATE' in col.upper()), None)
             last_updated_str = "Unknown"
             if date_col:
                 last_updated_str = pd.to_datetime(master[date_col]).max().strftime('%Y-%m-%d')
             
-            st.markdown('<div class="grey-note">ℹ️ See bottom of page for strategy logic and tag explanations.</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="update-note">📅 Last Updated: {last_updated_str}</div>', unsafe_allow_html=True)
+            # Synchronized Header Notes
+            st.markdown('<div class="top-note">ℹ️ See bottom of page for strategy logic and tag explanations.</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="top-note">📅 Last Updated: {last_updated_str}</div>', unsafe_allow_html=True)
 
             t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
             all_tickers = sorted(master[t_col].unique())
@@ -286,35 +297,38 @@ if data_option:
                                 html += f'<td class="align-left">{row["P1 Price"]}</td>'
                                 html += f'<td class="align-left">{row["P2 Price"]}</td>'
                                 
+                                # Process the two EV columns
                                 for ev_key in ['ev30_raw', 'ev90_raw']:
                                     data = row[ev_key]
                                     if data:
                                         is_pos = data['return'] > 0
-                                        cls = ""
-                                        if s_type == 'Bullish': cls = "ev-positive" if is_pos else "ev-negative"
-                                        else: cls = "ev-positive" if not is_pos else "ev-negative"
-                                        html += f'<td class="{cls}">${data["price"]:,.2f} <br><small>(N={data["n"]})</small></td>'
-                                    else: html += '<td class="ev-neutral">N/A</td>'
-                                
+                                        # Profitability Color Logic
+                                        cls = ("ev-positive" if is_pos else "ev-negative") if s_type == 'Bullish' else ("ev-positive" if not is_pos else "ev-negative")
+                                        
+                                        # Format: +X.XX% ($Price, N=X) on 1 row
+                                        ret_str = f"{data['return']*100:+.2f}%"
+                                        html += f'<td class="{cls}">{ret_str} (${data["price"]:,.2f}, N={data["n"]})</td>'
+                                    else: 
+                                        html += '<td class="ev-neutral">N/A</td>'
                                 html += '</tr>'
                             html += '</tbody></table>'
                             st.markdown(html, unsafe_allow_html=True)
                         else: st.write("No signals.")
             else: st.warning("No signals.")
             
-            # (2) Footer with expanded EV logic
+            # Footer Strategy Explanations
             st.divider()
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("📝 Strategy Logic")
                 st.markdown(f"""
-                * **Signal Window**: Scans signals within the last **{SIGNAL_LOOKBACK_PERIOD} periods**.
+                * **Signal Window**: Last **{SIGNAL_LOOKBACK_PERIOD} periods**.
                 * **Lookback Window**: Searches preceding **{DIVERGENCE_LOOKBACK} periods** for extremes.
-                * **Expected Value (EV)**: Projects the price 30 and 90 periods out based on the **Average (Mean)** historical return of every instance where RSI was within $\pm 2$ of current levels (max 10yr lookback).
-                * **Sample Size (N)**: Indicates the number of historical matches found. Higher $N$ suggests higher statistical significance.
+                * **Expected Value (EV)**: Displays the **Average (Mean)** historical return of every instance where RSI was within $\pm 2$ of current levels (max 10yr lookback).
+                * **Confidence Filter**: EV is only displayed if at least **{MIN_N_THRESHOLD} matches** are found to ensure statistical significance.
                 * **Profitability Coloring**: 
-                    * 🟢 **Green**: EV supports the trade (Bullish EV > Price / Bearish EV < Price).
-                    * 🔴 **Red**: EV contradicts the trade direction.
+                    * 🟢 **Green**: Historical return supports the trade direction (Bullish positive / Bearish negative).
+                    * 🔴 **Red**: Historical return contradicts the trade direction.
                 """)
             with col2:
                 st.subheader("🏷️ Tags Explained")
