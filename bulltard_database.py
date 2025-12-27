@@ -746,15 +746,8 @@ def run_strike_zones_app(df):
                     color = "zone-bull" if r["Net_Dollars"] >= 0 else "zone-bear"
                     pct = (abs(r['Net_Dollars']) / max_val) * 100
                     val_str = fmt_neg(r["Net_Dollars"])
-                    html_out.append(f"""
-                    <div class="zone-row">
-                        <div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div>
-                        <div class="zone-wrapper">
-                            <div class="zone-bar {color}" style="width:{pct:.1f}%"></div>
-                            <div class="zone-value">{val_str} | n={int(r.Trades)}</div>
-                        </div>
-                    </div>
-                    """)
+                    # Use single line string to avoid markdown indentation issues
+                    html_out.append(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-wrapper"><div class="zone-bar {color}" style="width:{pct:.1f}%"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div></div>')
                 
                 html_out.append(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>')
                 
@@ -762,15 +755,7 @@ def run_strike_zones_app(df):
                     color = "zone-bull" if r["Net_Dollars"] >= 0 else "zone-bear"
                     pct = (abs(r['Net_Dollars']) / max_val) * 100
                     val_str = fmt_neg(r["Net_Dollars"])
-                    html_out.append(f"""
-                    <div class="zone-row">
-                        <div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div>
-                        <div class="zone-wrapper">
-                            <div class="zone-bar {color}" style="width:{pct:.1f}%"></div>
-                            <div class="zone-value">{val_str} | n={int(r.Trades)}</div>
-                        </div>
-                    </div>
-                    """)
+                    html_out.append(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-wrapper"><div class="zone-bar {color}" style="width:{pct:.1f}%"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div></div>')
                 
                 html_out.append('</div>')
                 st.markdown("".join(html_out), unsafe_allow_html=True)
@@ -788,15 +773,7 @@ def run_strike_zones_app(df):
                     color = "zone-bull" if r["Net_Dollars"] >= 0 else "zone-bear"
                     pct = (abs(r['Net_Dollars']) / max_val) * 100
                     val_str = fmt_neg(r["Net_Dollars"])
-                    html_out.append(f"""
-                    <div class="zone-row">
-                        <div class="zone-label">{r.Bucket}</div>
-                        <div class="zone-wrapper">
-                            <div class="zone-bar {color}" style="width:{pct:.1f}%"></div>
-                            <div class="zone-value">{val_str} | n={int(r.Trades)}</div>
-                        </div>
-                    </div>
-                    """)
+                    html_out.append(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-wrapper"><div class="zone-bar {color}" style="width:{pct:.1f}%"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div></div>')
                 
                 st.markdown("".join(html_out), unsafe_allow_html=True)
             
