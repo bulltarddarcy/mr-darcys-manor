@@ -541,52 +541,41 @@ def run_rsi_divergences_app():
 # --- 3. MAIN EXECUTION ---
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
 
-# Handle navigation session state
-if "app_choice" not in st.session_state:
-    st.session_state["app_choice"] = "Options Database"
-
-# Apply global aesthetics and button styling
-st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
-html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg)!important;}
+# Adaptive styles that respect Light/Dark mode
+st.markdown("""<style>
+/* Adaptive variables using Streamlit native theme hooks */
 .block-container{padding-top:1.2rem;padding-bottom:1rem;}
-.control-box{padding:14px 20px; border-radius:10px; background-color: var(--panel2); border: 1px solid #3a3f45; margin-bottom: 20px;}
+
+/* Box used for filters - uses translucent backgrounds to adapt to any theme */
+.control-box {
+    padding: 14px 20px; 
+    border-radius: 10px; 
+    background-color: rgba(128, 128, 128, 0.05); 
+    border: 1px solid rgba(128, 128, 128, 0.2); 
+    margin-bottom: 20px;
+}
+
 .zones-panel{padding:14px 0; border-radius:10px;}
 .zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
 .zone-label{width:100px;font-weight:700; text-align: right;}
 .zone-bar{height:22px;border-radius:6px;min-width:6px}
-.zone-bull{background:linear-gradient(90deg,var(--green),#60c57b)}
-.zone-bear{background:linear-gradient(90deg,var(--red),#e4878d)}
-.zone-value{min-width:220px;font-variant-numeric:tabular-nums}
-.price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
-.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: var(--line); opacity: 0.6; }
-.price-badge { background: #2b3a45; color: #bfe7ff; border: 1px solid #56b6ff; border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; box-shadow: 0 2px 8px rgba(0,0,0,0.35); white-space: nowrap; margin: 0 12px; z-index: 1; }
-.metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
-.badge{background:#2b3a45;border:1px solid #3b5566;color:#cde8ff;border-radius:18px;padding:6px 10px;font-weight:700}
-.price-badge-header{background:#2b3a45;border:1px solid #56b6ff;color:#bfe7ff;border-radius:18px;padding:6px 10px;font-weight:800}
-th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
-.light-note { color: #a1a1a1; font-size: 14px; margin-bottom: 10px; }
 
-/* Dashboard-style Navigation Buttons */
-div.stButton > button {
-    width: 100%;
-    background-color: #2a2d31;
-    color: #a1a1a1;
-    border: 1px solid #3a3f45;
-    border-radius: 8px;
-    padding: 8px 5px;
-    font-weight: 600;
-    font-size: 0.95rem;
-    transition: all 0.2s ease-in-out;
-}
-div.stButton > button:hover {
-    border-color: var(--line);
-    color: var(--line);
-}
-div.stButton > button:active, div.stButton > button:focus {
-    background-color: #3b3f45 !important;
-    border-color: var(--line) !important;
-    color: #ffffff !important;
-}
+/* Consistent semantic colors for charts */
+.zone-bull{background: linear-gradient(90deg, #71d28a, #60c57b)}
+.zone-bear{background: linear-gradient(90deg, #f29ca0, #e4878d)}
+.zone-value{min-width:220px;font-variant-numeric:tabular-nums}
+
+.price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
+.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.4; }
+.price-badge { background: rgba(102, 183, 255, 0.1); color: #66b7ff; border: 1px solid rgba(102, 183, 255, 0.5); border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; white-space: nowrap; margin: 0 12px; z-index: 1; }
+
+.metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
+.badge{background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius:18px; padding:6px 10px; font-weight:700}
+.price-badge-header{background: rgba(102, 183, 255, 0.1); border: 1px solid #66b7ff; border-radius:18px; padding:6px 10px; font-weight:800}
+
+.light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
+
+/* Hide the native "Sidebar" button if you want it truly fixed, but st.navigation manages this well */
 </style>""", unsafe_allow_html=True)
 
 try:
@@ -595,36 +584,25 @@ try:
     df_global = load_and_clean_data(sheet_url)
     last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
 
-    # --- CUSTOM TOP NAVIGATION BAR ---
-    st.markdown('<div class="control-box">', unsafe_allow_html=True)
-    nav_cols = st.columns([1.5, 1.2, 1.2, 1.2, 1.5, 2.5], gap="small")
-    
-    tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
-    
-    for i, tool in enumerate(tools):
-        # Apply a visual indicator (dot) to the active tool button
-        label = f"● {tool}" if st.session_state["app_choice"] == tool else tool
-        if nav_cols[i].button(label, key=f"nav_{tool}", use_container_width=True):
-            st.session_state["app_choice"] = tool
-            st.rerun()
-            
-    with nav_cols[5]:
-        st.markdown(f"<div style='text-align: right; color: #a1a1a1; font-size: 0.85rem; line-height: 2.5;'><b>Last Updated:</b> {last_updated_date}</div>", unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    # --- NAVIGATION SETUP ---
+    # Using st.navigation instead of custom buttons. 
+    # This automatically adds a non-collapsing sidebar menu.
+    pg = st.navigation({
+        "Tools": [
+            st.Page(lambda: run_options_database_app(df_global), title="Options Database", icon="📂", default=True),
+            st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆"),
+            st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯"),
+            st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊"),
+            st.Page(run_rsi_divergences_app, title="RSI Divergences", icon="📈"),
+        ]
+    })
 
-    # --- APP ROUTING ---
-    current_choice = st.session_state["app_choice"]
+    # Add extra info to the sidebar footer
+    st.sidebar.markdown("---")
+    st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
     
-    if current_choice == "Options Database":
-        run_options_database_app(df_global)
-    elif current_choice == "Rankings":
-        run_rankings_app(df_global)
-    elif current_choice == "Pivot Tables":
-        run_pivot_tables_app(df_global)
-    elif current_choice == "Strike Zones":
-        run_strike_zones_app(df_global)
-    elif current_choice == "RSI Divergences":
-        run_rsi_divergences_app()
+    # Execution
+    pg.run()
     
 except Exception as e: 
     st.error(f"Error initializing dashboard: {e}")
