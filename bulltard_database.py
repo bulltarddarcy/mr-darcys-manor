@@ -387,6 +387,48 @@ def find_divergences(df_tf, ticker, timeframe):
                     })
     return divergences
 
+def calculate_crossover_ev(rsi_arr, price_arr, threshold, mode, periods):
+    # rsi_arr and price_arr are aligned
+    if len(rsi_arr) < periods + 2: return None
+    
+    prev_rsi = rsi_arr[:-1]
+    curr_rsi = rsi_arr[1:]
+    
+    if mode == 'bull': # Leaving Oversold ( < p10 to >= p10)
+        mask = (prev_rsi < threshold) & (curr_rsi >= threshold)
+    else: # Leaving Overbought ( > p90 to <= p90)
+        mask = (prev_rsi > threshold) & (curr_rsi <= threshold)
+        
+    # indices in curr_rsi correspond to indices+1 in original arrays
+    match_indices = np.where(mask)[0] + 1
+    
+    if len(match_indices) == 0: return None
+    
+    # Filter for valid exits
+    exit_indices = match_indices + periods
+    valid_mask = exit_indices < len(price_arr)
+    
+    if not np.any(valid_mask): return None
+    
+    valid_entries = match_indices[valid_mask]
+    valid_exits = exit_indices[valid_mask]
+    
+    entry_prices = price_arr[valid_entries]
+    exit_prices = price_arr[valid_exits]
+    
+    # Avoid div by zero (unlikely but safe)
+    valid_prices = entry_prices > 0
+    if not np.any(valid_prices): return None
+    
+    entry_prices = entry_prices[valid_prices]
+    exit_prices = exit_prices[valid_prices]
+    
+    returns = (exit_prices - entry_prices) / entry_prices
+    
+    if len(returns) < MIN_N_THRESHOLD: return None 
+    
+    return {'return': np.mean(returns), 'n': len(returns)}
+
 def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
     signals = []
     if len(df) < 200: return signals
@@ -399,6 +441,21 @@ def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
     
     p10 = hist_df['RSI'].quantile(0.10)
     p90 = hist_df['RSI'].quantile(0.90)
+    
+    # Calculate historical EV stats for both sides
+    rsi_vals = hist_df['RSI'].values
+    price_vals = hist_df['Price'].values
+    
+    ev_stats = {
+        'bull': {
+            '30': calculate_crossover_ev(rsi_vals, price_vals, p10, 'bull', 30),
+            '90': calculate_crossover_ev(rsi_vals, price_vals, p10, 'bull', 90)
+        },
+        'bear': {
+            '30': calculate_crossover_ev(rsi_vals, price_vals, p90, 'bear', 30),
+            '90': calculate_crossover_ev(rsi_vals, price_vals, p90, 'bear', 90)
+        }
+    }
     
     # Check last N periods
     # Need at least periods_to_scan + 1 rows to check crossing
@@ -418,7 +475,9 @@ def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
                 'Type': 'Bullish (Leaving Oversold)',
                 'RSI': curr['RSI'],
                 'Threshold': p10,
-                'Percentile': '10th %ile'
+                'Percentile': '10th %ile',
+                'ev30': ev_stats['bull']['30'],
+                'ev90': ev_stats['bull']['90']
             })
             
         # Bearish Exit: Previously > p90, Now <= p90 (Leaving top)
@@ -429,7 +488,9 @@ def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
                 'Type': 'Bearish (Leaving Overbought)',
                 'RSI': curr['RSI'],
                 'Threshold': p90,
-                'Percentile': '90th %ile'
+                'Percentile': '90th %ile',
+                'ev30': ev_stats['bear']['30'],
+                'ev90': ev_stats['bear']['90']
             })
             
     return signals
@@ -1134,24 +1195,131 @@ def run_rsi_divergences_app():
                 
         except Exception as e: st.error(f"Error: {e}")
 
+def calculate_crossover_ev(rsi_arr, price_arr, threshold, mode, periods):
+    # rsi_arr and price_arr are aligned
+    if len(rsi_arr) < periods + 2: return None
+    
+    prev_rsi = rsi_arr[:-1]
+    curr_rsi = rsi_arr[1:]
+    
+    if mode == 'bull': # Leaving Oversold ( < p10 to >= p10)
+        mask = (prev_rsi < threshold) & (curr_rsi >= threshold)
+    else: # Leaving Overbought ( > p90 to <= p90)
+        mask = (prev_rsi > threshold) & (curr_rsi <= threshold)
+        
+    # indices in curr_rsi correspond to indices+1 in original arrays
+    match_indices = np.where(mask)[0] + 1
+    
+    if len(match_indices) == 0: return None
+    
+    # Filter for valid exits
+    exit_indices = match_indices + periods
+    valid_mask = exit_indices < len(price_arr)
+    
+    if not np.any(valid_mask): return None
+    
+    valid_entries = match_indices[valid_mask]
+    valid_exits = exit_indices[valid_mask]
+    
+    entry_prices = price_arr[valid_entries]
+    exit_prices = price_arr[valid_exits]
+    
+    # Avoid div by zero (unlikely but safe)
+    valid_prices = entry_prices > 0
+    if not np.any(valid_prices): return None
+    
+    entry_prices = entry_prices[valid_prices]
+    exit_prices = exit_prices[valid_prices]
+    
+    returns = (exit_prices - entry_prices) / entry_prices
+    
+    if len(returns) < MIN_N_THRESHOLD: return None 
+    
+    return {'return': np.mean(returns), 'n': len(returns)}
+
+def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
+    signals = []
+    if len(df) < 200: return signals
+    
+    # Restrict to last 10 years for percentile calculation
+    cutoff = df.index.max() - timedelta(days=365*10)
+    hist_df = df[df.index >= cutoff].copy()
+    
+    if hist_df.empty: return signals
+    
+    p10 = hist_df['RSI'].quantile(0.10)
+    p90 = hist_df['RSI'].quantile(0.90)
+    
+    # Calculate historical EV stats for both sides
+    rsi_vals = hist_df['RSI'].values
+    price_vals = hist_df['Price'].values
+    
+    ev_stats = {
+        'bull': {
+            '30': calculate_crossover_ev(rsi_vals, price_vals, p10, 'bull', 30),
+            '90': calculate_crossover_ev(rsi_vals, price_vals, p10, 'bull', 90)
+        },
+        'bear': {
+            '30': calculate_crossover_ev(rsi_vals, price_vals, p90, 'bear', 30),
+            '90': calculate_crossover_ev(rsi_vals, price_vals, p90, 'bear', 90)
+        }
+    }
+    
+    # Check last N periods
+    # Need at least periods_to_scan + 1 rows to check crossing
+    if len(hist_df) < periods_to_scan + 2: return signals
+    
+    scan_window = hist_df.iloc[-(periods_to_scan+1):]
+    
+    for i in range(1, len(scan_window)):
+        prev = scan_window.iloc[i-1]
+        curr = scan_window.iloc[i]
+        
+        # Bullish Exit: Previously < p10, Now >= p10 (Leaving bottom)
+        if prev['RSI'] < p10 and curr['RSI'] >= p10:
+            signals.append({
+                'Ticker': ticker,
+                'Date': curr.name.strftime('%Y-%m-%d'),
+                'Type': 'Bullish (Leaving Oversold)',
+                'RSI': curr['RSI'],
+                'Threshold': p10,
+                'Percentile': '10th %ile',
+                'ev30': ev_stats['bull']['30'],
+                'ev90': ev_stats['bull']['90']
+            })
+            
+        # Bearish Exit: Previously > p90, Now <= p90 (Leaving top)
+        if prev['RSI'] > p90 and curr['RSI'] <= p90:
+            signals.append({
+                'Ticker': ticker,
+                'Date': curr.name.strftime('%Y-%m-%d'),
+                'Type': 'Bearish (Leaving Overbought)',
+                'RSI': curr['RSI'],
+                'Threshold': p90,
+                'Percentile': '90th %ile',
+                'ev30': ev_stats['bear']['30'],
+                'ev90': ev_stats['bear']['90']
+            })
+            
+    return signals
+
 def run_rsi_percentiles_app():
     st.title("🔢 RSI Percentiles")
-    st.caption("Identify stocks leaving their historical 10% (Oversold) or 90% (Overbought) RSI levels.")
     
     st.markdown("""
         <style>
-        .signal-badge { padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 13px; }
-        .signal-bull { background-color: #e6f4ea; color: #1e7e34; border: 1px solid #1e7e34; }
-        .signal-bear { background-color: #fce8e6; color: #c5221f; border: 1px solid #c5221f; }
+        /* CSS for row hovering effect if needed, though background colors will dominate */
+        tr:hover { filter: brightness(95%); }
         </style>
     """, unsafe_allow_html=True)
     
-    # Load dataset map but add the "Live Drive Map" option
+    # Load dataset map
     dataset_map = load_dataset_config()
-    options = list(dataset_map.keys()) + ["Live Drive Map (Individual Files)"]
+    options = list(dataset_map.keys())
     
     # Use pills for selection (mimicking Divergences tab)
-    data_option = st.pills("Select Dataset", options=options, selection_mode="single", default=options[0])
+    default_opt = options[0] if options else None
+    data_option = st.pills("Dataset", options=options, selection_mode="single", default=default_opt, label_visibility="collapsed")
     
     with st.expander("ℹ️ Strategy Logic & Explanations"):
         st.markdown('<div class="footer-header">📊 PERCENTILE LOGIC</div>', unsafe_allow_html=True)
@@ -1162,76 +1330,37 @@ def run_rsi_percentiles_app():
             * **Bullish (Leaving Oversold)**: Triggered when the RSI crosses **ABOVE** the 10th percentile threshold (recovering from extreme lows).
             * **Bearish (Leaving Overbought)**: Triggered when the RSI crosses **BELOW** the 90th percentile threshold (cooling off from extreme highs).
         * **Scan Window**: The system checks the last **10 trading periods** to catch recent signals.
+        * **Expected Value (EV)**: The average historical return (30d and 90d) specifically following these crossover events for this ticker.
         """)
     
-    scan_limit = 50
-    if data_option == "Live Drive Map (Individual Files)":
-        st.info("⚠️ This mode fetches individual files from Google Drive. It is slower than compiled datasets.")
-        scan_limit = st.slider("Max Tickers to Scan (Prevent Timeout)", 10, 200, 50)
-    
-    # Auto-run analysis when a dataset is selected (button removed)
+    # Auto-run analysis when a dataset is selected
     if data_option:
         results = []
         status_text = st.empty()
         progress_bar = st.progress(0)
         
         try:
-            if data_option == "Live Drive Map (Individual Files)":
-                # Use the provided URL_TICKER_MAP
-                map_url = st.secrets.get("URL_TICKER_MAP", URL_TICKER_MAP_DEFAULT)
-                map_buffer = get_confirmed_gdrive_data(map_url)
+            target_url = st.secrets[dataset_map[data_option]]
+            csv_buffer = get_confirmed_gdrive_data(target_url)
+            
+            if csv_buffer and csv_buffer != "HTML_ERROR":
+                master = pd.read_csv(csv_buffer)
+                t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+                grouped = master.groupby(t_col)
+                grouped_list = list(grouped)
+                total = len(grouped_list)
                 
-                if map_buffer and map_buffer != "HTML_ERROR":
-                    map_df = pd.read_csv(map_buffer, header=None)
-                    # Assume format: Ticker, URL/ID
-                    # Rename columns just in case
-                    if len(map_df.columns) >= 2:
-                        map_df = map_df.iloc[:, :2]
-                        map_df.columns = ['Ticker', 'Link']
+                for i, (ticker, group) in enumerate(grouped_list):
+                    status_text.text(f"Scanning {ticker}...")
+                    d_d, _ = prepare_data(group.copy())
+                    if d_d is not None:
+                        sigs = find_rsi_percentile_signals(d_d, ticker)
+                        results.extend(sigs)
                     
-                    tickers_to_process = map_df.head(scan_limit)
-                    total = len(tickers_to_process)
-                    
-                    for i, row in enumerate(tickers_to_process.itertuples()):
-                        ticker = str(row.Ticker).strip().upper()
-                        link = str(row.Link).strip()
-                        
-                        status_text.text(f"Scanning {ticker}...")
-                        
-                        csv_buffer = get_confirmed_gdrive_data(link)
-                        if csv_buffer and csv_buffer != "HTML_ERROR":
-                            df_raw = pd.read_csv(csv_buffer)
-                            d_d, _ = prepare_data(df_raw)
-                            
-                            if d_d is not None:
-                                sigs = find_rsi_percentile_signals(d_d, ticker)
-                                results.extend(sigs)
-                        
-                        progress_bar.progress((i + 1) / total)
-                else:
-                    st.error("Could not load Ticker Map file.")
-                    
+                    if i % 10 == 0: progress_bar.progress((i + 1) / total)
+                progress_bar.progress(100)
             else:
-                # Use standard compiled dataset logic
-                target_url = st.secrets[dataset_map[data_option]]
-                csv_buffer = get_confirmed_gdrive_data(target_url)
-                
-                if csv_buffer and csv_buffer != "HTML_ERROR":
-                    master = pd.read_csv(csv_buffer)
-                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                    grouped = master.groupby(t_col)
-                    grouped_list = list(grouped)
-                    total = len(grouped_list)
-                    
-                    for i, (ticker, group) in enumerate(grouped_list):
-                        status_text.text(f"Scanning {ticker}...")
-                        d_d, _ = prepare_data(group.copy())
-                        if d_d is not None:
-                            sigs = find_rsi_percentile_signals(d_d, ticker)
-                            results.extend(sigs)
-                        
-                        if i % 10 == 0: progress_bar.progress((i + 1) / total)
-                    progress_bar.progress(100)
+                st.error("Could not load dataset.")
 
             status_text.empty()
             
@@ -1241,13 +1370,27 @@ def run_rsi_percentiles_app():
                 
                 st.subheader(f"Found {len(res_df)} Events (Last 10 Periods)")
                 
-                # Custom HTML table for badges
-                html_rows = ['<table style="width:100%; border-collapse: collapse;"><thead><tr style="border-bottom: 2px solid #eee; text-align: left;"><th>Date</th><th>Ticker</th><th>Signal Type</th><th>RSI</th><th>Threshold</th><th>%ile</th></tr></thead><tbody>']
+                # Custom HTML table with row shading
+                html_rows = ['<table style="width:100%; border-collapse: collapse;"><thead><tr style="border-bottom: 2px solid #eee; text-align: left;"><th>Date</th><th>Ticker</th><th>RSI</th><th>Threshold</th><th>EV 30d</th><th>EV 90d</th></tr></thead><tbody>']
                 
+                def fmt_ev(ev_dict):
+                    if not ev_dict: return "N/A"
+                    val = ev_dict['return'] * 100
+                    n = ev_dict['n']
+                    color = "green" if val > 0 else "red"
+                    return f"<span style='color:{color}; font-weight:bold'>{val:+.1f}%</span> <span style='color:#666; font-size:0.85em'>(N={n})</span>"
+
                 for r in res_df.itertuples():
-                    cls = "signal-bull" if "Bullish" in r.Type else "signal-bear"
-                    # Fix: Removed indentation from the f-string to prevent markdown code-block rendering
-                    row_html = f'<tr style="border-bottom: 1px solid #f0f0f0;"><td style="padding: 10px;">{r.Date}</td><td style="padding: 10px; font-weight:bold;">{r.Ticker}</td><td style="padding: 10px;"><span class="signal-badge {cls}">{r.Type}</span></td><td style="padding: 10px;">{r.RSI:.1f}</td><td style="padding: 10px;">{r.Threshold:.1f}</td><td style="padding: 10px; color: #666;">{r.Percentile}</td></tr>'
+                    # Apply row background color based on signal type
+                    if "Bullish" in r.Type:
+                        row_style = "background-color: #e6f4ea; border-bottom: 1px solid #fff;" # Greenish
+                    else:
+                        row_style = "background-color: #fce8e6; border-bottom: 1px solid #fff;" # Reddish
+                    
+                    ev30_str = fmt_ev(r.ev30)
+                    ev90_str = fmt_ev(r.ev90)
+                    
+                    row_html = f'<tr style="{row_style}"><td style="padding: 10px;">{r.Date}</td><td style="padding: 10px; font-weight:bold;">{r.Ticker}</td><td style="padding: 10px;">{r.RSI:.1f}</td><td style="padding: 10px;">{r.Threshold:.1f}</td><td style="padding: 10px;">{ev30_str}</td><td style="padding: 10px;">{ev90_str}</td></tr>'
                     html_rows.append(row_html)
                 
                 html_rows.append("</tbody></table>")
