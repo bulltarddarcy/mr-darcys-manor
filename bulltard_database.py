@@ -539,20 +539,17 @@ def run_rsi_divergences_app():
     st.link_button("🌈 🚀 Click to travel to the new RSI Divergence website 🚀 🌈", "https://mr-darcys-rsi-divergence.streamlit.app/")
 
 # --- 3. MAIN EXECUTION ---
-# Configure page BEFORE calling other streamlit functions
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
 
-# Check for query params to handle deep links
-if "tool" in st.query_params or "ticker" in st.query_params:
-    st.session_state["app_choice_internal"] = st.query_params.get("tool")
-    st.session_state["db_ticker"] = st.query_params.get("ticker")
-    # Note: st.query_params.clear() can trigger a rerun; removed to prevent loops
+# Handle navigation session state
+if "app_choice" not in st.session_state:
+    st.session_state["app_choice"] = "Options Database"
 
-# CSS Styling (Includes custom styling for the top-bar navigation)
+# Apply global aesthetics and button styling
 st.markdown("""<style>:root{--bg:#1f1f22; --panel:#2a2d31; --panel2:#24272b; --text:#e7e7ea; --green:#71d28a; --red:#f29ca0; --line:#66b7ff; --ema8:#b689ff; --ema21:#ffb86b; --sma200:#ffffff; --price:#bfe7ff;}
 html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg)!important;}
 .block-container{padding-top:1.2rem;padding-bottom:1rem;}
-.control-box{padding:14px 0; border-radius:10px;}
+.control-box{padding:14px 20px; border-radius:10px; background-color: var(--panel2); border: 1px solid #3a3f45; margin-bottom: 20px;}
 .zones-panel{padding:14px 0; border-radius:10px;}
 .zone-row{display:flex;align-items:center;gap:12px;margin:10px 0;}
 .zone-label{width:100px;font-weight:700; text-align: right;}
@@ -569,61 +566,65 @@ html,body,[class*=\"css\"]{color:var(--text)!important;background-color:var(--bg
 th,td{border:1px solid #3a3f45;padding:8px} th{background:#343a40;text-align:left}
 .light-note { color: #a1a1a1; font-size: 14px; margin-bottom: 10px; }
 
-/* Styling for the Tabs at top */
-.stTabs [data-baseweb="tab-list"] { gap: 12px; }
-.stTabs [data-baseweb="tab"] {
-    height: 50px;
+/* Dashboard-style Navigation Buttons */
+div.stButton > button {
+    width: 100%;
     background-color: #2a2d31;
-    border-radius: 5px 5px 0 0;
-    padding: 10px 20px;
     color: #a1a1a1;
+    border: 1px solid #3a3f45;
+    border-radius: 8px;
+    padding: 8px 5px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: all 0.2s ease-in-out;
 }
-.stTabs [aria-selected="true"] { 
-    background-color: #3b3f45 !important; 
-    color: #66b7ff !important;
-    border-bottom: 2px solid #66b7ff !important;
+div.stButton > button:hover {
+    border-color: var(--line);
+    color: var(--line);
+}
+div.stButton > button:active, div.stButton > button:focus {
+    background-color: #3b3f45 !important;
+    border-color: var(--line) !important;
+    color: #ffffff !important;
 }
 </style>""", unsafe_allow_html=True)
 
 try:
+    # Load data
     sheet_url = st.secrets["GSHEET_URL"]
     df_global = load_and_clean_data(sheet_url)
     last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
 
-    # Display "Last Updated" in a top-right column layout instead of sidebar
-    hcol1, hcol2 = st.columns([7, 3])
-    with hcol2:
-        st.markdown(f"<div style='text-align: right; padding-top: 10px; color: #888;'><b>Last Updated:</b> {last_updated_date}</div>", unsafe_allow_html=True)
-
-    # PAGE OPTIONS AS TABS
+    # --- CUSTOM TOP NAVIGATION BAR ---
+    st.markdown('<div class="control-box">', unsafe_allow_html=True)
+    nav_cols = st.columns([1.5, 1.2, 1.2, 1.2, 1.5, 2.5], gap="small")
+    
     tools = ["Options Database", "Rankings", "Pivot Tables", "Strike Zones", "RSI Divergences"]
     
-    # Logic to select tab based on query params or previous session state
-    initial_tab_idx = 0
-    if "app_choice_internal" in st.session_state:
-        try:
-            initial_tab_idx = tools.index(st.session_state["app_choice_internal"])
-        except:
-            pass
+    for i, tool in enumerate(tools):
+        # Apply a visual indicator (dot) to the active tool button
+        label = f"● {tool}" if st.session_state["app_choice"] == tool else tool
+        if nav_cols[i].button(label, key=f"nav_{tool}", use_container_width=True):
+            st.session_state["app_choice"] = tool
+            st.rerun()
+            
+    with nav_cols[5]:
+        st.markdown(f"<div style='text-align: right; color: #a1a1a1; font-size: 0.85rem; line-height: 2.5;'><b>Last Updated:</b> {last_updated_date}</div>", unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # Render Tabs
-    # We use st.tabs to replace the sidebar selectbox entirely
-    tabs = st.tabs(tools)
-
-    with tabs[0]:
-        run_options_database_app(df_global)
+    # --- APP ROUTING ---
+    current_choice = st.session_state["app_choice"]
     
-    with tabs[1]:
+    if current_choice == "Options Database":
+        run_options_database_app(df_global)
+    elif current_choice == "Rankings":
         run_rankings_app(df_global)
-        
-    with tabs[2]:
+    elif current_choice == "Pivot Tables":
         run_pivot_tables_app(df_global)
-        
-    with tabs[3]:
+    elif current_choice == "Strike Zones":
         run_strike_zones_app(df_global)
-        
-    with tabs[4]:
+    elif current_choice == "RSI Divergences":
         run_rsi_divergences_app()
     
 except Exception as e: 
-    st.error(f"Error loading application: {e}")
+    st.error(f"Error initializing dashboard: {e}")
