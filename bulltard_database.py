@@ -30,6 +30,7 @@ EMA8_PERIOD = 8
 EMA21_PERIOD = 21
 EV_LOOKBACK_YEARS = 3
 MIN_N_THRESHOLD = 5
+URL_TICKER_MAP_DEFAULT = "https://drive.google.com/file/d/1MlVp6yF7FZjTdRFMpYCxgF-ezyKvO4gG/view?usp=sharing"
 
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
@@ -188,7 +189,7 @@ def get_confirmed_gdrive_data(url):
             
         return StringIO(response.text)
     except Exception as e:
-        st.error(f"Fetch Error: {e}")
+        # st.error(f"Fetch Error: {e}") 
         return None
 
 def load_dataset_config():
@@ -257,19 +258,45 @@ def prepare_data(df):
     high_col = next((c for c in cols if 'HIGH' in c and 'W_' not in c), None)
     low_col = next((c for c in cols if 'LOW' in c and 'W_' not in c), None)
     
+    # RSI fallback check
+    rsi_col = next((c for c in cols if 'RSI' in c and 'W_' not in c), None)
+    
     if not all([date_col, close_col, vol_col, high_col, low_col]): return None, None
     
     df.index = pd.to_datetime(df[date_col])
     df = df.sort_index()
     
     # Daily Data
-    d_rsi, d_ema8, d_ema21 = 'RSI_14', 'EMA_8', 'EMA_21'
-    df_d = df[[close_col, vol_col, high_col, low_col, d_rsi, d_ema8, d_ema21]].copy()
-    df_d.rename(columns={close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low', d_rsi: 'RSI', d_ema8: 'EMA8', d_ema21: 'EMA21'}, inplace=True)
+    # Use existing RSI column if found, else default name
+    d_rsi = rsi_col if rsi_col else 'RSI_14'
+    d_ema8, d_ema21 = 'EMA_8', 'EMA_21'
+    
+    needed_cols = [close_col, vol_col, high_col, low_col]
+    if d_rsi in df.columns: needed_cols.append(d_rsi)
+    if d_ema8 in df.columns: needed_cols.append(d_ema8)
+    if d_ema21 in df.columns: needed_cols.append(d_ema21)
+    
+    df_d = df[needed_cols].copy()
+    
+    rename_dict = {close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}
+    if d_rsi in df_d.columns: rename_dict[d_rsi] = 'RSI'
+    if d_ema8 in df_d.columns: rename_dict[d_ema8] = 'EMA8'
+    if d_ema21 in df_d.columns: rename_dict[d_ema21] = 'EMA21'
+    
+    df_d.rename(columns=rename_dict, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
+    
+    if 'RSI' not in df_d.columns:
+        # Fallback if RSI not in file (shouldn't happen per prompt)
+        delta = df_d['Price'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df_d['RSI'] = 100 - (100 / (1 + rs))
+        
     df_d = df_d.dropna(subset=['Price', 'RSI'])
     
-    # Weekly Data
+    # Weekly Data (Only needed for divergences, but good to have logic consistent)
     w_close, w_vol, w_rsi = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
     w_high, w_low, w_ema8, w_ema21 = 'W_HIGH', 'W_LOW', 'W_EMA_8', 'W_EMA_21'
     
@@ -359,6 +386,53 @@ def find_divergences(df_tf, ticker, timeframe):
                         'ev30_raw': ev30, 'ev90_raw': ev90
                     })
     return divergences
+
+def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
+    signals = []
+    if len(df) < 200: return signals
+    
+    # Restrict to last 10 years for percentile calculation
+    cutoff = df.index.max() - timedelta(days=365*10)
+    hist_df = df[df.index >= cutoff].copy()
+    
+    if hist_df.empty: return signals
+    
+    p10 = hist_df['RSI'].quantile(0.10)
+    p90 = hist_df['RSI'].quantile(0.90)
+    
+    # Check last N periods
+    # Need at least periods_to_scan + 1 rows to check crossing
+    if len(hist_df) < periods_to_scan + 2: return signals
+    
+    scan_window = hist_df.iloc[-(periods_to_scan+1):]
+    
+    for i in range(1, len(scan_window)):
+        prev = scan_window.iloc[i-1]
+        curr = scan_window.iloc[i]
+        
+        # Bullish Exit: Previously < p10, Now >= p10 (Leaving bottom)
+        if prev['RSI'] < p10 and curr['RSI'] >= p10:
+            signals.append({
+                'Ticker': ticker,
+                'Date': curr.name.strftime('%Y-%m-%d'),
+                'Type': 'Bullish (Leaving Oversold)',
+                'RSI': curr['RSI'],
+                'Threshold': p10,
+                'Percentile': '10th %ile'
+            })
+            
+        # Bearish Exit: Previously > p90, Now <= p90 (Leaving top)
+        if prev['RSI'] > p90 and curr['RSI'] <= p90:
+            signals.append({
+                'Ticker': ticker,
+                'Date': curr.name.strftime('%Y-%m-%d'),
+                'Type': 'Bearish (Leaving Overbought)',
+                'RSI': curr['RSI'],
+                'Threshold': p90,
+                'Percentile': '90th %ile'
+            })
+            
+    return signals
 
 # --- 2. APP MODULES ---
 
@@ -511,7 +585,6 @@ def run_rankings_app(df):
             
             fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
             
-            # UPDATED: Reverted Score to ProgressColumn and shrunk widths to fit mobile
             sm_config = {
                 "Symbol": st.column_config.TextColumn("Ticker", width=50),
                 "Net Sentiment ($)": st.column_config.TextColumn("Net Flow", width=85),
@@ -1061,6 +1134,126 @@ def run_rsi_divergences_app():
                 
         except Exception as e: st.error(f"Error: {e}")
 
+def run_rsi_percentiles_app():
+    st.title("🔢 RSI Percentiles")
+    st.caption("Identify stocks leaving their historical 10% (Oversold) or 90% (Overbought) RSI levels.")
+    
+    st.markdown("""
+        <style>
+        .signal-badge { padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 13px; }
+        .signal-bull { background-color: #e6f4ea; color: #1e7e34; border: 1px solid #1e7e34; }
+        .signal-bear { background-color: #fce8e6; color: #c5221f; border: 1px solid #c5221f; }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # Load dataset map but add the "Live Drive Map" option
+    dataset_map = load_dataset_config()
+    options = list(dataset_map.keys()) + ["Live Drive Map (Individual Files)"]
+    
+    data_option = st.selectbox("Select Dataset", options=options, index=0)
+    
+    scan_limit = 50
+    if data_option == "Live Drive Map (Individual Files)":
+        st.info("⚠️ This mode fetches individual files from Google Drive. It is slower than compiled datasets.")
+        scan_limit = st.slider("Max Tickers to Scan (Prevent Timeout)", 10, 200, 50)
+    
+    if st.button("Run Analysis"):
+        results = []
+        status_text = st.empty()
+        progress_bar = st.progress(0)
+        
+        try:
+            if data_option == "Live Drive Map (Individual Files)":
+                # Use the provided URL_TICKER_MAP
+                map_url = st.secrets.get("URL_TICKER_MAP", URL_TICKER_MAP_DEFAULT)
+                map_buffer = get_confirmed_gdrive_data(map_url)
+                
+                if map_buffer and map_buffer != "HTML_ERROR":
+                    map_df = pd.read_csv(map_buffer, header=None)
+                    # Assume format: Ticker, URL/ID
+                    # Rename columns just in case
+                    if len(map_df.columns) >= 2:
+                        map_df = map_df.iloc[:, :2]
+                        map_df.columns = ['Ticker', 'Link']
+                    
+                    tickers_to_process = map_df.head(scan_limit)
+                    total = len(tickers_to_process)
+                    
+                    for i, row in enumerate(tickers_to_process.itertuples()):
+                        ticker = str(row.Ticker).strip().upper()
+                        link = str(row.Link).strip()
+                        
+                        status_text.text(f"Scanning {ticker}...")
+                        
+                        csv_buffer = get_confirmed_gdrive_data(link)
+                        if csv_buffer and csv_buffer != "HTML_ERROR":
+                            df_raw = pd.read_csv(csv_buffer)
+                            d_d, _ = prepare_data(df_raw)
+                            
+                            if d_d is not None:
+                                sigs = find_rsi_percentile_signals(d_d, ticker)
+                                results.extend(sigs)
+                        
+                        progress_bar.progress((i + 1) / total)
+                else:
+                    st.error("Could not load Ticker Map file.")
+                    
+            else:
+                # Use standard compiled dataset logic
+                target_url = st.secrets[dataset_map[data_option]]
+                csv_buffer = get_confirmed_gdrive_data(target_url)
+                
+                if csv_buffer and csv_buffer != "HTML_ERROR":
+                    master = pd.read_csv(csv_buffer)
+                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+                    grouped = master.groupby(t_col)
+                    grouped_list = list(grouped)
+                    total = len(grouped_list)
+                    
+                    for i, (ticker, group) in enumerate(grouped_list):
+                        status_text.text(f"Scanning {ticker}...")
+                        d_d, _ = prepare_data(group.copy())
+                        if d_d is not None:
+                            sigs = find_rsi_percentile_signals(d_d, ticker)
+                            results.extend(sigs)
+                        
+                        if i % 10 == 0: progress_bar.progress((i + 1) / total)
+                    progress_bar.progress(100)
+
+            status_text.empty()
+            
+            if results:
+                res_df = pd.DataFrame(results)
+                res_df = res_df.sort_values(by='Date', ascending=False)
+                
+                st.subheader(f"Found {len(res_df)} Events (Last 10 Periods)")
+                
+                # Custom HTML table for badges
+                html_rows = ['<table style="width:100%; border-collapse: collapse;"><thead><tr style="border-bottom: 2px solid #eee; text-align: left;"><th>Date</th><th>Ticker</th><th>Signal Type</th><th>RSI</th><th>Threshold</th><th>%ile</th></tr></thead><tbody>']
+                
+                for r in res_df.itertuples():
+                    cls = "signal-bull" if "Bullish" in r.Type else "signal-bear"
+                    row_html = f"""
+                    <tr style="border-bottom: 1px solid #f0f0f0;">
+                        <td style="padding: 10px;">{r.Date}</td>
+                        <td style="padding: 10px; font-weight:bold;">{r.Ticker}</td>
+                        <td style="padding: 10px;"><span class="signal-badge {cls}">{r.Type}</span></td>
+                        <td style="padding: 10px;">{r.RSI:.1f}</td>
+                        <td style="padding: 10px;">{r.Threshold:.1f}</td>
+                        <td style="padding: 10px; color: #666;">{r.Percentile}</td>
+                    </tr>
+                    """
+                    html_rows.append(row_html)
+                
+                html_rows.append("</tbody></table>")
+                st.markdown("".join(html_rows), unsafe_allow_html=True)
+                
+            else:
+                st.info("No tickers found crossing their 10th or 90th percentile thresholds in the last 10 periods.")
+                
+        except Exception as e:
+            st.error(f"Analysis failed: {e}")
+
 # --- 3. MAIN EXECUTION ---
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
 
@@ -1122,6 +1315,7 @@ try:
         st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
         st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
         st.Page(run_rsi_divergences_app, title="RSI Divergences", icon="📈", url_path="rsi_divergences"),
+        st.Page(run_rsi_percentiles_app, title="RSI Percentiles", icon="🔢", url_path="rsi_percentiles"),
     ])
 
     st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
