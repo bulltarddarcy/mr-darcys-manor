@@ -514,6 +514,13 @@ def run_rankings_app(df):
                 "Net Sentiment ($)": st.column_config.TextColumn("Net Flow", width=100),
                 "Trade_Count": st.column_config.NumberColumn("Trade Count", width=80, format="%d"),
                 "Last Trade": st.column_config.TextColumn("Last Trade", width=80),
+                "Score": st.column_config.ProgressColumn(
+                    "Score",
+                    format="%d",
+                    min_value=0,
+                    max_value=100,
+                    width="medium"
+                ),
             }
 
             sm1, sm2 = st.columns(2, gap="large")
@@ -524,9 +531,7 @@ def run_rankings_app(df):
                 disp_bull.rename(columns={"Score_Bull": "Score"}, inplace=True)
                 
                 st.dataframe(
-                    disp_bull.style
-                    .format({"Net Sentiment ($)": fmt_curr, "Score": "{:.0f}"})
-                    .bar(subset=["Score"], color="#71d28a", vmin=0, vmax=100),
+                    disp_bull.style.format({"Net Sentiment ($)": fmt_curr}),
                     use_container_width=True, 
                     hide_index=True, 
                     height=get_table_height(disp_bull), 
@@ -539,9 +544,7 @@ def run_rankings_app(df):
                 disp_bear.rename(columns={"Score_Bear": "Score"}, inplace=True)
                 
                 st.dataframe(
-                    disp_bear.style
-                    .format({"Net Sentiment ($)": fmt_curr, "Score": "{:.0f}"})
-                    .bar(subset=["Score"], color="#f29ca0", vmin=0, vmax=100),
+                    disp_bear.style.format({"Net Sentiment ($)": fmt_curr}),
                     use_container_width=True, 
                     hide_index=True, 
                     height=get_table_height(disp_bear), 
