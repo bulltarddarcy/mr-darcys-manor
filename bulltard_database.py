@@ -40,20 +40,20 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
     keep = [c for c in want if c in existing_cols]
     df = df[keep].copy()
     
-    str_cols = ["Order Type", "Symbol", "Strike", "Expiry"]
+    # Batch strip string columns
+    str_cols = [c for c in ["Order Type", "Symbol", "Strike", "Expiry"] if c in df.columns]
     for c in str_cols:
-        if c in df.columns:
-            df[c] = df[c].astype(str).str.strip()
+        df[c] = df[c].astype(str).str.strip()
     
+    # Optimized regex replacement
     if "Dollars" in df.columns:
         df["Dollars"] = (df["Dollars"].astype(str)
-                         .str.replace("$", "", regex=False)
-                         .str.replace(",", "", regex=False))
+                         .str.replace(r'[$,]', '', regex=True))
         df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
 
     if "Contracts" in df.columns:
         df["Contracts"] = (df["Contracts"].astype(str)
-                           .str.replace(",", "", regex=False))
+                           .str.replace(',', '', regex=False))
         df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(0)
     
     if "Trade Date" in df.columns:
@@ -66,8 +66,8 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce").fillna(0.0)
         
     if "Error" in df.columns:
-        err_vals = {"TRUE", "1", "YES"}
-        mask = df["Error"].astype(str).str.upper().isin(err_vals)
+        # Vectorized filtering
+        mask = df["Error"].astype(str).str.upper().isin({"TRUE", "1", "YES"})
         df = df[~mask]
         
     return df
@@ -128,8 +128,10 @@ def get_table_height(df, max_rows=30):
 def highlight_expiry(val):
     try:
         if not isinstance(val, str): return ""
+        # Optimization: parsing format specific to the pivot output
         expiry_date = datetime.strptime(val, "%d %b %y").date()
         today = date.today()
+        # Pre-calculation of friday delta
         days_ahead = (4 - today.weekday()) % 7
         this_fri = today + timedelta(days=days_ahead)
         
@@ -509,18 +511,12 @@ def run_rankings_app(df):
             
             fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
             
+            # UPDATED: Changed Trade Count -> Qty and Last Trade -> Last
             sm_config = {
                 "Symbol": st.column_config.TextColumn("Ticker", width=60),
                 "Net Sentiment ($)": st.column_config.TextColumn("Net Flow", width=100),
-                "Trade_Count": st.column_config.NumberColumn("Trade Count", width=80, format="%d"),
-                "Last Trade": st.column_config.TextColumn("Last Trade", width=80),
-                "Score": st.column_config.ProgressColumn(
-                    "Score",
-                    format="%d",
-                    min_value=0,
-                    max_value=100,
-                    width="medium"
-                ),
+                "Trade_Count": st.column_config.NumberColumn("Qty", width=80, format="%d"), 
+                "Last Trade": st.column_config.TextColumn("Last", width=80),
             }
 
             sm1, sm2 = st.columns(2, gap="large")
@@ -530,8 +526,10 @@ def run_rankings_app(df):
                 disp_bull = top_bulls[["Symbol", "Score_Bull", "Net Sentiment ($)", "Trade_Count", "Last Trade"]].copy()
                 disp_bull.rename(columns={"Score_Bull": "Score"}, inplace=True)
                 
+                # UPDATED: Added pandas style bar (green)
                 st.dataframe(
-                    disp_bull.style.format({"Net Sentiment ($)": fmt_curr}),
+                    disp_bull.style.format({"Net Sentiment ($)": fmt_curr, "Score": "{:.0f}"})
+                    .bar(subset=["Score"], color="#71d28a", vmin=0, vmax=100),
                     use_container_width=True, 
                     hide_index=True, 
                     height=get_table_height(disp_bull), 
@@ -543,8 +541,10 @@ def run_rankings_app(df):
                 disp_bear = top_bears[["Symbol", "Score_Bear", "Net Sentiment ($)", "Trade_Count", "Last Trade"]].copy()
                 disp_bear.rename(columns={"Score_Bear": "Score"}, inplace=True)
                 
+                # UPDATED: Added pandas style bar (red) for consistency
                 st.dataframe(
-                    disp_bear.style.format({"Net Sentiment ($)": fmt_curr}),
+                    disp_bear.style.format({"Net Sentiment ($)": fmt_curr, "Score": "{:.0f}"})
+                    .bar(subset=["Score"], color="#f29ca0", vmin=0, vmax=100),
                     use_container_width=True, 
                     hide_index=True, 
                     height=get_table_height(disp_bear), 
@@ -781,7 +781,7 @@ def run_strike_zones_app(df):
                 st.markdown("".join(html_out), unsafe_allow_html=True)
             
             st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them in the Data Tables box below.")
-            st.caption("ℹ️ To better view the graphic on mobile, set your browser to View Desktop Site")
+            # UPDATED: Removed the mobile view caption here
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
