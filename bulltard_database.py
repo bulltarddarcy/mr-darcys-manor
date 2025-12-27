@@ -401,36 +401,53 @@ def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
     p90 = hist_df['RSI'].quantile(0.90)
     
     # Check last N periods
-    # Need at least periods_to_scan + 1 rows to check crossing
-    if len(hist_df) < periods_to_scan + 2: return signals
+    if len(df) < periods_to_scan + 2: return signals
     
-    scan_window = hist_df.iloc[-(periods_to_scan+1):]
+    # We need full arrays for EV calculation
+    rsi_vals = df['RSI'].values
+    price_vals = df['Price'].values
+    
+    scan_window = df.iloc[-(periods_to_scan+1):]
     
     for i in range(1, len(scan_window)):
         prev = scan_window.iloc[i-1]
         curr = scan_window.iloc[i]
         
+        s_type = None
+        thresh_val = 0.0
+        
         # Bullish Exit: Previously < p10, Now >= p10 (Leaving bottom)
         if prev['RSI'] < p10 and curr['RSI'] >= p10:
-            signals.append({
-                'Ticker': ticker,
-                'Date': curr.name.strftime('%Y-%m-%d'),
-                'Type': 'Bullish (Leaving Oversold)',
-                'RSI': curr['RSI'],
-                'Threshold': p10,
-                'Percentile': '10th %ile'
-            })
+            s_type = 'Bullish'
+            thresh_val = p10
             
         # Bearish Exit: Previously > p90, Now <= p90 (Leaving top)
-        if prev['RSI'] > p90 and curr['RSI'] <= p90:
-            signals.append({
-                'Ticker': ticker,
-                'Date': curr.name.strftime('%Y-%m-%d'),
-                'Type': 'Bearish (Leaving Overbought)',
-                'RSI': curr['RSI'],
-                'Threshold': p90,
-                'Percentile': '90th %ile'
-            })
+        elif prev['RSI'] > p90 and curr['RSI'] <= p90:
+            s_type = 'Bearish'
+            thresh_val = p90
+            
+        if s_type:
+            # Calculate EV for 30 periods
+            ev_res = calculate_ev_data_numpy(rsi_vals, price_vals, curr['RSI'], 30, curr['Price'])
+            
+            # Filter: Only include if N >= 5
+            if ev_res and ev_res['n'] >= 5:
+                raw_ret = ev_res['return']
+                
+                # Color Logic
+                # Bullish is Green if Return > 0
+                # Bearish is Green if Return < 0 (Shorting profitable)
+                is_green = (s_type == 'Bullish' and raw_ret > 0) or (s_type == 'Bearish' and raw_ret < 0)
+                row_class = "row-green" if is_green else "row-red"
+                
+                signals.append({
+                    'Ticker': ticker,
+                    'Date': curr.name.strftime('%Y-%m-%d'),
+                    'RSI': curr['RSI'],
+                    'Threshold': thresh_val,
+                    'EV_Text': f"{raw_ret*100:+.1f}% (N={ev_res['n']})",
+                    'Row_Class': row_class
+                })
             
     return signals
 
@@ -1136,40 +1153,46 @@ def run_rsi_divergences_app():
 
 def run_rsi_percentiles_app():
     st.title("🔢 RSI Percentiles")
-    st.caption("Identify stocks leaving their historical 10% (Oversold) or 90% (Overbought) RSI levels.")
     
+    # CSS for full row coloring
     st.markdown("""
         <style>
-        .signal-badge { padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 13px; }
-        .signal-bull { background-color: #e6f4ea; color: #1e7e34; border: 1px solid #1e7e34; }
-        .signal-bear { background-color: #fce8e6; color: #c5221f; border: 1px solid #c5221f; }
+        .rsi-p-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        .rsi-p-table thead tr th { text-align: left; padding: 10px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; }
+        .rsi-p-table tbody tr td { padding: 12px 10px; border-bottom: 1px solid #eee; font-weight: 500; }
+        
+        /* Row Colors */
+        .row-green { background-color: #e6f4ea; color: #1e7e34; }
+        .row-red { background-color: #fce8e6; color: #c5221f; }
+        
+        .row-green td, .row-red td { border-bottom: 1px solid white !important; }
         </style>
     """, unsafe_allow_html=True)
     
-    # Load dataset map but add the "Live Drive Map" option
     dataset_map = load_dataset_config()
     options = list(dataset_map.keys()) + ["Live Drive Map (Individual Files)"]
     
-    # Use pills for selection (mimicking Divergences tab)
-    data_option = st.pills("Select Dataset", options=options, selection_mode="single", default=options[0])
+    data_option = st.pills("Select Dataset", options=options, selection_mode="single", default=options[0], label_visibility="collapsed")
     
     with st.expander("ℹ️ Strategy Logic & Explanations"):
         st.markdown('<div class="footer-header">📊 PERCENTILE LOGIC</div>', unsafe_allow_html=True)
         st.markdown("""
-        * **Historical Context**: The algorithm analyzes up to **10 years** of daily price history for each ticker to establish its unique RSI behavior.
-        * **Percentile Thresholds**: It calculates the **10th Percentile** (Oversold) and **90th Percentile** (Overbought) levels specific to that stock.
+        * **Historical Context**: The algorithm analyzes up to **10 years** of daily price history.
         * **Signal Trigger**: 
-            * **Bullish (Leaving Oversold)**: Triggered when the RSI crosses **ABOVE** the 10th percentile threshold (recovering from extreme lows).
-            * **Bearish (Leaving Overbought)**: Triggered when the RSI crosses **BELOW** the 90th percentile threshold (cooling off from extreme highs).
-        * **Scan Window**: The system checks the last **10 trading periods** to catch recent signals.
+            * **Bullish**: RSI crosses **ABOVE** the 10th percentile (Leaving Oversold).
+            * **Bearish**: RSI crosses **BELOW** the 90th percentile (Leaving Overbought).
+        * **EV 30p**: The expected return 30 days later based on historical matches.
+        * **Color Logic**:
+            * 🟢 **Green**: The historical EV supports the trade (Positive return for Bullish, Negative return for Bearish).
+            * 🔴 **Red**: The historical EV opposes the trade.
+        * **Filter**: Signals with less than 5 historical matches (N<5) are excluded.
         """)
     
     scan_limit = 50
     if data_option == "Live Drive Map (Individual Files)":
-        st.info("⚠️ This mode fetches individual files from Google Drive. It is slower than compiled datasets.")
-        scan_limit = st.slider("Max Tickers to Scan (Prevent Timeout)", 10, 200, 50)
+        st.info("⚠️ This mode fetches individual files. It is slower than compiled datasets.")
+        scan_limit = st.slider("Max Tickers to Scan", 10, 200, 50)
     
-    # Auto-run analysis when a dataset is selected (button removed)
     if data_option:
         results = []
         status_text = st.empty()
@@ -1177,14 +1200,11 @@ def run_rsi_percentiles_app():
         
         try:
             if data_option == "Live Drive Map (Individual Files)":
-                # Use the provided URL_TICKER_MAP
                 map_url = st.secrets.get("URL_TICKER_MAP", URL_TICKER_MAP_DEFAULT)
                 map_buffer = get_confirmed_gdrive_data(map_url)
                 
                 if map_buffer and map_buffer != "HTML_ERROR":
                     map_df = pd.read_csv(map_buffer, header=None)
-                    # Assume format: Ticker, URL/ID
-                    # Rename columns just in case
                     if len(map_df.columns) >= 2:
                         map_df = map_df.iloc[:, :2]
                         map_df.columns = ['Ticker', 'Link']
@@ -1195,24 +1215,20 @@ def run_rsi_percentiles_app():
                     for i, row in enumerate(tickers_to_process.itertuples()):
                         ticker = str(row.Ticker).strip().upper()
                         link = str(row.Link).strip()
-                        
                         status_text.text(f"Scanning {ticker}...")
                         
                         csv_buffer = get_confirmed_gdrive_data(link)
                         if csv_buffer and csv_buffer != "HTML_ERROR":
                             df_raw = pd.read_csv(csv_buffer)
                             d_d, _ = prepare_data(df_raw)
-                            
                             if d_d is not None:
                                 sigs = find_rsi_percentile_signals(d_d, ticker)
                                 results.extend(sigs)
-                        
                         progress_bar.progress((i + 1) / total)
                 else:
                     st.error("Could not load Ticker Map file.")
                     
             else:
-                # Use standard compiled dataset logic
                 target_url = st.secrets[dataset_map[data_option]]
                 csv_buffer = get_confirmed_gdrive_data(target_url)
                 
@@ -1239,22 +1255,19 @@ def run_rsi_percentiles_app():
                 res_df = pd.DataFrame(results)
                 res_df = res_df.sort_values(by='Date', ascending=False)
                 
-                st.subheader(f"Found {len(res_df)} Events (Last 10 Periods)")
+                st.subheader(f"Found {len(res_df)} Opportunities")
                 
-                # Custom HTML table for badges
-                html_rows = ['<table style="width:100%; border-collapse: collapse;"><thead><tr style="border-bottom: 2px solid #eee; text-align: left;"><th>Date</th><th>Ticker</th><th>Signal Type</th><th>RSI</th><th>Threshold</th><th>%ile</th></tr></thead><tbody>']
+                html_rows = ['<table class="rsi-p-table"><thead><tr><th>Date</th><th>Ticker</th><th>RSI</th><th>Threshold</th><th>EV 30p</th></tr></thead><tbody>']
                 
                 for r in res_df.itertuples():
-                    cls = "signal-bull" if "Bullish" in r.Type else "signal-bear"
-                    # Fix: Removed indentation from the f-string to prevent markdown code-block rendering
-                    row_html = f'<tr style="border-bottom: 1px solid #f0f0f0;"><td style="padding: 10px;">{r.Date}</td><td style="padding: 10px; font-weight:bold;">{r.Ticker}</td><td style="padding: 10px;"><span class="signal-badge {cls}">{r.Type}</span></td><td style="padding: 10px;">{r.RSI:.1f}</td><td style="padding: 10px;">{r.Threshold:.1f}</td><td style="padding: 10px; color: #666;">{r.Percentile}</td></tr>'
+                    row_html = f'<tr class="{r.Row_Class}"><td>{r.Date}</td><td>{r.Ticker}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td><td>{r.EV_Text}</td></tr>'
                     html_rows.append(row_html)
                 
                 html_rows.append("</tbody></table>")
                 st.markdown("".join(html_rows), unsafe_allow_html=True)
                 
             else:
-                st.info("No tickers found crossing their 10th or 90th percentile thresholds in the last 10 periods.")
+                st.info("No tickers found matching criteria (Crossing 10th/90th percentile with N>=5 matches).")
                 
         except Exception as e:
             st.error(f"Analysis failed: {e}")
