@@ -68,7 +68,7 @@ SIGNAL_LOOKBACK_PERIOD = 25
 RSI_DIFF_THRESHOLD = 2
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
-EV_LOOKBACK_YEARS = 10
+EV_LOOKBACK_YEARS = 3  # Updated to reflect 3-year dataset
 MIN_N_THRESHOLD = 5
 
 # --- Streamlit UI Setup ---
@@ -76,7 +76,6 @@ st.set_page_config(page_title="RSI Divergence Scanner", layout="wide")
 
 st.markdown("""
     <style>
-    /* Synchronized Note Styling */
     .top-note {
         color: #888888;
         font-size: 14px;
@@ -87,9 +86,9 @@ st.markdown("""
     table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2rem; }
     thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
     
-    /* Column Width Adjustments */
+    /* Optimized column widths to prevent tag wrapping */
     th:nth-child(1) { width: 7%; }  /* Ticker */
-    th:nth-child(2) { width: 25%; } /* Tags - Increased to prevent wrapping */
+    th:nth-child(2) { width: 25%; } /* Tags - Large enough for single row */
     th:nth-child(3) { width: 8%; }  /* P1 Date */
     th:nth-child(4) { width: 8%; }  /* Signal Date */
     th:nth-child(5) { width: 8%; }  /* RSI */
@@ -211,7 +210,7 @@ def find_divergences(df_tf, ticker, timeframe):
                         'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
                         'P1 Price': f"${p1['Low' if s_type=='Bullish' else 'High']:,.2f}", 
                         'P2 Price': f"${p2['Low' if s_type=='Bullish' else 'High']:,.2f}", 
-                        'Last Close': f"${latest_p['Price']:,.2f}",
+                        'Last Close': f"${latest_p['Price']:,.2f}", # Renamed Column
                         'ev30_raw': ev30, 'ev90_raw': ev90
                     })
     return divergences
@@ -239,6 +238,7 @@ if data_option:
                 ft = [t for t in all_tickers if sq in t]
                 cols = st.columns(6)
                 for i, ticker in enumerate(ft): cols[i % 6].write(ticker)
+            
             raw_results = []
             progress_bar = st.progress(0, text="Scanning...")
             grouped = master.groupby(t_col)
@@ -282,7 +282,7 @@ if data_option:
                         else: st.write("No signals.")
             else: st.warning("No signals.")
             
-            # --- Robust Footer ---
+            # --- Updated Robust Footer ---
             st.divider()
             f_col1, f_col2, f_col3 = st.columns(3)
             
@@ -298,7 +298,7 @@ if data_option:
             with f_col2:
                 st.markdown('<div class="footer-header">🔮 EXPECTED VALUE (EV) ANALYSIS</div>', unsafe_allow_html=True)
                 st.markdown(f"""
-                * **Data Pool**: Analyzes up to **{EV_LOOKBACK_YEARS} years** of historical data (or max available for newer IPOs).
+                * **Data Pool**: Analyzes the **entire 3-year historical dataset** to find matching RSI environments.
                 * **RSI Matching**: Identifies historical instances where the RSI was within **±2 points** of the current RSI level.
                 * **Forward Projection**: Calculates the **Average (Mean)** percentage return for those matching instances exactly 30 and 90 periods into the future.
                 * **Statistical Filter**: EV is only displayed if at least **{MIN_N_THRESHOLD} historical matches (N)** are found to ensure reliability.
