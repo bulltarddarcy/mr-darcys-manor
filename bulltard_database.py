@@ -17,11 +17,11 @@ from io import StringIO
 
 # --- 1. GLOBAL DATA LOADING & UTILITIES ---
 COLUMN_CONFIG_PIVOT = {
-    "Symbol": st.column_config.TextColumn("Sym", width=65),
-    "Strike": st.column_config.TextColumn("Strike", width=95),
-    "Expiry_Table": st.column_config.TextColumn("Exp", width=90),
-    "Contracts": st.column_config.NumberColumn("Qty", width=60),
-    "Dollars": st.column_config.NumberColumn("Dollars", width=110),
+    "Symbol": st.column_config.TextColumn("Sym", width=None),
+    "Strike": st.column_config.TextColumn("Strike", width=None),
+    "Expiry_Table": st.column_config.TextColumn("Exp", width=None),
+    "Contracts": st.column_config.NumberColumn("Qty", width=None),
+    "Dollars": st.column_config.NumberColumn("Dollars", width=None),
 }
 
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
@@ -170,7 +170,6 @@ def load_dataset_config():
     """Reads the TXT file from Drive and returns a dictionary {Name: SecretKey}"""
     try:
         if "URL_CONFIG" not in st.secrets:
-            # Fallback if config url isn't set, but specific keys are
             return {"Darcy Data": "URL_DARCY", "S&P 100 Data": "URL_SP100"}
         config_url = st.secrets["URL_CONFIG"]
         buffer = get_confirmed_gdrive_data(config_url)
@@ -281,7 +280,7 @@ def find_divergences(df_tf, ticker, timeframe):
                         'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
                         'P1 Price': f"${p1['Low' if s_type=='Bullish' else 'High']:,.2f}", 
                         'P2 Price': f"${p2['Low' if s_type=='Bullish' else 'High']:,.2f}", 
-                        'Last Close': f"${latest_p['Price']:,.2f}", # Renamed Column
+                        'Last Close': f"${latest_p['Price']:,.2f}", 
                         'ev30_raw': ev30, 'ev90_raw': ev90
                     })
     return divergences
@@ -367,95 +366,121 @@ def run_rankings_app(df):
         st.warning("No trades of the specified sentiment types found in this range.")
         return
 
-    # --- SECTION 1: SMART MONEY FLOW (NEW SYSTEM) ---
+    # --- SECTION 1: SMART MONEY (WEIGHTED SCORE) ---
     st.markdown("---")
-    st.subheader("🧠 Smart Money Flow (Dollar-Weighted)")
+    st.subheader("🧠 Smart Money (Multivariate Score)")
     
-    # Calculate Signed Dollars for Conviction
-    # Calls Bought/Puts Sold = Positive Flow (+), Puts Bought = Negative Flow (-)
+    # 1. Base Sentiment
     f_filtered["Signed_Dollars"] = f_filtered.apply(
         lambda x: x["Dollars"] if x[order_type_col] in ["Calls Bought", "Puts Sold"] else -x["Dollars"], axis=1
     )
-
-    # 1. Total Net Flow Calculation
+    
+    # 2. Get Market Cap for calculation
+    def get_mcap_safe(sym): return get_market_cap(sym)
+    
+    # Group By Symbol
     smart_stats = f_filtered.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
     smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
-    
-    # INCORPORATE MARKET CAP
-    # This addresses the methodology update: $1M flow on small cap > $1M flow on large cap
-    def get_mcap_safe(sym):
-        return get_market_cap(sym)
-
-    # Fetch market cap for the active symbols
     smart_stats["Market Cap"] = smart_stats["Symbol"].apply(get_mcap_safe)
     
-    # Avoid division by zero, fill with a high number or filter
-    smart_stats = smart_stats[smart_stats["Market Cap"] > 0]
-    
-    # Calculate Impact % (Basis points of Market Cap would be small, so just % is fine)
-    # This allows the user to see the relative importance of the flow
-    smart_stats["Flow % Cap"] = (smart_stats["Net Sentiment ($)"] / smart_stats["Market Cap"]) * 100
-
-    # 2. Momentum Calculation (Last 3 Trading Days Only)
-    # Find the last 3 unique dates in the filtered dataset
+    # 3. Calculate Momentum (3-Day Flow)
     unique_dates = sorted(f_filtered["Trade Date"].unique())
     recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
     f_momentum = f_filtered[f_filtered["Trade Date"].isin(recent_dates)]
-    
     mom_stats = f_momentum.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
-    mom_stats.rename(columns={"Signed_Dollars": "3-Day Flow ($)"}, inplace=True)
+    mom_stats.rename(columns={"Signed_Dollars": "Momentum ($)"}, inplace=True)
     
-    # Merge Mkt Cap into Momentum too for consistent context
-    mom_stats["Market Cap"] = mom_stats["Symbol"].apply(get_mcap_safe)
-    mom_stats = mom_stats[mom_stats["Market Cap"] > 0]
-    mom_stats["Flow % Cap"] = (mom_stats["3-Day Flow ($)"] / mom_stats["Market Cap"]) * 100
-
-    # Prepare Tables
-    # Bullish: Highest Positive Net Sentiment
-    df_smart_bull = smart_stats.sort_values(by="Net Sentiment ($)", ascending=False).head(limit)
-    # Bearish: Lowest Negative Net Sentiment (Most Puts Bought)
-    df_smart_bear = smart_stats.sort_values(by="Net Sentiment ($)", ascending=True).head(limit)
-    # Momentum: Highest Positive Flow in last 3 days
-    df_smart_mom = mom_stats.sort_values(by="3-Day Flow ($)", ascending=False).head(limit)
-
-    # Formatting Helper
-    fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
-    fmt_pct = lambda x: f"{x:,.4f}%"
+    # Merge Momentum into Main
+    smart_stats = smart_stats.merge(mom_stats, on="Symbol", how="left").fillna(0)
     
-    smart_col_config = {
-        "Symbol": st.column_config.TextColumn("Ticker", width=60),
-        "Net Sentiment ($)": st.column_config.NumberColumn("Net Flow", format="$%d", width=100),
-        "3-Day Flow ($)": st.column_config.NumberColumn("3-Day Velocity", format="$%d", width=100),
-        "Flow % Cap": st.column_config.NumberColumn("Flow % Cap", format="%.4f%%", width=80)
-    }
-
-    # Display Smart Money Tables
-    sm1, sm2, sm3 = st.columns(3, gap="medium")
+    # 4. SCORING LOGIC
+    # Weights: Net Flow (40%), Flow % Cap (Impact) (30%), Momentum (30%)
     
-    with sm1:
-        st.markdown("<div style='text-align:center; color: #71d28a; font-weight:bold; margin-bottom:5px;'>High Conviction (Bullish)</div>", unsafe_allow_html=True)
-        st.dataframe(df_smart_bull.style.format({"Net Sentiment ($)": fmt_curr, "Flow % Cap": fmt_pct}), use_container_width=True, hide_index=True, height=get_table_height(df_smart_bull), column_config=smart_col_config)
+    # Filter valid market caps to avoid division errors
+    valid_data = smart_stats[smart_stats["Market Cap"] > 0].copy()
     
-    with sm2:
-        st.markdown("<div style='text-align:center; color: #f29ca0; font-weight:bold; margin-bottom:5px;'>High Conviction (Bearish)</div>", unsafe_allow_html=True)
-        st.dataframe(df_smart_bear.style.format({"Net Sentiment ($)": fmt_curr, "Flow % Cap": fmt_pct}), use_container_width=True, hide_index=True, height=get_table_height(df_smart_bear), column_config=smart_col_config)
+    if not valid_data.empty:
+        valid_data["Impact"] = valid_data["Net Sentiment ($)"] / valid_data["Market Cap"]
         
-    with sm3:
-        st.markdown("<div style='text-align:center; color: #66b7ff; font-weight:bold; margin-bottom:5px;'>Momentum (Hot Now)</div>", unsafe_allow_html=True)
-        st.dataframe(df_smart_mom.style.format({"3-Day Flow ($)": fmt_curr, "Flow % Cap": fmt_pct}), use_container_width=True, hide_index=True, height=get_table_height(df_smart_mom), column_config=smart_col_config)
+        # Normalize columns 0-1 (Min-Max) for the scoring
+        # For Bearish scoring, we flip the sign (looking for largest negative numbers)
+        
+        def normalize(series):
+            return (series - series.min()) / (series.max() - series.min()) if (series.max() != series.min()) else 0
 
-    # Methodology is now always visible
+        # --- BULLISH SCORE ---
+        # Higher Positive Flow, Higher Impact, Higher Positive Momentum = Higher Score
+        # We clip negatives to 0 so bearish flows don't mess up bullish ranking
+        bull_flow = valid_data["Net Sentiment ($)"].clip(lower=0)
+        bull_imp = valid_data["Impact"].clip(lower=0)
+        bull_mom = valid_data["Momentum ($)"].clip(lower=0)
+        
+        valid_data["Score_Bull"] = (
+            (0.40 * normalize(bull_flow)) + 
+            (0.30 * normalize(bull_imp)) + 
+            (0.30 * normalize(bull_mom))
+        ) * 100
+
+        # --- BEARISH SCORE ---
+        # Higher NEGATIVE Flow, Higher Negative Impact = Higher Score
+        # We invert signs so we can normalize positive magnitudes
+        bear_flow = -valid_data["Net Sentiment ($)"].clip(upper=0)
+        bear_imp = -valid_data["Impact"].clip(upper=0)
+        bear_mom = -valid_data["Momentum ($)"].clip(upper=0)
+        
+        valid_data["Score_Bear"] = (
+            (0.40 * normalize(bear_flow)) + 
+            (0.30 * normalize(bear_imp)) + 
+            (0.30 * normalize(bear_mom))
+        ) * 100
+        
+        # Prepare Result Tables
+        top_bulls = valid_data.sort_values(by="Score_Bull", ascending=False).head(limit)
+        top_bears = valid_data.sort_values(by="Score_Bear", ascending=False).head(limit)
+        
+        # Formatting
+        # Accounting format: ($1,000)
+        fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
+        fmt_score = lambda x: f"{x:.0f}"
+        
+        sm_config = {
+            "Symbol": st.column_config.TextColumn("Ticker", width=60),
+            "Score_Bull": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=100, format="%.0f"),
+            "Score_Bear": st.column_config.ProgressColumn("Smart Score", min_value=0, max_value=100, format="%.0f"),
+            "Net Sentiment ($)": st.column_config.TextColumn("Net Flow", width=100),
+        }
+
+        # Display
+        sm1, sm2 = st.columns(2, gap="large")
+        
+        with sm1:
+            st.markdown("<div style='text-align:center; color: #71d28a; font-weight:bold; margin-bottom:5px;'>Top Bullish Scores</div>", unsafe_allow_html=True)
+            # Format the dollars before display
+            disp_bull = top_bulls[["Symbol", "Score_Bull", "Net Sentiment ($)"]].copy()
+            disp_bull["Net Sentiment ($)"] = disp_bull["Net Sentiment ($)"].apply(fmt_curr)
+            st.dataframe(disp_bull, use_container_width=True, hide_index=True, height=get_table_height(disp_bull), column_config=sm_config)
+        
+        with sm2:
+            st.markdown("<div style='text-align:center; color: #f29ca0; font-weight:bold; margin-bottom:5px;'>Top Bearish Scores</div>", unsafe_allow_html=True)
+            disp_bear = top_bears[["Symbol", "Score_Bear", "Net Sentiment ($)"]].copy()
+            disp_bear["Net Sentiment ($)"] = disp_bear["Net Sentiment ($)"].apply(fmt_curr)
+            # Map column name to match config key if needed, or just use config to display
+            st.dataframe(disp_bear, use_container_width=True, hide_index=True, height=get_table_height(disp_bear), column_config=sm_config)
+
+    else:
+        st.warning("Not enough data with valid Market Caps to generate scores.")
+
+    # Methodology
     st.markdown("""
     ℹ️ **About Smart Money Methodology:**
-    * **Concept:** While standard rankings count the *number* of orders, Smart Money rankings follow the **cash**. A single \$1M order carries more weight here than fifty \$1k orders.
-    * **Impact:** The **Flow % Cap** column calculates the Net Flow as a percentage of Market Cap. This helps identify high-conviction trades relative to the company size (e.g. a small cap receiving massive flow vs a mega cap).
-    * **Net Sentiment:** Calculated as `(Calls Bought + Puts Sold) - Puts Bought`. Green means net buying, Red means net selling.
-    * **Momentum:** Shows the Net Sentiment flow for only the **last 3 trading days**. This highlights tickers seeing immediate, urgent action regardless of their 2-week history.
+    * **The Algorithm:** Generates a **Smart Score (0-100)** by normalizing and weighing three key variables.
+    * **Net Flow (40% Weight):** The raw dollar conviction (Calls + Puts Sold - Puts Bought).
+    * **Impact (30% Weight):** The Net Flow calculated as a percentage of Market Cap. This boosts smaller tickers receiving outsized flow.
+    * **Momentum (30% Weight):** The flow intensity over just the **last 3 trading days**, rewarding urgent action.
     """)
 
     # --- SECTION 2: BULLTARD RANKINGS (LEGACY) ---
     st.markdown("---")
-    # Updated to Clown emoji
     st.subheader("🤡 Bulltard Rankings (Volume Based)")
     
     # Existing Calculations
@@ -480,11 +505,11 @@ def run_rankings_app(df):
         "Symbol": st.column_config.TextColumn("Sym", width=40),
         "Trade Count": st.column_config.NumberColumn("Qty", width=40),
         "Last Trade": st.column_config.TextColumn("Last", width=70),
-        "Dollars": st.column_config.NumberColumn("Dollars", width=90),
+        "Dollars": st.column_config.TextColumn("Dollars", width=90), # Changed to Text for custom formatting
         "Score": st.column_config.NumberColumn("Score", width=40),
     }
-    fmt_currency = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
-    fmt_score = lambda x: f"({abs(int(x))})" if x < 0 else f"{int(x)}"
+    fmt_currency_legacy = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
+    fmt_score_legacy = lambda x: f"({abs(int(x))})" if x < 0 else f"{int(x)}"
     
     bull_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
     bear_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[True, True]).head(limit)
@@ -492,10 +517,15 @@ def run_rankings_app(df):
     col_left, col_right = st.columns(2, gap="large")
     with col_left:
         st.markdown("<h4 style='color: #71d28a; margin:0;'>Bullish Volume</h4>", unsafe_allow_html=True)
-        st.dataframe(bull_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bull_df), column_config=rank_col_config)
+        # Apply formatting to Dollars column manually before display to ensure ($X) format
+        b_disp = bull_df.copy()
+        b_disp["Dollars"] = b_disp["Dollars"].apply(fmt_currency_legacy)
+        st.dataframe(b_disp.style.format({"Trade Count": "{:,.0f}", "Score": fmt_score_legacy}), use_container_width=True, hide_index=True, height=get_table_height(bull_df), column_config=rank_col_config)
     with col_right:
         st.markdown("<h4 style='color: #f29ca0; margin:0;'>Bearish Volume</h4>", unsafe_allow_html=True)
-        st.dataframe(bear_df.style.format({"Dollars": fmt_currency, "Trade Count": "{:,.0f}", "Score": fmt_score}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
+        br_disp = bear_df.copy()
+        br_disp["Dollars"] = br_disp["Dollars"].apply(fmt_currency_legacy)
+        st.dataframe(br_disp.style.format({"Trade Count": "{:,.0f}", "Score": fmt_score_legacy}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
 
     st.caption("ℹ️ **Legacy Methodology:** Score = (Calls Bought + Puts Sold) - (Puts Bought). Ranked by Score first, then Dollars. Ranking tables vary from Bulltard's as he includes expired trades and these do not.")
 
@@ -732,8 +762,8 @@ def run_pivot_tables_app(df):
         coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
         annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
 
-        st.session_state["calc_out_ann"] = f"{annual_ret:.2f}%"
-        st.session_state["calc_out_coc"] = f"{coc_ret:.2f}%"
+        st.session_state["calc_out_ann"] = f"{annual_ret:.1f}%"
+        st.session_state["calc_out_coc"] = f"{coc_ret:.1f}%"
         st.session_state["calc_out_dte"] = str(max(0, dte))
 
         # Row 2 of Calculator (Outputs)
@@ -896,9 +926,10 @@ def run_rsi_divergences_app():
                     consolidated = res_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
                     for tf in ['Daily', 'Weekly']:
                         st.divider()
-                        st.header(f"📅 {tf} Divergence Analysis")
+                        # REMOVED PARENT HEADER
                         for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                            st.subheader(f"{emoji} {s_type} Signals")
+                            # MERGED SUBHEADER
+                            st.subheader(f"{emoji} {tf} {s_type} Signals")
                             tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                             if not tbl_df.empty:
                                 # Optimized HTML Table construction
@@ -999,41 +1030,40 @@ try:
     last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
 
     # --- NAVIGATION SETUP ---
-    pg = st.navigation({
-        "Tools": [
-            st.Page(
-                lambda: run_database_app(df_global), 
-                title="Database", 
-                icon="📂", 
-                url_path="options_db", 
-                default=True
-            ),
-            st.Page(
-                lambda: run_rankings_app(df_global), 
-                title="Rankings", 
-                icon="🏆", 
-                url_path="rankings"
-            ),
-            st.Page(
-                lambda: run_pivot_tables_app(df_global), 
-                title="Pivot Tables", 
-                icon="🎯", 
-                url_path="pivot_tables"
-            ),
-            st.Page(
-                lambda: run_strike_zones_app(df_global), 
-                title="Strike Zones", 
-                icon="📊", 
-                url_path="strike_zones"
-            ),
-            st.Page(
-                run_rsi_divergences_app, 
-                title="RSI Divergences", 
-                icon="📈", 
-                url_path="rsi_divergences"
-            ),
-        ]
-    })
+    # Simplified list (Removed "Tools" dictionary key)
+    pg = st.navigation([
+        st.Page(
+            lambda: run_database_app(df_global), 
+            title="Database", 
+            icon="📂", 
+            url_path="options_db", 
+            default=True
+        ),
+        st.Page(
+            lambda: run_rankings_app(df_global), 
+            title="Rankings", 
+            icon="🏆", 
+            url_path="rankings"
+        ),
+        st.Page(
+            lambda: run_pivot_tables_app(df_global), 
+            title="Pivot Tables", 
+            icon="🎯", 
+            url_path="pivot_tables"
+        ),
+        st.Page(
+            lambda: run_strike_zones_app(df_global), 
+            title="Strike Zones", 
+            icon="📊", 
+            url_path="strike_zones"
+        ),
+        st.Page(
+            run_rsi_divergences_app, 
+            title="RSI Divergences", 
+            icon="📈", 
+            url_path="rsi_divergences"
+        ),
+    ])
 
     # Add extra info to the sidebar footer
     st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
