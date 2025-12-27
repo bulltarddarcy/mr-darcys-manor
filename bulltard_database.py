@@ -370,8 +370,17 @@ def run_rankings_app(df):
     st.markdown("---")
     st.subheader("🧠 Smart Money (Multivariate Score)")
     
+    # Methodology
+    with st.expander("ℹ️ About Smart Money Methodology"):
+        st.markdown("""
+        * **The Algorithm:** Generates a **Smart Score (0-100)** by normalizing and weighing three key variables.
+        * **Net Flow (40% Weight):** The raw dollar conviction (Calls + Puts Sold - Puts Bought).
+        * **Impact (30% Weight):** The Net Flow calculated as a percentage of Market Cap. This boosts smaller tickers receiving outsized flow.
+        * **Momentum (30% Weight):** The flow intensity over just the **last 3 trading days**, rewarding urgent action.
+        """)
+    
     # SPINNER FOR LOADING
-    with st.spinner("Processing Smart Money calculations..."):
+    with st.spinner("Processing Smart Money calculations... Please be patient, it is totally worth it!"):
         # 1. Base Sentiment
         f_filtered["Signed_Dollars"] = f_filtered.apply(
             lambda x: x["Dollars"] if x[order_type_col] in ["Calls Bought", "Puts Sold"] else -x["Dollars"], axis=1
@@ -380,8 +389,13 @@ def run_rankings_app(df):
         # 2. Get Market Cap for calculation
         def get_mcap_safe(sym): return get_market_cap(sym)
         
-        # Group By Symbol
-        smart_stats = f_filtered.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
+        # Group By Symbol with aggregation
+        smart_stats = f_filtered.groupby("Symbol").agg(
+            Signed_Dollars=("Signed_Dollars", "sum"),
+            Trade_Count=("Symbol", "count"),
+            Last_Trade=("Trade Date", "max")
+        ).reset_index()
+        
         smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
         smart_stats["Market Cap"] = smart_stats["Symbol"].apply(get_mcap_safe)
         
@@ -433,6 +447,9 @@ def run_rankings_app(df):
                 (0.30 * normalize(bear_mom))
             ) * 100
             
+            # Format Last Trade Date
+            valid_data["Last Trade"] = valid_data["Last_Trade"].dt.strftime("%d %b")
+
             # Prepare Result Tables
             top_bulls = valid_data.sort_values(by="Score_Bull", ascending=False).head(limit)
             top_bears = valid_data.sort_values(by="Score_Bear", ascending=False).head(limit)
@@ -440,23 +457,27 @@ def run_rankings_app(df):
             # Formatting Helper
             fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
             
-            # Column Configuration (for simple Text cols, NOT bars, we use pandas style bars)
+            # Column Configuration
             sm_config = {
                 "Symbol": st.column_config.TextColumn("Ticker", width=60),
                 "Net Sentiment ($)": st.column_config.TextColumn("Net Flow", width=100),
+                "Trade_Count": st.column_config.NumberColumn("Qty", width=50, format="%d"),
+                "Last Trade": st.column_config.TextColumn("Last", width=60),
+                "Score_Bull": st.column_config.NumberColumn("Score", width=70, format="%.0f"),
+                "Score_Bear": st.column_config.NumberColumn("Score", width=70, format="%.0f"),
             }
 
             # Display
             sm1, sm2 = st.columns(2, gap="large")
             
             with sm1:
-                st.markdown("<div style='text-align:center; color: #71d28a; font-weight:bold; margin-bottom:5px;'>Top Bullish Scores</div>", unsafe_allow_html=True)
-                disp_bull = top_bulls[["Symbol", "Score_Bull", "Net Sentiment ($)"]].copy()
+                st.markdown("<div style='text-align:left; color: #71d28a; font-weight:bold; margin-bottom:5px;'>Top Bullish Scores</div>", unsafe_allow_html=True)
+                disp_bull = top_bulls[["Symbol", "Score_Bull", "Net Sentiment ($)", "Trade_Count", "Last Trade"]].copy()
                 
                 # Apply Style with Green Bar using Pandas Styling
                 st.dataframe(
                     disp_bull.style
-                    .format({"Net Sentiment ($)": fmt_curr, "Score_Bull": "{:.0f}"})
+                    .format({"Net Sentiment ($)": fmt_curr})
                     .bar(subset=["Score_Bull"], color="#71d28a", vmin=0, vmax=100),
                     use_container_width=True, 
                     hide_index=True, 
@@ -465,13 +486,13 @@ def run_rankings_app(df):
                 )
             
             with sm2:
-                st.markdown("<div style='text-align:center; color: #f29ca0; font-weight:bold; margin-bottom:5px;'>Top Bearish Scores</div>", unsafe_allow_html=True)
-                disp_bear = top_bears[["Symbol", "Score_Bear", "Net Sentiment ($)"]].copy()
+                st.markdown("<div style='text-align:left; color: #f29ca0; font-weight:bold; margin-bottom:5px;'>Top Bearish Scores</div>", unsafe_allow_html=True)
+                disp_bear = top_bears[["Symbol", "Score_Bear", "Net Sentiment ($)", "Trade_Count", "Last Trade"]].copy()
                 
                 # Apply Style with Red Bar (default/custom) using Pandas Styling
                 st.dataframe(
                     disp_bear.style
-                    .format({"Net Sentiment ($)": fmt_curr, "Score_Bear": "{:.0f}"})
+                    .format({"Net Sentiment ($)": fmt_curr})
                     .bar(subset=["Score_Bear"], color="#f29ca0", vmin=0, vmax=100),
                     use_container_width=True, 
                     hide_index=True, 
@@ -482,18 +503,10 @@ def run_rankings_app(df):
         else:
             st.warning("Not enough data with valid Market Caps to generate scores.")
 
-    # Methodology
-    st.markdown("""
-    ℹ️ **About Smart Money Methodology:**
-    * **The Algorithm:** Generates a **Smart Score (0-100)** by normalizing and weighing three key variables.
-    * **Net Flow (40% Weight):** The raw dollar conviction (Calls + Puts Sold - Puts Bought).
-    * **Impact (30% Weight):** The Net Flow calculated as a percentage of Market Cap. This boosts smaller tickers receiving outsized flow.
-    * **Momentum (30% Weight):** The flow intensity over just the **last 3 trading days**, rewarding urgent action.
-    """)
-
     # --- SECTION 2: BULLTARD RANKINGS (LEGACY) ---
     st.markdown("---")
     st.subheader("🤡 Bulltard Rankings (Volume Based)")
+    st.caption("ℹ️ **Legacy Methodology:** Score = (Calls Bought + Puts Sold) - (Puts Bought). Ranked by Score first, then Dollars. Ranking tables vary from Bulltard's as he includes expired trades and these do not.")
     
     # Existing Calculations
     counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
@@ -537,8 +550,6 @@ def run_rankings_app(df):
         br_disp = bear_df.copy()
         br_disp["Dollars"] = br_disp["Dollars"].apply(fmt_currency_legacy)
         st.dataframe(br_disp.style.format({"Trade Count": "{:,.0f}", "Score": fmt_score_legacy}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
-
-    st.caption("ℹ️ **Legacy Methodology:** Score = (Calls Bought + Puts Sold) - (Puts Bought). Ranked by Score first, then Dollars. Ranking tables vary from Bulltard's as he includes expired trades and these do not.")
 
 def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
@@ -716,6 +727,7 @@ def run_strike_zones_app(df):
                     st.markdown(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-bar {color}" style="width:{w}px"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div>', unsafe_allow_html=True)
             
             st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them in the Data Tables box below.")
+            st.caption("ℹ️ To better view the graphic on mobile, set your browser to View Desktop Site")
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
@@ -753,9 +765,6 @@ def run_pivot_tables_app(df):
         with fc4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=0, key="pv_notional")]
         with fc5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
         with fc6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
-        
-        st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Market Cap filtering can be buggy. If empty, reset \'Mkt Cap Min\' to 0B.</div>', unsafe_allow_html=True)
-        st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Scroll down to see the Risk Reversals table.</div>', unsafe_allow_html=True)
 
     # --- RIGHT COLUMN: CALCULATOR ---
     with col_calculator:
@@ -791,6 +800,9 @@ def run_pivot_tables_app(df):
     </div>
     """, unsafe_allow_html=True)
     
+    st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Market Cap filtering can be buggy. If empty, reset \'Mkt Cap Min\' to 0B.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Scroll down to see the Risk Reversals table.</div>', unsafe_allow_html=True)
+
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
@@ -898,7 +910,10 @@ def run_rsi_divergences_app():
         """, unsafe_allow_html=True)
         
     dataset_map = load_dataset_config()
-
+    
+    data_option = st.pills("Dataset", options=list(dataset_map.keys()), selection_mode="single", default=list(dataset_map.keys())[0], label_visibility="collapsed")
+    
+    # MOVED STRATEGY LOGIC HERE
     with st.expander("ℹ️ Strategy Logic & Tag Explanations"):
         f_col1, f_col2, f_col3 = st.columns(3)
         with f_col1:
@@ -906,9 +921,9 @@ def run_rsi_divergences_app():
             st.markdown(f"""
             * **Signal Identification**: Scans for price extremes (New Low for Bullish, New High for Bearish) within a **{SIGNAL_LOOKBACK_PERIOD}-period window**.
             * **Divergence Mechanism**: Compares the RSI at a new price extreme to a previous RSI extreme found within the **{DIVERGENCE_LOOKBACK}-period lookback**.
-            * **Bullish Standards**: Price hits a new low while RSI is at least **{RSI_DIFF_THRESHOLD} points higher** than at the previous low. RSI must remain below 50 between points.
-            * **Bearish Standards**: Price hits a new high while RSI is at least **{RSI_DIFF_THRESHOLD} points lower** than at the previous high. RSI must remain above 50 between points.
-            * **Invalidation**: Bullish signals are invalid if RSI breaks below the P1 low RSI before lifting. Bearish signals invalid if RSI breaks above P1 high RSI.
+            * **True Pivot Logic**: The algorithm ensures the price point is a true local extreme (True Low/High). If the RSI crosses the 50 line between the two comparison points, the divergence is invalidated (reset).
+            * **Bullish Standards**: Price hits a new low while RSI is at least **{RSI_DIFF_THRESHOLD} points higher** than at the previous low.
+            * **Bearish Standards**: Price hits a new high while RSI is at least **{RSI_DIFF_THRESHOLD} points lower** than at the previous high.
             """)
         with f_col2:
             st.markdown('<div class="footer-header">🔮 EXPECTED VALUE (EV) ANALYSIS</div>', unsafe_allow_html=True)
@@ -926,8 +941,6 @@ def run_rsi_divergences_app():
             * **VOL_HIGH**: Triggered if the signal candle volume is > 150% of the **{VOL_SMA_PERIOD}-period average**.
             * **VOL_GROW**: Triggered if volume at the current signal point (P2) is higher than the volume at the previous extreme (P1).
             """)
-
-    data_option = st.pills("Dataset", options=list(dataset_map.keys()), selection_mode="single", default=list(dataset_map.keys())[0], label_visibility="collapsed")
 
     if data_option:
         try:
@@ -1001,7 +1014,8 @@ st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎"
 # Adaptive styles that respect Light/Dark mode
 st.markdown("""<style>
 /* Adaptive variables using Streamlit native theme hooks */
-.block-container{padding-top:1.2rem;padding-bottom:1rem;}
+/* Increased padding-top to prevent header overlap */
+.block-container{padding-top:3.5rem;padding-bottom:1rem;}
 
 /* Removed control-box CSS entirely */
 
