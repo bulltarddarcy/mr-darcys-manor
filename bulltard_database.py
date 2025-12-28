@@ -1151,22 +1151,10 @@ def run_rsi_scanner_app():
         </style>
         """, unsafe_allow_html=True)
         
-    # 1. SHARED DATA SOURCE SELECTION
-    dataset_map = load_dataset_config()
-    options = list(dataset_map.keys())
-    data_option = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed")
-    
-    # Initialize variables for scanned results
-    res_div_df = pd.DataFrame()
-    res_pct_df = pd.DataFrame()
-    max_date_in_set = date.min
-    target_highlight_weekly = ""
-    target_highlight_daily = ""
-    
-    # 3. TABS
+    # 3. TABS (Defined at top so Backtester renders immediately)
     tab_div, tab_pct, tab_bot = st.tabs(["📉 Divergences", "🔢 Percentiles", "🤖 Backtester"])
 
-    # --- TAB 3: BACKTESTER (Moved here) ---
+    # --- TAB 3: BACKTESTER (Independent) ---
     with tab_bot:
         st.caption("Historical RSI backtester (Max 10 Year Lookback)")
         col_input, col_rest = st.columns([1, 3])
@@ -1237,7 +1225,6 @@ def run_rsi_scanner_app():
                             st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
                         else:
                             # 4. Calculate Forward Returns
-                            # We need the full dataframe to look forward from the match indices
                             full_close = df[close_col].values
                             match_indices = matches.index.values
                             total_len = len(full_close)
@@ -1247,7 +1234,6 @@ def run_rsi_scanner_app():
                             
                             for p in periods:
                                 # Vectorized lookahead
-                                # Valid indices are those where (idx + p) is still within bounds
                                 valid_indices = match_indices[match_indices + p < total_len]
                                 
                                 if len(valid_indices) == 0:
@@ -1273,14 +1259,12 @@ def run_rsi_scanner_app():
                             res_df = pd.DataFrame(results)
 
                             # 5. Display Results
-                            # Header Metrics
                             st.subheader(f"RSI Analysis: {ticker}")
                             m1, m2, m3 = st.columns(3)
                             with m1: st.metric("Current RSI", f"{current_rsi:.2f}", f"as of {current_date}")
                             with m2: st.metric("RSI Range", f"[{rsi_min:.2f}, {rsi_max:.2f}]", "Tolerance ±2")
                             with m3: st.metric("Matching Periods", f"{len(matches)}", "samples found")
 
-                            # Formatting Helpers
                             def highlight_ret(val):
                                 color = '#71d28a' if val > 0 else '#f29ca0'
                                 return f'color: {color}; font-weight: bold;'
@@ -1291,7 +1275,6 @@ def run_rsi_scanner_app():
                                 "Med Ret": "{:+.2f}%"
                             }
 
-                            # Split into Short Term and Long Term
                             st.markdown("##### Short-Term Forward Returns")
                             short_term = res_df[res_df['Days'].isin([1, 3, 5, 7, 10, 14])].set_index("Days")
                             st.dataframe(
@@ -1309,8 +1292,13 @@ def run_rsi_scanner_app():
                             )
 
     
-    # 2. DATA PROCESSING (Shared for Efficiency)
-    # Only run data loading if user is on the first two tabs (simple optimization)
+    # --- 1. SHARED DATA SOURCE SELECTION ---
+    dataset_map = load_dataset_config()
+    options = list(dataset_map.keys())
+    # Display pills above logic but conceptually it feeds tabs 1 & 2
+    data_option = st.pills("Dataset (for Divergences & Percentiles)", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed")
+    
+    # --- 2. DATA PROCESSING (Tabs 1 & 2) ---
     if data_option:
         try:
             target_url = st.secrets[dataset_map[data_option]]
@@ -1328,31 +1316,81 @@ def run_rsi_scanner_app():
                     target_highlight_daily = max_dt_obj.strftime('%Y-%m-%d')
                     target_highlight_weekly = (max_dt_obj - timedelta(days=max_dt_obj.weekday())).strftime('%Y-%m-%d')
                 
-                # SHARED "View Tickers" Expander
-                all_tickers = sorted(master[t_col].unique())
-                with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-                    sq = st.text_input("Filter...").upper()
-                    ft = [t for t in all_tickers if sq in t]
-                    cols = st.columns(6)
-                    for i, ticker in enumerate(ft): cols[i % 6].write(ticker)
-
-                
                 # --- INPUTS FOR TAB 2 (Must be defined before loop) ---
+                # We render these input widgets *inside* the tab context below to ensure correct placement,
+                # but we need their values *before* the loop.
+                # Streamlit trick: Render them in a container that we 'place' later? No.
+                # We can just define placeholders or render them now but they appear here.
+                # To follow user request "move ... BELOW the Page Notes", we render them inside the tab structure.
+                # But we need the values for the loop. 
+                # Solution: Render them in sidebar? No. 
+                # Solution: We must render the UI structure for Tab 2 *before* the loop starts if we want the loop to use the values.
+                
                 with tab_pct:
+                    # NOTES
+                    with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
+                         st.markdown("""
+                        * **Historical Context**: 10-year daily price history analysis.
+                        * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
+                        * **EV 30p / 90p**: Expected return 30/90 trading days later based on matches (10-year lookback).
+                        * **Color Logic**: 🟢 Green = Historical profitability (Longs > 0, Shorts < 0). 🔴 Red = Historical loss.
+                        * **Filter**: Requires >= 5 historical matches.
+                        """)
+                    # INPUTS
                     c_p1, c_p2 = st.columns(2)
                     with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
                     with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
+                    
+                    # VIEW TICKERS (Inside Tab 2)
+                    all_tickers = sorted(master[t_col].unique())
+                    with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
+                        sq_pct = st.text_input("Filter...", key="filter_pct").upper()
+                        ft_pct = [t for t in all_tickers if sq_pct in t]
+                        cols = st.columns(6)
+                        for i, ticker in enumerate(ft_pct): cols[i % 6].write(ticker)
+
+                with tab_div:
+                    # NOTES
+                    with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
+                        f_col1, f_col2, f_col3 = st.columns(3)
+                        with f_col1:
+                            st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
+                            st.markdown(f"""
+                            * **Identification**: Scans for **True Pivots** (localized extremes) over a **{SIGNAL_LOOKBACK_PERIOD}-period** window.
+                            * **Divergence**: 
+                                * **Bullish**: Price makes a Lower Low, but RSI makes a Higher Low.
+                                * **Bearish**: Price makes a Higher High, but RSI makes a Lower High.
+                            * **Invalidation**: If RSI crosses the 50 midline between pivots, the setup is reset.
+                            """)
+                        with f_col2:
+                            st.markdown('<div class="footer-header">🔮 EV ANALYSIS</div>', unsafe_allow_html=True)
+                            st.markdown(f"""
+                            * **Data Pool**: Analyzes 10 years of history (where available).
+                            * **Method**: Finds all historical instances where RSI was within **±2 points** of the signal candle.
+                            * **Metric**: Calculates the **Mean % Return** after 30 and 90 trading days.
+                            * **Constraint**: Requires **N ≥ 5** historical matches to display.
+                            """)
+                        with f_col3:
+                            st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
+                            st.markdown(f"""
+                            * **EMA Trends**: Checks if Price is respecting EMA{EMA8_PERIOD} (Momentum) or EMA{EMA21_PERIOD} (Trend).
+                            * **Volume**: **VOL_HIGH** (>150% SMA) or **VOL_GROW** (P2 Vol > P1 Vol).
+                            """)
+                    
+                    # VIEW TICKERS (Inside Tab 1)
+                    # We repeat this so it appears in both relevant tabs but not backtester
+                    with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
+                        sq_div = st.text_input("Filter...", key="filter_div").upper()
+                        ft_div = [t for t in all_tickers if sq_div in t]
+                        cols = st.columns(6)
+                        for i, ticker in enumerate(ft_div): cols[i % 6].write(ticker)
+
                 
                 # --- MAIN SCAN LOOP (Runs Once for Both Strategies) ---
-                # NOTE: Only scan if not on Bot tab to save resources? 
-                # Streamlit runs everything top to bottom. We'll run scan anyway for now.
-                
                 raw_results_div = []
                 raw_results_pct = []
                 
                 # Only show progress if we are actually rendering the scan results
-                # A simple heuristic: if we are in this block, we scan.
-                
                 progress_bar = st.progress(0, text="Scanning strategies...")
                 grouped = master.groupby(t_col)
                 grouped_list = list(grouped)
@@ -1379,27 +1417,6 @@ def run_rsi_scanner_app():
                 
                 # --- OUTPUT TAB 1: DIVERGENCES ---
                 with tab_div:
-                    with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
-                        f_col1, f_col2, f_col3 = st.columns(3)
-                        with f_col1:
-                            st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
-                            st.markdown(f"""
-                            * **Signal**: Scans for price extremes (Low/High) in **{SIGNAL_LOOKBACK_PERIOD}p window**.
-                            * **Divergence**: Compares RSI at new extreme to previous extreme in **{DIVERGENCE_LOOKBACK}p lookback**.
-                            """)
-                        with f_col2:
-                            st.markdown('<div class="footer-header">🔮 EV ANALYSIS</div>', unsafe_allow_html=True)
-                            st.markdown(f"""
-                            * **Pool**: 3-Year historical dataset.
-                            * **Projection**: Avg return 30 & 90 periods later for matching RSI environments (±2 pts).
-                            """)
-                        with f_col3:
-                            st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
-                            st.markdown(f"""
-                            * **EMA**: Price relation to EMA{EMA8_PERIOD}/{EMA21_PERIOD}.
-                            * **VOL**: High volume (>150% SMA) or Growing volume.
-                            """)
-
                     if raw_results_div:
                         res_div_df = pd.DataFrame(raw_results_div).sort_values(by='Signal Date', ascending=False)
                         # Deduplicate: 1 signal per Ticker/Type/Timeframe
@@ -1445,15 +1462,6 @@ def run_rsi_scanner_app():
                 
                 # --- OUTPUT TAB 2: PERCENTILES ---
                 with tab_pct:
-                    with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
-                         st.markdown("""
-                        * **Historical Context**: 10-year daily price history analysis.
-                        * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
-                        * **EV 30p / 90p**: Expected return 30/90 trading days later based on matches (10-year lookback).
-                        * **Color Logic**: 🟢 Green = Historical profitability (Longs > 0, Shorts < 0). 🔴 Red = Historical loss.
-                        * **Filter**: Requires >= 5 historical matches.
-                        """)
-                    
                     if raw_results_pct:
                         res_pct_df = pd.DataFrame(raw_results_pct).sort_values(by='Date', ascending=False)
                         st.subheader(f"Found {len(res_pct_df)} Opportunities")
@@ -1960,7 +1968,7 @@ try:
         st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
         st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
         # COMBINED PAGE HERE:
-        st.Page(run_rsi_scanner_app, title="RSI Scanner", icon="📊", url_path="rsi_scanner"), 
+        st.Page(run_rsi_scanner_app, title="RSI Scanner", icon="📈", url_path="rsi_scanner"), 
         st.Page(lambda: run_trade_ideas_app(df_global), title="Trade Ideas", icon="💡", url_path="trade_ideas"),
     ])
 
