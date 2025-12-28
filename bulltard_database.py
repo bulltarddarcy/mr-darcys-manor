@@ -1093,7 +1093,8 @@ def run_rsi_divergences_app():
                 master = pd.read_csv(csv_buffer)
                 
                 # --- IDENTIFY MAX DATE FOR HIGHLIGHTING ---
-                date_col_raw = next((c for c in master.columns if 'DATE' in c), None)
+                # Search case-insensitively for date column
+                date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
                 max_date_str = ""
                 if date_col_raw:
                     max_date_str = pd.to_datetime(master[date_col_raw]).max().strftime('%Y-%m-%d')
@@ -1181,8 +1182,8 @@ def run_rsi_percentiles_app():
         .cell-green { background-color: #e6f4ea; color: #1e7e34; }
         .cell-red { background-color: #fce8e6; color: #c5221f; }
         
-        /* Date Highlighting */
-        .latest-date { background-color: rgba(255, 244, 229, 0.7); font-weight: 700; color: #e67e22; }
+        /* Date Highlighting - Added !important to override defaults */
+        .latest-date { background-color: rgba(255, 244, 229, 0.7) !important; font-weight: 700; color: #e67e22; }
         </style>
     """, unsafe_allow_html=True)
     
@@ -1226,7 +1227,8 @@ def run_rsi_percentiles_app():
                 t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                 
                 # Grab max date from the whole dataset first (approx)
-                date_col_raw = next((c for c in master.columns if 'DATE' in c), None)
+                # Search case-insensitively for date column
+                date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
                 if date_col_raw:
                     max_date_in_set = pd.to_datetime(master[date_col_raw]).max().date()
                 
