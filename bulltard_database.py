@@ -545,10 +545,11 @@ def run_rankings_app(df):
     
     with st.expander("ℹ️ About Smart Money Methodology"):
         st.markdown("""
-        * **The Algorithm:** Generates a **Smart Score (0-100)** by normalizing and weighing three key variables.
-        * **Net Flow (40% Weight):** The raw dollar conviction (Calls + Puts Sold - Puts Bought).
-        * **Impact (30% Weight):** The Net Flow calculated as a percentage of Market Cap. This boosts smaller tickers receiving outsized flow.
-        * **Momentum (30% Weight):** The flow intensity over just the **last 3 trading days**, rewarding urgent action.
+        * **The Algorithm:** Generates a **Smart Score (0-100)** by normalizing and weighing key variables.
+        * **Net Flow (30% Weight):** The raw dollar conviction (Calls + Puts Sold - Puts Bought).
+        * **Impact (25% Weight):** The Net Flow calculated as a percentage of Market Cap. Boosts smaller tickers receiving outsized flow.
+        * **Momentum (25% Weight):** The flow intensity over just the **last 3 trading days**, rewarding urgent action.
+        * **Trend (20% Weight):** Rewards tickers trading **above the 8 Day EMA**, ensuring technical alignment with flow.
         """)
     
     with st.spinner("Processing Smart Money calculations... Please be patient, it is totally worth it!"):
@@ -587,54 +588,83 @@ def run_rankings_app(df):
                 mn, mx = series.min(), series.max()
                 return (series - mn) / (mx - mn) if (mx != mn) else 0
 
-            bull_flow = valid_data["Net Sentiment ($)"].clip(lower=0)
-            bull_imp = valid_data["Impact"].clip(lower=0)
-            bull_mom = valid_data["Momentum ($)"].clip(lower=0)
+            # 1. Calculate Base Scores (Flow/Impact/Mom)
+            b_flow_norm = normalize(valid_data["Net Sentiment ($)"].clip(lower=0))
+            b_imp_norm = normalize(valid_data["Impact"].clip(lower=0))
+            b_mom_norm = normalize(valid_data["Momentum ($)"].clip(lower=0))
             
-            valid_data["Score_Bull"] = (
-                (0.40 * normalize(bull_flow)) + 
-                (0.30 * normalize(bull_imp)) + 
-                (0.30 * normalize(bull_mom))
-            ) * 100
-
-            bear_flow = -valid_data["Net Sentiment ($)"].clip(upper=0)
-            bear_imp = -valid_data["Impact"].clip(upper=0)
-            bear_mom = -valid_data["Momentum ($)"].clip(upper=0)
+            valid_data["Base_Score_Bull"] = (0.35 * b_flow_norm) + (0.30 * b_imp_norm) + (0.35 * b_mom_norm)
             
-            valid_data["Score_Bear"] = (
-                (0.40 * normalize(bear_flow)) + 
-                (0.30 * normalize(bear_imp)) + 
-                (0.30 * normalize(bear_mom))
-            ) * 100
+            br_flow_norm = normalize(-valid_data["Net Sentiment ($)"].clip(upper=0))
+            br_imp_norm = normalize(-valid_data["Impact"].clip(upper=0))
+            br_mom_norm = normalize(-valid_data["Momentum ($)"].clip(upper=0))
+            
+            valid_data["Base_Score_Bear"] = (0.35 * br_flow_norm) + (0.30 * br_imp_norm) + (0.35 * br_mom_norm)
             
             valid_data["Last Trade"] = valid_data["Last_Trade"].dt.strftime("%d %b")
             
-            # --- NEW: TREND COLUMN LOGIC ---
-            # Helper to fetch Trend status for display
-            def get_trend_status(sym):
+            # Helper to fetch Trend status
+            def get_trend_data(sym):
                 s, e8, e21, sma200, _ = get_stock_indicators(sym)
-                if s is None or e8 is None: return "—"
-                if s > e8: return "✅ >EMA8"
-                if s > e21: return "⚠️ >EMA21"
-                return "🔻 Weak"
+                return s, e8, e21
 
-            # Optimization: Only fetch for the top candidates to save time
-            # We sort first, take top (limit * 2) to buffer for filtering, then apply trend logic
-            pre_bulls = valid_data.sort_values(by=["Score_Bull", "Net Sentiment ($)"], ascending=[False, False]).head(limit * 2)
-            pre_bears = valid_data.sort_values(by=["Score_Bear", "Net Sentiment ($)"], ascending=[False, True]).head(limit * 2)
+            # 2. Optimization: Get Top 60 candidates by Base Score first, then apply Trend Weight
+            # This avoids fetching technicals for hundreds of irrelevant tickers
+            pre_bulls = valid_data.sort_values(by="Base_Score_Bull", ascending=False).head(60).copy()
+            pre_bears = valid_data.sort_values(by="Base_Score_Bear", ascending=False).head(60).copy()
             
-            pre_bulls["Trend"] = pre_bulls["Symbol"].apply(get_trend_status)
-            pre_bears["Trend"] = pre_bears["Symbol"].apply(get_trend_status)
+            # 3. Apply Trend Logic & Recalculate Final Score
+            # Weighting: 30% Flow, 25% Impact, 25% Momentum, 20% Trend
             
+            def finalize_score(row, mode="Bull"):
+                try:
+                    s, e8, e21 = get_trend_data(row["Symbol"])
+                    trend_score = 0.0
+                    trend_str = "—"
+                    
+                    if s is not None and e8 is not None:
+                        if mode == "Bull":
+                            if s > e8: 
+                                trend_score = 1.0
+                                trend_str = "✅ >EMA8"
+                            elif s > e21: 
+                                trend_score = 0.5
+                                trend_str = "⚠️ >EMA21"
+                            else:
+                                trend_str = "🔻 Weak"
+                        else: # Bear mode
+                            if s < e8:
+                                trend_score = 1.0
+                                trend_str = "✅ <EMA8"
+                            elif s < e21:
+                                trend_score = 0.5
+                                trend_str = "⚠️ <EMA21"
+                            else:
+                                trend_str = "🔻 Strong"
+                    
+                    # Recalculate weighted score
+                    # Previous base was roughly sum(weights)=1.0 (35/30/35) -> Scale to 0.8 and add 0.2 trend
+                    # Logic: (Base_Score * 0.8) + (Trend_Score * 0.2)
+                    final = (row[f"Base_Score_{mode}"] * 0.8) + (trend_score * 0.2)
+                    return final * 100, trend_str
+                except:
+                    return row[f"Base_Score_{mode}"] * 80, "—"
+
+            # Apply to Bulls
+            res_bull = pre_bulls.apply(lambda r: finalize_score(r, "Bull"), axis=1, result_type='expand')
+            pre_bulls["Score"], pre_bulls["Trend"] = res_bull[0], res_bull[1]
+            
+            # Apply to Bears
+            res_bear = pre_bears.apply(lambda r: finalize_score(r, "Bear"), axis=1, result_type='expand')
+            pre_bears["Score"], pre_bears["Trend"] = res_bear[0], res_bear[1]
+            
+            # 4. Final Sort & Filter
             if filter_ema:
                 pre_bulls = pre_bulls[pre_bulls["Trend"] == "✅ >EMA8"]
-                # For bears, we arguably might want < EMA8, but the user requested "trading names under EMA8"
-                # usually means avoiding longs. For simplicity, the filter specifically says "Hide < 8 EMA",
-                # implying we only want Strong Trend names.
-                pre_bears = pre_bears[pre_bears["Trend"] == "✅ >EMA8"]
+                pre_bears = pre_bears[pre_bears["Trend"] == "✅ <EMA8"]
             
-            top_bulls = pre_bulls.head(limit)
-            top_bears = pre_bears.head(limit)
+            top_bulls = pre_bulls.sort_values(by=["Score", "Net Sentiment ($)"], ascending=[False, False]).head(limit)
+            top_bears = pre_bears.sort_values(by=["Score", "Net Sentiment ($)"], ascending=[False, True]).head(limit)
             
             fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
             
@@ -657,9 +687,7 @@ def run_rankings_app(df):
             
             with sm1:
                 st.markdown("<div style='text-align:left; color: #71d28a; font-weight:bold; margin-bottom:5px;'>Top Bullish Scores</div>", unsafe_allow_html=True)
-                disp_bull = top_bulls[["Symbol", "Score_Bull", "Net Sentiment ($)", "Trade_Count", "Last Trade", "Trend"]].copy()
-                disp_bull.rename(columns={"Score_Bull": "Score"}, inplace=True)
-                
+                disp_bull = top_bulls[["Symbol", "Score", "Net Sentiment ($)", "Trade_Count", "Last Trade", "Trend"]].copy()
                 st.dataframe(
                     disp_bull.style.format({"Net Sentiment ($)": fmt_curr}),
                     use_container_width=True, 
@@ -670,9 +698,7 @@ def run_rankings_app(df):
             
             with sm2:
                 st.markdown("<div style='text-align:left; color: #f29ca0; font-weight:bold; margin-bottom:5px;'>Top Bearish Scores</div>", unsafe_allow_html=True)
-                disp_bear = top_bears[["Symbol", "Score_Bear", "Net Sentiment ($)", "Trade_Count", "Last Trade", "Trend"]].copy()
-                disp_bear.rename(columns={"Score_Bear": "Score"}, inplace=True)
-                
+                disp_bear = top_bears[["Symbol", "Score", "Net Sentiment ($)", "Trade_Count", "Last Trade", "Trend"]].copy()
                 st.dataframe(
                     disp_bear.style.format({"Net Sentiment ($)": fmt_curr}),
                     use_container_width=True, 
@@ -1377,11 +1403,16 @@ def get_ticker_technicals(ticker, ticker_map):
         pass
     return None
 
-def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
+def analyze_trade_setup(ticker, df_tech, df_flow):
+    """
+    Analyzes technicals and flow to generate specific trade suggestions.
+    Returns: score (0-10), reasons (list), suggestions (dict with 'Calls', 'Puts', 'Commons')
+    """
     score = 5 
     reasons = []
-    recommendation = "Neutral / Wait"
+    suggestions = {"Buy Calls": None, "Sell Puts": None, "Buy Commons": None}
     
+    # 1. Technical Data Extraction
     last = df_tech.iloc[-1]
     price = last.get('CLOSE', 0)
     ema8 = last.get('EMA_8', last.get('EMA8', 0))
@@ -1389,55 +1420,39 @@ def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
     sma200 = last.get('SMA_200', last.get('SMA200', 0))
     rsi = last.get('RSI_14', last.get('RSI', 50))
     
+    # Simple levels
     levels = [l for l in [ema21, sma200] if l > 0]
     nearest_support = max([l for l in levels if l < price], default=price*0.9)
-    nearest_resistance = min([l for l in levels if l > price], default=price*1.1)
+    # nearest_resistance = min([l for l in levels if l > price], default=price*1.1)
 
+    # 2. Scoring Logic
     is_bullish = False
-    is_bearish = False
+    
+    # Trend
+    if price > ema8 and price > ema21:
+        score += 2
+        reasons.append("✅ Strong Trend (Above EMA 8 & 21)")
+        is_bullish = True
+    elif price < ema21:
+        score -= 2
+        reasons.append("⚠️ Weak Trend (Below EMA 21)")
+    
+    if price > sma200:
+        score += 1
+        reasons.append("✅ Long-term Uptrend (> SMA 200)")
+    else:
+        reasons.append("⚠️ Long-term Downtrend (< SMA 200)")
+        
+    # RSI
+    if rsi < 40:
+        score += 1
+        reasons.append(f"✅ RSI Oversold ({rsi:.0f}) - Potential Bounce")
+    elif rsi > 70:
+        score -= 1
+        reasons.append(f"⚠️ RSI Overbought ({rsi:.0f}) - Risk of Pullback")
 
-    if trade_type in ["Buy Calls", "Sell Puts", "Buy Shares", "Risk Reversal"]:
-        if price > ema8 and price > ema21:
-            score += 2
-            reasons.append("✅ Price is strong (Above EMA 8 & 21)")
-            is_bullish = True
-        elif price < ema21:
-            score -= 2
-            reasons.append("⚠️ Price is weak (Below EMA 21)")
-            
-        if price > sma200:
-            score += 1
-            reasons.append("✅ In long-term uptrend (Above SMA 200)")
-        else:
-            reasons.append("⚠️ Below SMA 200 (Long-term downtrend)")
-            
-        if rsi < 40:
-            score += 1
-            reasons.append("✅ RSI is oversold (Potential bounce)")
-        elif rsi > 70:
-            score -= 1
-            reasons.append("⚠️ RSI is overbought (Risk of pullback)")
-
-    else: 
-        if price < ema8 and price < ema21:
-            score += 2
-            reasons.append("✅ Price is weak (Below EMA 8 & 21)")
-            is_bearish = True
-        elif price > ema21:
-            score -= 2
-            reasons.append("⚠️ Price is strong (Above EMA 21)")
-            
-        if price < sma200:
-            score += 1
-            reasons.append("✅ In long-term downtrend (Below SMA 200)")
-            
-        if rsi > 60:
-            score += 1
-            reasons.append("✅ RSI is elevated (Room to fall)")
-        elif rsi < 30:
-            score -= 1
-            reasons.append("⚠️ RSI is oversold (Risk of bounce)")
-
+    # Flow
+    net_flow_val = 0
     if not df_flow.empty:
         flow_ticker = df_flow[df_flow['Symbol'] == ticker]
         if not flow_ticker.empty:
@@ -1445,6 +1460,7 @@ def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
             puts_sold = flow_ticker[flow_ticker['Order Type'] == "Puts Sold"]['Dollars'].sum()
             puts_bought = flow_ticker[flow_ticker['Order Type'] == "Puts Bought"]['Dollars'].sum()
             
+            # Whale Check
             whales = flow_ticker[flow_ticker['Dollars'] >= 100000].copy()
             if not whales.empty:
                 w_calls = whales[whales['Order Type'] == "Calls Bought"]['Dollars'].sum()
@@ -1452,50 +1468,70 @@ def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
                 
                 if w_calls > w_puts_buy:
                     score += 1
-                    reasons.append(f"🐋 Whale Alert: Significant large bullish trades found (${w_calls:,.0f}).")
+                    reasons.append(f"🐋 Whale Alert: Bullish flow detected (${w_calls:,.0f})")
                 elif w_puts_buy > w_calls:
                     score -= 1
-                    reasons.append(f"🐋 Whale Alert: Significant large bearish trades found (${w_puts_buy:,.0f}).")
+                    reasons.append(f"🐋 Whale Alert: Bearish flow detected (${w_puts_buy:,.0f})")
             
-            net_bullish = calls + puts_sold - puts_bought
-            
-            if trade_type in ["Buy Calls", "Sell Puts", "Buy Shares", "Risk Reversal"]:
-                if net_bullish > 1_000_000:
-                    score += 2
-                    reasons.append(f"✅ Strong Bullish Flow (+${net_bullish/1e6:.1f}M)")
-                elif net_bullish < -1_000_000:
-                    score -= 2
-                    reasons.append(f"⚠️ Bearish Flow detected (${net_bullish/1e6:.1f}M)")
-            else:
-                if net_bullish < -1_000_000:
-                    score += 2
-                    reasons.append(f"✅ Strong Bearish Flow ({net_bullish/1e6:.1f}M)")
-                elif net_bullish > 1_000_000:
-                    score -= 2
-                    reasons.append(f"⚠️ Bullish Flow detected (+${net_bullish/1e6:.1f}M)")
-    
+            net_flow_val = calls + puts_sold - puts_bought
+            if net_flow_val > 1_000_000:
+                score += 2
+                reasons.append(f"✅ Strong Net Flow (+${net_flow_val/1e6:.1f}M)")
+            elif net_flow_val < -1_000_000:
+                score -= 2
+                reasons.append(f"⚠️ Net Bearish Flow")
+
     final_score = min(max(score, 0), 10)
     
+    # 3. Trade Suggestions Logic
+    # Expiry defaults
+    exp_str = "30-45 Days"
+    
     if final_score >= 6:
-        if trade_type == "Risk Reversal":
-            put_strike = math.floor(nearest_support)
-            call_strike = math.ceil(price * 1.02)
-            recommendation = f"Bullish Risk Reversal: Sell {put_strike} Put (Support), Buy {call_strike} Call."
-        elif trade_type == "Sell Puts":
-            strike = math.floor(nearest_support)
-            recommendation = f"Sell Puts at ${strike} level (near support)."
-        elif trade_type == "Buy Calls":
-            strike = math.ceil(price)
-            recommendation = f"Buy ATM/OTM Calls (Strike ${strike}+)."
-        elif trade_type == "Buy Puts":
-            strike = math.floor(price)
-            recommendation = f"Buy ATM/OTM Puts (Strike ${strike}-)."
-        elif trade_type == "Buy Shares":
-            recommendation = "Accumulate Shares with stop below EMA21."
+        # Bullish Bias
+        
+        # BUY CALLS
+        strike_c = math.ceil(price * 1.02) # Slightly OTM
+        take_loss = ema21 if ema21 < price else price * 0.95
+        suggestions["Buy Calls"] = f"""
+        **Strike:** ${strike_c} (OTM) | **Exp:** {exp_str}
+        **Rationale:** Momentum strong (>EMA8) & Score {final_score}/10. Targeting breakout.
+        **Stop:** Close < ${take_loss:.2f}
+        """
+        
+        # SELL PUTS (High Probability)
+        # Rule: Never > 10% OTM. Ideally at Support.
+        strike_p = math.floor(nearest_support)
+        pct_otm = (price - strike_p) / price
+        if pct_otm > 0.10: 
+            strike_p = math.floor(price * 0.92) # Cap at 8% OTM if support is too deep
+        
+        suggestions["Sell Puts"] = f"""
+        **Strike:** ${strike_p} | **Exp:** {exp_str}
+        **Rationale:** Selling volatility at support level.
+        **Stop:** Close < ${strike_p}
+        """
+        
+        # BUY COMMONS
+        suggestions["Buy Commons"] = f"""
+        **Entry:** Current (${price:.2f})
+        **Rationale:** Trend alignment.
+        **Stop:** ${nearest_support:.2f} (Support/EMA21) | **Target:** ${(price*1.15):.2f}
+        """
+        
+    elif final_score <= 4:
+        # Bearish Bias (We usually don't suggest Shorting Commons here, but Puts maybe)
+        suggestions["Buy Calls"] = "No Setup (Trend/Flow Weak)"
+        suggestions["Sell Puts"] = "No Setup (Risk of downside breakdown)"
+        suggestions["Buy Commons"] = "No Setup (Wait for reversal)"
+        
     else:
-        recommendation = "Setup weak. Wait for better alignment."
+        # Neutral
+        suggestions["Buy Calls"] = "No Setup (Mixed Signals)"
+        suggestions["Sell Puts"] = f"**Strike:** ${math.floor(price*0.90)} (Deep OTM) only if IV High."
+        suggestions["Buy Commons"] = "Hold / Wait"
 
-    return final_score, reasons, recommendation
+    return final_score, reasons, suggestions
 
 # Helper function to fetch and truncate CSV data for the AI
 def fetch_and_prepare_ai_context(url, label, max_rows=90):
@@ -1531,76 +1567,118 @@ def run_trade_ideas_app(df_global):
     ticker_map = load_ticker_map()
     
     # Renamed Tabs to reflect new structure
-    tabs = st.tabs(["🔎 Analyze Ticker", "🤖 Macro Scanner (AI)", "🏆 Top 3 Scans"])
+    tabs = st.tabs(["🏆 Top 3 Scan", "🤖 Macro Scanner (AI)"])
     
-    # --- TAB 1: TICKER ANALYZER ---
+    # --- TAB 1: TOP 3 SCANNER (Synced) ---
     with tabs[0]:
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            default_t = "NVDA"
-            t_input = st.text_input("Ticker Symbol", value=default_t).upper().strip()
-        with c2:
-            trade_type = st.selectbox("Trade Type", ["Buy Calls", "Sell Puts", "Buy Puts", "Buy Shares", "Risk Reversal"])
-        with c3:
-            duration = st.selectbox("Duration", ["Swing (1-4 Weeks)", "Leap (>1 Year)", "Scalp (Daily)"])
+        st.markdown("#### 🏆 Automated Opportunity Scanner")
+        
+        with st.expander("ℹ️ Strategy & Scoring Logic"):
+            st.markdown("""
+            **Scoring Model (0-10):**
+            * **Trend (2pts):** Price > EMA8 & EMA21.
+            * **Flow (2pts):** Significant Net Bullish Options Flow.
+            * **Momentum (2pts):** RSI > 40 and < 70 (Healthy zone).
+            * **Support (2pts):** Price holding above SMA200.
+            * **Whales (+/- 1pt):** Bonus for single large block trades.
             
-        if st.button("Analyze Trade", type="primary"):
-            with st.spinner(f"Pulling data for {t_input}..."):
-                tech_df = get_ticker_technicals(t_input, ticker_map)
-                
-                if tech_df is None:
-                    st.error(f"Could not load technical data for {t_input}. Check if it exists in the Ticker Map.")
-                else:
-                    score, reasons, rec = analyze_trade_setup(t_input, trade_type, tech_df, df_global)
-                    
-                    st.markdown("---")
-                    res_col1, res_col2 = st.columns([1, 2])
-                    
-                    with res_col1:
-                        st.metric("Conviction Score", f"{score}/10")
-                        if score >= 7: st.success("High Conviction Setup")
-                        elif score <= 4: st.error("Low Conviction Setup")
-                        else: st.warning("Neutral / Mixed Setup")
-                            
-                    with res_col2:
-                        st.subheader("Observations")
-                        for r in reasons: st.write(r)
-                        st.info(f"**Recommendation:** {rec}")
-                            
-                    st.markdown("### 📉 Snapshot")
-                    cols_to_plot = []
-                    if 'CLOSE' in tech_df.columns: cols_to_plot.append('CLOSE')
-                    if 'EMA_8' in tech_df.columns: cols_to_plot.append('EMA_8')
-                    if 'EMA8' in tech_df.columns: cols_to_plot.append('EMA8') 
-                    if 'EMA_21' in tech_df.columns: cols_to_plot.append('EMA_21')
-                    if 'EMA21' in tech_df.columns: cols_to_plot.append('EMA21')
-                    if 'SMA_200' in tech_df.columns: cols_to_plot.append('SMA_200')
-                    if 'SMA200' in tech_df.columns: cols_to_plot.append('SMA200')
-                    
-                    if cols_to_plot:
-                        chart_df = tech_df.tail(90).copy()
-                        rename_map = {c: c.replace('_', '') for c in cols_to_plot}
-                        chart_df = chart_df[cols_to_plot].rename(columns=rename_map)
-                        
-                        d_col = next((c for c in tech_df.columns if 'DATE' in c), None)
-                        if d_col: 
-                            chart_df.index = tech_df.tail(90)[d_col]
-                            chart_df.index.name = "Date"
-                        
-                        chart_df = chart_df.reset_index()
+            **Trade Suggestions:**
+            * Generated dynamically based on support levels (EMA21/SMA200).
+            * **Sell Puts:** Targeted at support, ensuring < 10% OTM for premium viability.
+            """)
+            
+        if st.button("Scan Top 20"):
+            progress = st.progress(0, text="Initializing scan...")
+            
+            max_date = df_global["Trade Date"].max()
+            start_date_filter = max_date - timedelta(days=14)
+            
+            mask = (df_global["Trade Date"] >= start_date_filter) & (df_global["Trade Date"] <= max_date)
+            f_filtered = df_global[mask & df_global['Order Type'].isin(["Calls Bought", "Puts Sold", "Puts Bought"])].copy()
+            
+            f_filtered["Signed_Dollars"] = np.where(
+                f_filtered['Order Type'].isin(["Calls Bought", "Puts Sold"]), 
+                f_filtered["Dollars"], -f_filtered["Dollars"]
+            )
+            
+            smart_stats = f_filtered.groupby("Symbol").agg(
+                Signed_Dollars=("Signed_Dollars", "sum")
+            ).reset_index()
+            
+            smart_stats["Market Cap"] = smart_stats["Symbol"].apply(lambda x: get_market_cap(x))
+            
+            # Synced 10B Market Cap Filter
+            smart_stats = smart_stats[smart_stats["Market Cap"] >= 1e10]
 
-                        melted_df = chart_df.melt('Date', var_name='Metric', value_name='Price')
-                        
-                        c = alt.Chart(melted_df).mark_line().encode(
-                            x='Date:T',
-                            y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
-                            color='Metric:N',
-                            tooltip=['Date', 'Metric', 'Price']
-                        ).interactive()
-                        
-                        st.altair_chart(c, use_container_width=True)
-                    else:
-                        st.write("Chart data unavailable.")
+            unique_dates = sorted(f_filtered["Trade Date"].unique())
+            recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
+            f_mom = f_filtered[f_filtered["Trade Date"].isin(recent_dates)]
+            mom_stats = f_mom.groupby("Symbol")["Signed_Dollars"].sum().reset_index().rename(columns={"Signed_Dollars": "Momentum"})
+            
+            smart_stats = smart_stats.merge(mom_stats, on="Symbol", how="left").fillna(0)
+            valid_data = smart_stats[smart_stats["Market Cap"] > 0].copy()
+            
+            if valid_data.empty:
+                st.warning("Not enough data to run Smart Money logic.")
+            else:
+                valid_data["Impact"] = valid_data["Signed_Dollars"] / valid_data["Market Cap"]
+                
+                def normalize(series):
+                    mn, mx = series.min(), series.max()
+                    return (series - mn) / (mx - mn) if (mx != mn) else 0
+
+                b_flow = valid_data["Signed_Dollars"].clip(lower=0)
+                b_imp = valid_data["Impact"].clip(lower=0)
+                b_mom = valid_data["Momentum"].clip(lower=0)
+                
+                valid_data["Score_Bull"] = (
+                    (0.40 * normalize(b_flow)) + 
+                    (0.30 * normalize(b_imp)) + 
+                    (0.30 * normalize(b_mom))
+                ) * 100
+                
+                top_tickers = valid_data.sort_values(by=["Score_Bull", "Signed_Dollars"], ascending=[False, False]).head(20)["Symbol"].tolist()
+                
+                candidates = []
+                
+                for i, t in enumerate(top_tickers):
+                    progress.progress((i+1)/20, text=f"Analyzing {t}...")
+                    t_df = get_ticker_technicals(t, ticker_map)
+                    
+                    if t_df is not None:
+                        score, reasons, suggs = analyze_trade_setup(t, t_df, df_global)
+                        candidates.append({
+                            "Ticker": t,
+                            "Score": score,
+                            "Price": t_df.iloc[-1].get('CLOSE'),
+                            "Reasons": reasons,
+                            "Suggestions": suggs
+                        })
+                
+                progress.empty()
+                
+                candidates = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
+                
+                st.success("Scan Complete!")
+                
+                cols = st.columns(3)
+                for i, cand in enumerate(candidates):
+                    with cols[i]:
+                        with st.container(border=True):
+                            st.markdown(f"### #{i+1} {cand['Ticker']}")
+                            st.metric("Score", f"{cand['Score']}/10", f"${cand['Price']:.2f}")
+                            
+                            st.markdown("#### 🎯 Trade Suggestions")
+                            if cand['Suggestions']['Buy Calls']:
+                                st.markdown(f"**🟢 Buy Calls:** {cand['Suggestions']['Buy Calls']}")
+                            if cand['Suggestions']['Sell Puts']:
+                                st.markdown(f"**🛡️ Sell Puts:** {cand['Suggestions']['Sell Puts']}")
+                            if cand['Suggestions']['Buy Commons']:
+                                st.markdown(f"**📈 Buy Shares:** {cand['Suggestions']['Buy Commons']}")
+                                
+                            with st.expander("Why this ticker?"):
+                                for r in cand['Reasons']:
+                                    st.caption(r)
 
     # --- TAB 2: MACRO SCANNER (AI) ---
     with tabs[1]:
@@ -1666,167 +1744,4 @@ def run_trade_ideas_app(df_global):
                 except Exception as e:
                     st.error(f"AI Pipeline Failed: {e}")
 
-
-    # --- TAB 3: TOP 3 SCANNER (Synced) ---
-    with tabs[2]:
-        st.markdown("#### 🏆 Automated Opportunity Scanner")
-        st.write("Scans the Top 20 'Smart Money' tickers for the best technical alignment.")
-        
-        if st.button("Scan Top 20"):
-            progress = st.progress(0, text="Initializing scan...")
-            
-            max_date = df_global["Trade Date"].max()
-            start_date_filter = max_date - timedelta(days=14)
-            
-            mask = (df_global["Trade Date"] >= start_date_filter) & (df_global["Trade Date"] <= max_date)
-            f_filtered = df_global[mask & df_global['Order Type'].isin(["Calls Bought", "Puts Sold", "Puts Bought"])].copy()
-            
-            f_filtered["Signed_Dollars"] = np.where(
-                f_filtered['Order Type'].isin(["Calls Bought", "Puts Sold"]), 
-                f_filtered["Dollars"], -f_filtered["Dollars"]
-            )
-            
-            smart_stats = f_filtered.groupby("Symbol").agg(
-                Signed_Dollars=("Signed_Dollars", "sum")
-            ).reset_index()
-            
-            smart_stats["Market Cap"] = smart_stats["Symbol"].apply(lambda x: get_market_cap(x))
-            
-            # Synced 10B Market Cap Filter
-            smart_stats = smart_stats[smart_stats["Market Cap"] >= 1e10]
-
-            unique_dates = sorted(f_filtered["Trade Date"].unique())
-            recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
-            f_mom = f_filtered[f_filtered["Trade Date"].isin(recent_dates)]
-            mom_stats = f_mom.groupby("Symbol")["Signed_Dollars"].sum().reset_index().rename(columns={"Signed_Dollars": "Momentum"})
-            
-            smart_stats = smart_stats.merge(mom_stats, on="Symbol", how="left").fillna(0)
-            valid_data = smart_stats[smart_stats["Market Cap"] > 0].copy()
-            
-            if valid_data.empty:
-                st.warning("Not enough data to run Smart Money logic.")
-            else:
-                valid_data["Impact"] = valid_data["Signed_Dollars"] / valid_data["Market Cap"]
-                
-                def normalize(series):
-                    mn, mx = series.min(), series.max()
-                    return (series - mn) / (mx - mn) if (mx != mn) else 0
-
-                b_flow = valid_data["Signed_Dollars"].clip(lower=0)
-                b_imp = valid_data["Impact"].clip(lower=0)
-                b_mom = valid_data["Momentum"].clip(lower=0)
-                
-                valid_data["Score_Bull"] = (
-                    (0.40 * normalize(b_flow)) + 
-                    (0.30 * normalize(b_imp)) + 
-                    (0.30 * normalize(b_mom))
-                ) * 100
-                
-                top_tickers = valid_data.sort_values(by=["Score_Bull", "Signed_Dollars"], ascending=[False, False]).head(20)["Symbol"].tolist()
-                
-                with st.expander(f"View Scanned Tickers ({len(top_tickers)})"):
-                    st.write(", ".join(top_tickers))
-                
-                candidates = []
-                
-                for i, t in enumerate(top_tickers):
-                    progress.progress((i+1)/20, text=f"Analyzing {t}...")
-                    t_df = get_ticker_technicals(t, ticker_map)
-                    
-                    if t_df is not None:
-                        score, reasons, rec = analyze_trade_setup(t, "Buy Calls", t_df, df_global)
-                        candidates.append({
-                            "Ticker": t,
-                            "Score": score,
-                            "Price": t_df.iloc[-1].get('CLOSE'),
-                            "Reasons": reasons,
-                            "Rec": rec
-                        })
-                
-                progress.empty()
-                
-                candidates = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
-                
-                st.success("Scan Complete!")
-                
-                cols = st.columns(3)
-                for i, cand in enumerate(candidates):
-                    with cols[i]:
-                        with st.container(border=True):
-                            st.markdown(f"### #{i+1} {cand['Ticker']}")
-                            st.metric("Score", f"{cand['Score']}/10", f"${cand['Price']:.2f}")
-                            st.caption(f"**Action:** {cand['Rec']}")
-                            for r in cand['Reasons']:
-                                st.caption(r)
-
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
-
-st.markdown("""<style>
-.block-container{padding-top:3.5rem;padding-bottom:1rem;}
-.zones-panel{padding:14px 0; border-radius:10px;}
-.zone-row{display:flex; align-items:center; gap:10px; margin:8px 0;}
-.zone-label{width:90px; font-weight:700; text-align:right; flex-shrink: 0; font-size: 13px;}
-.zone-wrapper{
-    flex-grow: 1; 
-    position: relative; 
-    height: 24px; 
-    background-color: rgba(0,0,0,0.03);
-    border-radius: 4px;
-    overflow: hidden;
-}
-.zone-bar{
-    position: absolute;
-    left: 0; 
-    top: 0; 
-    bottom: 0; 
-    z-index: 1;
-    border-radius: 3px;
-    opacity: 0.65;
-}
-.zone-bull{background-color: #71d28a;}
-.zone-bear{background-color: #f29ca0;}
-.zone-value{
-    position: absolute;
-    right: 8px;
-    top: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    z-index: 2;
-    font-size: 12px; 
-    font-weight: 700;
-    color: #1f1f1f;
-    white-space: nowrap;
-    text-shadow: 0 0 4px rgba(255,255,255,0.8);
-}
-.price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
-.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.4; }
-.price-badge { background: rgba(102, 183, 255, 0.1); color: #66b7ff; border: 1px solid rgba(102, 183, 255, 0.5); border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; white-space: nowrap; margin: 0 12px; z-index: 1; }
-.metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
-.badge{background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius:18px; padding:6px 10px; font-weight:700}
-.price-badge-header{background: rgba(102, 183, 255, 0.1); border: 1px solid #66b7ff; border-radius:18px; padding:6px 10px; font-weight:800}
-.light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
-</style>""", unsafe_allow_html=True)
-
-try:
-    sheet_url = st.secrets["GSHEET_URL"]
-    df_global = load_and_clean_data(sheet_url)
-    last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
-
-    pg = st.navigation([
-        st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
-        st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
-        st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
-        st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
-        st.Page(run_rsi_divergences_app, title="RSI Divergences", icon="📈", url_path="rsi_divergences"),
-        st.Page(run_rsi_percentiles_app, title="RSI Percentiles", icon="🔢", url_path="rsi_percentiles"),
-        st.Page(lambda: run_trade_ideas_app(df_global), title="Trade Ideas", icon="💡", url_path="trade_ideas"),
-    ])
-
-    st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
-    st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
-    
-    pg.run()
-    
-except Exception as e: 
-    st.error(f"Error initializing dashboard: {e}")
