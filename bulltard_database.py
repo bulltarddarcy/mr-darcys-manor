@@ -1613,8 +1613,15 @@ def run_trade_ideas_app(df_global):
         if st.button("Scan Top 20"):
             progress = st.progress(0, text="Initializing scan...")
             
-            # --- 1. REPLICATE SMART MONEY LOGIC EXACTLY ---
-            f_filtered = df_global[df_global['Order Type'].isin(["Calls Bought", "Puts Sold", "Puts Bought"])].copy()
+            # --- FIX: FILTER DATE RANGE TO MATCH RANKINGS TAB (LAST 14 DAYS) ---
+            max_date = df_global["Trade Date"].max()
+            start_date_filter = max_date - timedelta(days=14)
+            
+            # Filter the global dataframe first!
+            mask = (df_global["Trade Date"] >= start_date_filter) & (df_global["Trade Date"] <= max_date)
+            f_filtered = df_global[mask & df_global['Order Type'].isin(["Calls Bought", "Puts Sold", "Puts Bought"])].copy()
+            
+            # --- REMAINDER OF LOGIC REMAINS THE SAME ---
             f_filtered["Signed_Dollars"] = np.where(
                 f_filtered['Order Type'].isin(["Calls Bought", "Puts Sold"]), 
                 f_filtered["Dollars"], -f_filtered["Dollars"]
