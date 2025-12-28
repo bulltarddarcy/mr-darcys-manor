@@ -715,7 +715,7 @@ def run_rankings_app(df):
 
     st.markdown("---")
     st.subheader("🤡 Bulltard Rankings (Volume Based)")
-    st.caption("ℹ️ **Legacy Methodology:** Score = (Calls Bought + Puts Sold) - (Puts Bought). Ranked by Score first, then Dollars. Ranking tables vary from Bulltard's as he includes expired trades and these do not.")
+    st.caption("ℹ️ **Legacy Methodology:** Score = (Calls Bought + Puts Sold) - (Puts Bought). Ranked by Score first, then Dollars. Ranking tables vary from Bulltard's as he includes expired trades and these do not. **Note: The Market Cap filter above does not apply to this section.**")
     
     counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
     dollars = f_filtered.groupby(["Symbol", order_type_col])["Dollars"].sum().unstack(fill_value=0)
@@ -1564,6 +1564,7 @@ def fetch_and_prepare_ai_context(url, label, max_rows=90):
     return f"\n=== {label} DATA NOT FOUND ===\n"
 
 def run_trade_ideas_app(df_global):
+    st.warning("🚧 Work in Progress: This page is experimental and features are still being tuned.")
     st.title("💡 Trade Ideas Generator")
     st.caption("Combine Technicals, Flows, and AI for high-conviction setups.")
     
