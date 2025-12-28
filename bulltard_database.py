@@ -119,7 +119,7 @@ def get_stock_indicators(sym: str):
     except: 
         return None, None, None, None, None
 
-def get_table_height(df, max_rows=30):
+def get_table_height(df, max_rows=50):
     row_count = len(df)
     if row_count == 0:
         return 100
