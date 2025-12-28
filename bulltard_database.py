@@ -13,6 +13,9 @@ from io import StringIO
 import altair as alt
 import google.generativeai as genai
 
+# --- 0. PAGE CONFIGURATION (MUST BE FIRST) ---
+st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
+
 # --- 1. GLOBAL DATA LOADING & UTILITIES ---
 
 COLUMN_CONFIG_PIVOT = {
@@ -1744,4 +1747,72 @@ def run_trade_ideas_app(df_global):
                 except Exception as e:
                     st.error(f"AI Pipeline Failed: {e}")
 
-st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
+st.markdown("""<style>
+.block-container{padding-top:3.5rem;padding-bottom:1rem;}
+.zones-panel{padding:14px 0; border-radius:10px;}
+.zone-row{display:flex; align-items:center; gap:10px; margin:8px 0;}
+.zone-label{width:90px; font-weight:700; text-align:right; flex-shrink: 0; font-size: 13px;}
+.zone-wrapper{
+    flex-grow: 1; 
+    position: relative; 
+    height: 24px; 
+    background-color: rgba(0,0,0,0.03);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.zone-bar{
+    position: absolute;
+    left: 0; 
+    top: 0; 
+    bottom: 0; 
+    z-index: 1;
+    border-radius: 3px;
+    opacity: 0.65;
+}
+.zone-bull{background-color: #71d28a;}
+.zone-bear{background-color: #f29ca0;}
+.zone-value{
+    position: absolute;
+    right: 8px;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    z-index: 2;
+    font-size: 12px; 
+    font-weight: 700;
+    color: #1f1f1f;
+    white-space: nowrap;
+    text-shadow: 0 0 4px rgba(255,255,255,0.8);
+}
+.price-divider { display: flex; align-items: center; justify-content: center; position: relative; margin: 24px 0; width: 100%; }
+.price-divider::before, .price-divider::after { content: ""; flex-grow: 1; height: 2px; background: #66b7ff; opacity: 0.4; }
+.price-badge { background: rgba(102, 183, 255, 0.1); color: #66b7ff; border: 1px solid rgba(102, 183, 255, 0.5); border-radius: 16px; padding: 6px 14px; font-weight: 800; font-size: 12px; letter-spacing: 0.5px; white-space: nowrap; margin: 0 12px; z-index: 1; }
+.metric-row{display:flex;gap:10px;flex-wrap:wrap;margin:.35rem 0 .75rem 0}
+.badge{background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius:18px; padding:6px 10px; font-weight:700}
+.price-badge-header{background: rgba(102, 183, 255, 0.1); border: 1px solid #66b7ff; border-radius:18px; padding:6px 10px; font-weight:800}
+.light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
+</style>""", unsafe_allow_html=True)
+
+try:
+    sheet_url = st.secrets["GSHEET_URL"]
+    df_global = load_and_clean_data(sheet_url)
+    last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
+
+    pg = st.navigation([
+        st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
+        st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
+        st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
+        st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
+        st.Page(run_rsi_divergences_app, title="RSI Divergences", icon="📈", url_path="rsi_divergences"),
+        st.Page(run_rsi_percentiles_app, title="RSI Percentiles", icon="🔢", url_path="rsi_percentiles"),
+        st.Page(lambda: run_trade_ideas_app(df_global), title="Trade Ideas", icon="💡", url_path="trade_ideas"),
+    ])
+
+    st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
+    st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
+    
+    pg.run()
+    
+except Exception as e: 
+    st.error(f"Error initializing dashboard: {e}")
