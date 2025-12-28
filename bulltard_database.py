@@ -119,7 +119,7 @@ def get_stock_indicators(sym: str):
     except: 
         return None, None, None, None, None
 
-def get_table_height(df, max_rows=50):
+def get_table_height(df, max_rows=30):
     row_count = len(df)
     if row_count == 0:
         return 100
@@ -387,7 +387,7 @@ def find_divergences(df_tf, ticker, timeframe):
                     })
     return divergences
 
-def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
+def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods_to_scan=10):
     signals = []
     if len(df) < 200: return signals
     
@@ -397,8 +397,9 @@ def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
     
     if hist_df.empty: return signals
     
-    p10 = hist_df['RSI'].quantile(0.10)
-    p90 = hist_df['RSI'].quantile(0.90)
+    # Use dynamic percentiles passed from UI
+    p10 = hist_df['RSI'].quantile(pct_low)
+    p90 = hist_df['RSI'].quantile(pct_high)
     
     # Check last N periods from the FULL df (as recent price might be needed)
     if len(df) < periods_to_scan + 2: return signals
@@ -421,13 +422,13 @@ def find_rsi_percentile_signals(df, ticker, periods_to_scan=10):
         # Bullish Exit: Previously < p10, Now >= p10 (Leaving bottom)
         if prev['RSI'] < p10 and curr['RSI'] >= p10:
             s_type = 'Bullish'
-            desc_str = "Leaving Low 10%"
+            desc_str = f"Leaving Low {int(pct_low*100)}%"
             thresh_val = p10
             
         # Bearish Exit: Previously > p90, Now <= p90 (Leaving top)
         elif prev['RSI'] > p90 and curr['RSI'] <= p90:
             s_type = 'Bearish'
-            desc_str = "Leaving High 90%"
+            desc_str = f"Leaving High {int(pct_high*100)}%"
             thresh_val = p90
             
         if s_type:
@@ -1044,9 +1045,13 @@ def run_rsi_divergences_app():
         .rsi-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2rem; }
         .rsi-table thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
         .rsi-table tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; }
+        
+        /* Cell Highlighting */
         .ev-positive { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
         .ev-negative { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
         .ev-neutral { color: #5f6368; }
+        .latest-date { background-color: rgba(255, 244, 229, 0.7) !important; font-weight: 700; color: #e67e22; }
+        
         .tag-bubble { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; margin: 2px 4px 2px 0; color: white; white-space: nowrap; }
         .footer-header { color: #31333f; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 5px; font-weight: bold; }
         </style>
@@ -1064,8 +1069,6 @@ def run_rsi_divergences_app():
             * **Signal Identification**: Scans for price extremes (New Low for Bullish, New High for Bearish) within a **{SIGNAL_LOOKBACK_PERIOD}-period window**.
             * **Divergence Mechanism**: Compares the RSI at a new price extreme to a previous RSI extreme found within the **{DIVERGENCE_LOOKBACK}-period lookback**.
             * **True Pivot Logic**: The algorithm ensures the price point is a true local extreme (True Low/High). If the RSI crosses the 50 line between the two comparison points, the divergence is invalidated (reset).
-            * **Bullish Standards**: Price hits a new low while RSI is at least **{RSI_DIFF_THRESHOLD} points higher** than at the previous low.
-            * **Bearish Standards**: Price hits a new high while RSI is at least **{RSI_DIFF_THRESHOLD} points lower** than at the previous high.
             """)
         with f_col2:
             st.markdown('<div class="footer-header">🔮 EXPECTED VALUE (EV) ANALYSIS</div>', unsafe_allow_html=True)
@@ -1073,8 +1076,6 @@ def run_rsi_divergences_app():
             * **Data Pool**: Analyzes the **entire 3-year historical dataset** to find matching RSI environments.
             * **RSI Matching**: Identifies historical instances where the RSI was within **±2 points** of the current RSI level.
             * **Forward Projection**: Calculates the **Average (Mean)** percentage return for those matching instances exactly 30 and 90 periods into the future.
-            * **Statistical Filter**: EV is only displayed if at least **{MIN_N_THRESHOLD} historical matches (N)** are found to ensure reliability.
-            * **Color Coding**: 🟢 Green supports the trade direction (Bullish positive / Bearish negative). 🔴 Red indicates a contrary historical outcome.
             """)
         with f_col3:
             st.markdown('<div class="footer-header">🏷️ TECHNICAL TAGS</div>', unsafe_allow_html=True)
@@ -1090,6 +1091,12 @@ def run_rsi_divergences_app():
             csv_buffer = get_confirmed_gdrive_data(target_url)
             if csv_buffer and csv_buffer != "HTML_ERROR":
                 master = pd.read_csv(csv_buffer)
+                
+                # --- IDENTIFY MAX DATE FOR HIGHLIGHTING ---
+                date_col_raw = next((c for c in master.columns if 'DATE' in c), None)
+                max_date_str = ""
+                if date_col_raw:
+                    max_date_str = pd.to_datetime(master[date_col_raw]).max().strftime('%Y-%m-%d')
                 
                 t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                 all_tickers = sorted(master[t_col].unique())
@@ -1127,12 +1134,16 @@ def run_rsi_divergences_app():
                                 html_rows = ['<table class="rsi-table"><thead><tr><th style="width:7%">Ticker</th><th style="width:25%">Tags</th><th style="width:8%">P1 Date</th><th style="width:8%">Signal Date</th><th style="width:8%">RSI</th><th style="width:8%">P1 Price</th><th style="width:8%">P2 Price</th><th style="width:8%">Last Close</th><th style="width:10%">EV 30p</th><th style="width:10%">EV 90p</th></tr></thead><tbody>']
                                 
                                 for row in tbl_df.itertuples():
+                                    # Highlight check
+                                    is_latest = (row._6 == max_date_str)
+                                    date_cls = ' class="latest-date"' if is_latest else ''
+                                    
                                     row_html = [
                                         '<tr>',
                                         f'<td style="text-align:left"><b>{row.Ticker}</b></td>',
                                         f'<td style="text-align:left">{style_tags(row.Tags)}</td>',
                                         f'<td style="text-align:center">{row._5}</td>', 
-                                        f'<td style="text-align:center">{row._6}</td>', 
+                                        f'<td style="text-align:center"{date_cls}>{row._6}</td>', 
                                         f'<td style="text-align:center">{row.RSI}</td>',
                                         f'<td style="text-align:left">{row._8}</td>', 
                                         f'<td style="text-align:left">{row._9}</td>', 
@@ -1171,13 +1182,7 @@ def run_rsi_percentiles_app():
         .cell-red { background-color: #fce8e6; color: #c5221f; }
         
         /* Date Highlighting */
-        .latest-date-highlight {
-            background-color: rgba(0,0,0,0.06);
-            border: 1px solid rgba(0,0,0,0.1);
-            border-radius: 4px;
-            padding: 2px 6px;
-            font-weight: 700;
-        }
+        .latest-date { background-color: rgba(255, 244, 229, 0.7); font-weight: 700; color: #e67e22; }
         </style>
     """, unsafe_allow_html=True)
     
@@ -1190,9 +1195,9 @@ def run_rsi_percentiles_app():
         st.markdown("""
         * **Historical Context**: The algorithm analyzes up to **10 years** of daily price history.
         * **Signal Trigger**: 
-            * RSI crosses **ABOVE** the 10th percentile (Leaving Low 10%).
-            * RSI crosses **BELOW** the 90th percentile (Leaving High 90%).
-        * **EV 30p / 90p**: The expected return 30 or 90 days later based on historical matches (also 10-year max lookback).
+            * RSI crosses **ABOVE** the Low Percentile (Leaving Low).
+            * RSI crosses **BELOW** the High Percentile (Leaving High).
+        * **EV 30p / 90p**: The expected return 30 or 90 **trading days** later based on historical matches (also 10-year max lookback).
         * **Color Logic**:
             * 🟢 **Green**: Indicates historical profitability. For 'Leaving Low' signals, this means EV > 0. For 'Leaving High' signals, this means EV < 0 (Shorting is profitable).
             * 🔴 **Red**: Indicates historical loss. The historical EV contradicts the trade direction.
@@ -1200,6 +1205,13 @@ def run_rsi_percentiles_app():
         """)
     
     if data_option:
+        # --- INPUTS FOR PERCENTILES ---
+        c_p1, c_p2 = st.columns(2)
+        with c_p1:
+            in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
+        with c_p2:
+            in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
+        
         results = []
         status_text = st.empty()
         progress_bar = st.progress(0)
@@ -1226,7 +1238,13 @@ def run_rsi_percentiles_app():
                     status_text.text(f"Scanning {ticker}...")
                     d_d, _ = prepare_data(group.copy())
                     if d_d is not None:
-                        sigs = find_rsi_percentile_signals(d_d, ticker)
+                        # PASSING DYNAMIC THRESHOLDS HERE
+                        sigs = find_rsi_percentile_signals(
+                            d_d, 
+                            ticker, 
+                            pct_low=in_low/100.0, 
+                            pct_high=in_high/100.0
+                        )
                         results.extend(sigs)
                     
                     if i % 10 == 0: progress_bar.progress((i + 1) / total)
@@ -1242,41 +1260,32 @@ def run_rsi_percentiles_app():
                 
                 # Helper function for determining cell class
                 def get_ev_cell_html(ev_obj, signal_type):
-                    if not ev_obj:
-                        return "<td>N/A</td>"
-                    
+                    if not ev_obj: return "<td>N/A</td>"
                     ret = ev_obj['return']
                     n = ev_obj['n']
-                    
-                    # Logic: 
-                    # Bullish: Green if Ret > 0, else Red
-                    # Bearish: Green if Ret < 0, else Red
                     is_green = (signal_type == 'Bullish' and ret > 0) or (signal_type == 'Bearish' and ret < 0)
                     cls = "cell-green" if is_green else "cell-red"
-                    
                     val_str = f"{ret*100:+.1f}% (N={n})"
                     return f'<td class="{cls}">{val_str}</td>'
 
                 html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Signal</th><th>RSI</th><th>Threshold</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                 
                 for r in res_df.itertuples():
-                    date_display = r.Date
-                    # Highlight if date matches the latest date in dataset
-                    if r.Date_Obj == max_date_in_set:
-                        date_display = f'<span class="latest-date-highlight">{r.Date}</span>'
+                    # Check if this row date matches the max date in the dataset
+                    is_latest = (r.Date_Obj == max_date_in_set)
+                    date_cls = ' class="latest-date"' if is_latest else ''
                     
-                    # Generate EV cells with color logic
                     ev30_html = get_ev_cell_html(r.EV30_Obj, r.Signal_Type)
                     ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
                         
-                    row_html = f'<tr><td><b>{r.Ticker}</b></td><td>{date_display}</td><td>{r.Signal}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
+                    row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td>{r.Signal}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
                     html_rows.append(row_html)
                 
                 html_rows.append("</tbody></table>")
                 st.markdown("".join(html_rows), unsafe_allow_html=True)
                 
             else:
-                st.info("No tickers found matching criteria (Crossing 10th/90th percentile with N>=5 matches).")
+                st.info(f"No tickers found matching criteria (Crossing {in_low}th/{in_high}th percentile with N>=5 matches).")
                 
         except Exception as e:
             st.error(f"Analysis failed: {e}")
