@@ -1150,6 +1150,11 @@ def run_rsi_scanner_app():
         .footer-header { color: #31333f; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 5px; font-weight: bold; }
         </style>
         """, unsafe_allow_html=True)
+    
+    # 1. SHARED DATA SOURCE SELECTION (Moved to Top)
+    dataset_map = load_dataset_config()
+    options = list(dataset_map.keys())
+    data_option = st.pills("Dataset (for Divergences & Percentiles)", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed")
         
     # 3. TABS (Defined at top so Backtester renders immediately)
     tab_div, tab_pct, tab_bot = st.tabs(["📉 Divergences", "🔢 Percentiles", "🤖 Backtester"])
@@ -1157,6 +1162,9 @@ def run_rsi_scanner_app():
     # --- TAB 3: BACKTESTER (Independent) ---
     with tab_bot:
         st.caption("Historical RSI backtester (Max 10 Year Lookback)")
+        # Note for clarity since pills are now at the top
+        st.caption("ℹ️ *Note: This tool uses the global Ticker Map or Yahoo Finance. It does not use the Dataset selector above.*")
+        
         col_input, col_rest = st.columns([1, 3])
         with col_input:
             ticker = st.text_input("Enter Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
@@ -1292,12 +1300,6 @@ def run_rsi_scanner_app():
                             )
 
     
-    # --- 1. SHARED DATA SOURCE SELECTION ---
-    dataset_map = load_dataset_config()
-    options = list(dataset_map.keys())
-    # Display pills above logic but conceptually it feeds tabs 1 & 2
-    data_option = st.pills("Dataset (for Divergences & Percentiles)", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed")
-    
     # --- 2. DATA PROCESSING (Tabs 1 & 2) ---
     if data_option:
         try:
@@ -1317,14 +1319,6 @@ def run_rsi_scanner_app():
                     target_highlight_weekly = (max_dt_obj - timedelta(days=max_dt_obj.weekday())).strftime('%Y-%m-%d')
                 
                 # --- INPUTS FOR TAB 2 (Must be defined before loop) ---
-                # We render these input widgets *inside* the tab context below to ensure correct placement,
-                # but we need their values *before* the loop.
-                # Streamlit trick: Render them in a container that we 'place' later? No.
-                # We can just define placeholders or render them now but they appear here.
-                # To follow user request "move ... BELOW the Page Notes", we render them inside the tab structure.
-                # But we need the values for the loop. 
-                # Solution: Render them in sidebar? No. 
-                # Solution: We must render the UI structure for Tab 2 *before* the loop starts if we want the loop to use the values.
                 
                 with tab_pct:
                     # NOTES
@@ -1491,235 +1485,6 @@ def run_rsi_scanner_app():
 
         except Exception as e:
             st.error(f"Analysis failed: {e}")
-
-# --- 4. NEW TRADE IDEAS MODULE (Updated for Macro Scanner) ---
-
-@st.cache_data(ttl=3600)
-def load_ticker_map():
-    url = st.secrets.get("URL_TICKER_MAP", URL_TICKER_MAP_DEFAULT)
-    try:
-        csv_buffer = get_confirmed_gdrive_data(url)
-        if csv_buffer and csv_buffer != "HTML_ERROR":
-            df = pd.read_csv(csv_buffer, header=None)
-            if len(df.columns) >= 2:
-                return pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0].str.upper().str.strip()).to_dict()
-    except Exception as e:
-        st.error(f"Failed to load Ticker Map: {e}")
-    return {}
-
-@st.cache_data(ttl=300)
-def get_ticker_technicals(ticker, ticker_map):
-    file_id = ticker_map.get(ticker.upper())
-    if not file_id:
-        return None
-    
-    url = f"https://docs.google.com/uc?export=download&id={file_id}"
-    try:
-        csv_buffer = get_confirmed_gdrive_data(url)
-        if csv_buffer and csv_buffer != "HTML_ERROR":
-            df = pd.read_csv(csv_buffer)
-            df.columns = [c.strip().upper() for c in df.columns]
-            
-            date_col = next((c for c in df.columns if 'DATE' in c), None)
-            if date_col:
-                df[date_col] = pd.to_datetime(df[date_col])
-                df = df.sort_values(date_col)
-                return df
-    except:
-        pass
-    return None
-
-def analyze_trade_setup(ticker, df_tech, df_flow):
-    """
-    Analyzes technicals and flow to generate specific trade suggestions.
-    Returns: score (0-10), reasons (list), suggestions (dict with 'Calls', 'Puts', 'Commons')
-    """
-    score = 5 
-    reasons = []
-    suggestions = {"Buy Calls": None, "Sell Puts": None, "Buy Commons": None}
-    
-    # 1. Technical Data Extraction
-    last = df_tech.iloc[-1]
-    price = last.get('CLOSE', 0)
-    ema8 = last.get('EMA_8', last.get('EMA8', 0))
-    ema21 = last.get('EMA_21', last.get('EMA21', 0))
-    sma200 = last.get('SMA_200', last.get('SMA200', 0))
-    rsi = last.get('RSI_14', last.get('RSI', 50))
-    
-    # Simple levels
-    levels = [l for l in [ema21, sma200] if l > 0]
-    nearest_support = max([l for l in levels if l < price], default=price*0.9)
-    # nearest_resistance = min([l for l in levels if l > price], default=price*1.1)
-
-    # 2. Scoring Logic
-    is_bullish = False
-    
-    # Trend
-    if price > ema8 and price > ema21:
-        score += 2
-        reasons.append("✅ Strong Trend (Above EMA 8 & 21)")
-        is_bullish = True
-    elif price < ema21:
-        score -= 2
-        reasons.append("⚠️ Weak Trend (Below EMA 21)")
-    
-    if price > sma200:
-        score += 1
-        reasons.append("✅ Long-term Uptrend (> SMA 200)")
-    else:
-        reasons.append("⚠️ Long-term Downtrend (< SMA 200)")
-        
-    # RSI
-    if rsi < 40:
-        score += 1
-        reasons.append(f"✅ RSI Oversold ({rsi:.0f}) - Potential Bounce")
-    elif rsi > 70:
-        score -= 1
-        reasons.append(f"⚠️ RSI Overbought ({rsi:.0f}) - Risk of Pullback")
-
-    # Flow
-    net_flow_val = 0
-    if not df_flow.empty:
-        flow_ticker = df_flow[df_flow['Symbol'] == ticker]
-        if not flow_ticker.empty:
-            calls = flow_ticker[flow_ticker['Order Type'] == "Calls Bought"]['Dollars'].sum()
-            puts_sold = flow_ticker[flow_ticker['Order Type'] == "Puts Sold"]['Dollars'].sum()
-            puts_bought = flow_ticker[flow_ticker['Order Type'] == "Puts Bought"]['Dollars'].sum()
-            
-            # Whale Check
-            whales = flow_ticker[flow_ticker['Dollars'] >= 100000].copy()
-            if not whales.empty:
-                w_calls = whales[whales['Order Type'] == "Calls Bought"]['Dollars'].sum()
-                w_puts_buy = whales[whales['Order Type'] == "Puts Bought"]['Dollars'].sum()
-                
-                if w_calls > w_puts_buy:
-                    score += 1
-                    reasons.append(f"🐋 Whale Alert: Bullish flow detected (${w_calls:,.0f})")
-                elif w_puts_buy > w_calls:
-                    score -= 1
-                    reasons.append(f"🐋 Whale Alert: Bearish flow detected (${w_puts_buy:,.0f})")
-            
-            net_flow_val = calls + puts_sold - puts_bought
-            if net_flow_val > 1_000_000:
-                score += 2
-                reasons.append(f"✅ Strong Net Flow (+${net_flow_val/1e6:.1f}M)")
-            elif net_flow_val < -1_000_000:
-                score -= 2
-                reasons.append(f"⚠️ Net Bearish Flow")
-
-    final_score = min(max(score, 0), 10)
-    
-    # 3. Trade Suggestions Logic
-    # Expiry defaults
-    exp_str = "30-45 Days"
-    
-    if final_score >= 6:
-        # Bullish Bias
-        
-        # BUY CALLS
-        strike_c = math.ceil(price * 1.02) # Slightly OTM
-        take_loss = ema21 if ema21 < price else price * 0.95
-        suggestions["Buy Calls"] = f"""
-        - **Strategy:** Long Call / Call Debit Spread
-        - **Strike:** ${strike_c} (OTM)
-        - **Expiry:** {exp_str}
-        - **Stop Loss:** Close < ${take_loss:.2f}
-        """
-        
-        # SELL PUTS (High Probability)
-        # Rule: Never > 10% OTM. Ideally at Support.
-        strike_p = math.floor(nearest_support)
-        pct_otm = (price - strike_p) / price
-        if pct_otm > 0.10: 
-            strike_p = math.floor(price * 0.92) # Cap at 8% OTM if support is too deep
-        
-        suggestions["Sell Puts"] = f"""
-        - **Strategy:** Short Put (Cash Secured)
-        - **Strike:** ${strike_p}
-        - **Expiry:** {exp_str}
-        - **Rationale:** Selling volatility at support.
-        """
-        
-        # BUY COMMONS
-        suggestions["Buy Commons"] = f"""
-        - **Entry:** Current (${price:.2f})
-        - **Stop:** ${nearest_support:.2f}
-        - **Target:** ${(price*1.15):.2f}
-        """
-        
-    elif final_score <= 4:
-        # Bearish Bias (We usually don't suggest Shorting Commons here, but Puts maybe)
-        suggestions["Buy Calls"] = "No Setup (Trend/Flow Weak)"
-        suggestions["Sell Puts"] = "No Setup (Risk of downside breakdown)"
-        suggestions["Buy Commons"] = "No Setup (Wait for reversal)"
-        
-    else:
-        # Neutral
-        suggestions["Buy Calls"] = "No Setup (Mixed Signals)"
-        suggestions["Sell Puts"] = f"**Strike:** ${math.floor(price*0.90)} (Deep OTM) only if IV High."
-        suggestions["Buy Commons"] = "Hold / Wait"
-
-    return final_score, reasons, suggestions
-
-# Helper function to fetch and truncate CSV data for the AI
-def fetch_and_prepare_ai_context(url, label, max_rows=90):
-    try:
-        csv_buffer = get_confirmed_gdrive_data(url)
-        if csv_buffer and csv_buffer != "HTML_ERROR":
-            df = pd.read_csv(csv_buffer)
-            # Find the date column to sort
-            date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
-            if date_col:
-                df[date_col] = pd.to_datetime(df[date_col])
-                df = df.sort_values(by=date_col)
-            
-            # If multiple tickers, we need to keep the structure but truncate per group
-            t_col = next((c for c in df.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-            
-            if t_col:
-                # Group by ticker, take last N rows, then combine back to CSV string
-                df_trunc = df.groupby(t_col).tail(max_rows)
-                return f"\n=== {label} DATA (Last {max_rows} rows per ticker) ===\n" + df_trunc.to_csv(index=False)
-            else:
-                # If it's a macro file (no ticker column, just dates), just take tail
-                df_trunc = df.tail(max_rows)
-                return f"\n=== {label} DATA (Last {max_rows} rows) ===\n" + df_trunc.to_csv(index=False)
-    except Exception as e:
-        return f"\n=== {label} DATA ERROR: {str(e)} ===\n"
-    return f"\n=== {label} DATA NOT FOUND ===\n"
-
-@st.cache_data(ttl=3600)
-def fetch_yahoo_data(ticker):
-    """
-    Fallback method to fetch data from Yahoo Finance if Drive file is missing.
-    Returns dataframe compatible with the app's analysis functions.
-    """
-    try:
-        t = yf.Ticker(ticker)
-        # Fetch 10y history to match the app's standard lookback
-        df = t.history(period="10y")
-        if df.empty: return None
-        
-        df = df.reset_index()
-        # Ensure timezone unaware for compatibility
-        if df["Date"].dt.tz is not None:
-            df["Date"] = df["Date"].dt.tz_localize(None)
-            
-        # Rename to match app standard
-        df = df.rename(columns={"Date": "DATE", "Close": "CLOSE", "Volume": "VOLUME", "High": "HIGH", "Low": "LOW", "Open": "OPEN"})
-        df.columns = [c.upper() for c in df.columns]
-        
-        # Calculate RSI 14
-        delta = df["CLOSE"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df["RSI"] = 100 - (100 / (1 + rs))
-        df["RSI_14"] = df["RSI"] # Alias
-        
-        return df
-    except Exception:
-        return None
 
 def run_trade_ideas_app(df_global):
     # --- UPDATED WARNING MESSAGE ---
