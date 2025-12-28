@@ -1099,19 +1099,6 @@ def run_rsi_divergences_app():
                 if date_col_raw:
                     max_date_str = pd.to_datetime(master[date_col_raw]).max().strftime('%Y-%m-%d')
                 
-                # --- CALCULATE WEEKLY HIGHLIGHT TARGET ---
-                # Logic: If run Mon-Fri -> Highlight start of LAST week
-                #        If run Sat-Sun -> Highlight start of THIS week
-                today_obj = date.today()
-                wd = today_obj.weekday() # Mon=0, Sun=6
-                
-                if wd >= 5: # Sat or Sun
-                    days_sub = wd # Go back to this week's Monday
-                else: # Mon-Fri
-                    days_sub = wd + 7 # Go back to last week's Monday
-                
-                target_weekly_str = (today_obj - timedelta(days=days_sub)).strftime('%Y-%m-%d')
-                
                 t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                 all_tickers = sorted(master[t_col].unique())
                 with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
@@ -1149,11 +1136,7 @@ def run_rsi_divergences_app():
                                 
                                 for row in tbl_df.itertuples():
                                     # Highlight check
-                                    if tf == 'Daily':
-                                        is_latest = (row._6 == max_date_str)
-                                    else:
-                                        is_latest = (row._6 == target_weekly_str)
-                                        
+                                    is_latest = (row._6 == max_date_str)
                                     date_cls = ' class="latest-date"' if is_latest else ''
                                     
                                     row_html = [
@@ -1223,7 +1206,16 @@ def run_rsi_percentiles_app():
         """)
     
     if data_option:
+        # --- INPUTS FOR PERCENTILES ---
+        c_p1, c_p2 = st.columns(2)
+        with c_p1:
+            in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
+        with c_p2:
+            in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
+        
         results = []
+        status_text = st.empty()
+        progress_bar = st.progress(0)
         max_date_in_set = date.min
         
         try:
@@ -1239,25 +1231,6 @@ def run_rsi_percentiles_app():
                 date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
                 if date_col_raw:
                     max_date_in_set = pd.to_datetime(master[date_col_raw]).max().date()
-                
-                # --- VIEW SCANNED TICKERS ---
-                all_tickers = sorted(master[t_col].unique())
-                with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-                    sq = st.text_input("Filter...").upper()
-                    ft = [t for t in all_tickers if sq in t]
-                    cols = st.columns(6)
-                    for i, ticker in enumerate(ft): cols[i % 6].write(ticker)
-
-                # --- PROGRESS BAR ---
-                status_text = st.empty()
-                progress_bar = st.progress(0)
-
-                # --- INPUTS FOR PERCENTILES ---
-                c_p1, c_p2 = st.columns(2)
-                with c_p1:
-                    in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
-                with c_p2:
-                    in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
                 
                 grouped = master.groupby(t_col)
                 grouped_list = list(grouped)
@@ -1278,45 +1251,352 @@ def run_rsi_percentiles_app():
                     
                     if i % 10 == 0: progress_bar.progress((i + 1) / total)
                 progress_bar.progress(100)
-                status_text.empty()
-            
-                if results:
-                    res_df = pd.DataFrame(results)
-                    res_df = res_df.sort_values(by='Date', ascending=False)
-                    
-                    st.subheader(f"Found {len(res_df)} Opportunities")
-                    
-                    # Helper function for determining cell class
-                    def get_ev_cell_html(ev_obj, signal_type):
-                        if not ev_obj: return "<td>N/A</td>"
-                        ret = ev_obj['return']
-                        n = ev_obj['n']
-                        is_green = (signal_type == 'Bullish' and ret > 0) or (signal_type == 'Bearish' and ret < 0)
-                        cls = "cell-green" if is_green else "cell-red"
-                        val_str = f"{ret*100:+.1f}% (N={n})"
-                        return f'<td class="{cls}">{val_str}</td>'
 
-                    html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Signal</th><th>RSI</th><th>Threshold</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+            status_text.empty()
+            
+            if results:
+                res_df = pd.DataFrame(results)
+                res_df = res_df.sort_values(by='Date', ascending=False)
+                
+                st.subheader(f"Found {len(res_df)} Opportunities")
+                
+                # Helper function for determining cell class
+                def get_ev_cell_html(ev_obj, signal_type):
+                    if not ev_obj: return "<td>N/A</td>"
+                    ret = ev_obj['return']
+                    n = ev_obj['n']
+                    is_green = (signal_type == 'Bullish' and ret > 0) or (signal_type == 'Bearish' and ret < 0)
+                    cls = "cell-green" if is_green else "cell-red"
+                    val_str = f"{ret*100:+.1f}% (N={n})"
+                    return f'<td class="{cls}">{val_str}</td>'
+
+                html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Signal</th><th>RSI</th><th>Threshold</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                
+                for r in res_df.itertuples():
+                    # Check if this row date matches the max date in the dataset
+                    is_latest = (r.Date_Obj == max_date_in_set)
+                    date_cls = ' class="latest-date"' if is_latest else ''
                     
-                    for r in res_df.itertuples():
-                        # Check if this row date matches the max date in the dataset
-                        is_latest = (r.Date_Obj == max_date_in_set)
-                        date_cls = ' class="latest-date"' if is_latest else ''
+                    ev30_html = get_ev_cell_html(r.EV30_Obj, r.Signal_Type)
+                    ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
                         
-                        ev30_html = get_ev_cell_html(r.EV30_Obj, r.Signal_Type)
-                        ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
-                            
-                        row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td>{r.Signal}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
-                        html_rows.append(row_html)
-                    
-                    html_rows.append("</tbody></table>")
-                    st.markdown("".join(html_rows), unsafe_allow_html=True)
-                    
-                else:
-                    st.info(f"No tickers found matching criteria (Crossing {in_low}th/{in_high}th percentile with N>=5 matches).")
+                    row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td>{r.Signal}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
+                    html_rows.append(row_html)
+                
+                html_rows.append("</tbody></table>")
+                st.markdown("".join(html_rows), unsafe_allow_html=True)
+                
+            else:
+                st.info(f"No tickers found matching criteria (Crossing {in_low}th/{in_high}th percentile with N>=5 matches).")
                 
         except Exception as e:
             st.error(f"Analysis failed: {e}")
+
+# --- 4. NEW TRADE IDEAS MODULE ---
+
+@st.cache_data(ttl=3600)
+def load_ticker_map():
+    """Loads the Ticker -> File ID map from the provided URL."""
+    url = st.secrets.get("URL_TICKER_MAP", URL_TICKER_MAP_DEFAULT)
+    try:
+        csv_buffer = get_confirmed_gdrive_data(url)
+        if csv_buffer and csv_buffer != "HTML_ERROR":
+            df = pd.read_csv(csv_buffer, header=None)
+            # Assuming format is Ticker, ID or similar. 
+            # We'll standardize to a dictionary: {"AAPL": "12345...", "TSLA": "67890..."}
+            if len(df.columns) >= 2:
+                return pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0].str.upper().str.strip()).to_dict()
+    except Exception as e:
+        st.error(f"Failed to load Ticker Map: {e}")
+    return {}
+
+@st.cache_data(ttl=300)
+def get_ticker_technicals(ticker, ticker_map):
+    """Fetches the specific pre-calculated technicals CSV for a ticker."""
+    file_id = ticker_map.get(ticker.upper())
+    if not file_id:
+        return None
+    
+    # Construct direct download URL
+    url = f"https://docs.google.com/uc?export=download&id={file_id}"
+    try:
+        csv_buffer = get_confirmed_gdrive_data(url)
+        if csv_buffer and csv_buffer != "HTML_ERROR":
+            df = pd.read_csv(csv_buffer)
+            # Standardize columns just in case
+            df.columns = [c.strip().upper() for c in df.columns]
+            
+            # Sort by date
+            date_col = next((c for c in df.columns if 'DATE' in c), None)
+            if date_col:
+                df[date_col] = pd.to_datetime(df[date_col])
+                df = df.sort_values(date_col)
+                return df
+    except:
+        pass
+    return None
+
+def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
+    """
+    Method 1 Logic: Heuristic Rule Engine
+    Returns a score (0-10) and a list of observations.
+    """
+    score = 5  # Start neutral
+    reasons = []
+    
+    # Get latest data points
+    last = df_tech.iloc[-1]
+    price = last.get('CLOSE', 0)
+    ema8 = last.get('EMA_8', last.get('EMA8', 0))
+    ema21 = last.get('EMA_21', last.get('EMA21', 0))
+    sma200 = last.get('SMA_200', last.get('SMA200', 0))
+    rsi = last.get('RSI_14', last.get('RSI', 50))
+    
+    # --- Technical Analysis ---
+    if trade_type in ["Buy Calls", "Sell Puts", "Buy Shares"]:
+        # BULLISH RULES
+        if price > ema8 and price > ema21:
+            score += 2
+            reasons.append("✅ Price is strong (Above EMA 8 & 21)")
+        elif price < ema21:
+            score -= 2
+            reasons.append("⚠️ Price is weak (Below EMA 21)")
+            
+        if price > sma200:
+            score += 1
+            reasons.append("✅ In long-term uptrend (Above SMA 200)")
+        else:
+            reasons.append("⚠️ Below SMA 200 (Long-term downtrend)")
+            
+        if rsi < 40:
+            score += 1
+            reasons.append("✅ RSI is oversold (Potential bounce)")
+        elif rsi > 70:
+            score -= 1
+            reasons.append("⚠️ RSI is overbought (Risk of pullback)")
+            
+    else:
+        # BEARISH RULES (Buy Puts, Sell Calls)
+        if price < ema8 and price < ema21:
+            score += 2
+            reasons.append("✅ Price is weak (Below EMA 8 & 21)")
+        elif price > ema21:
+            score -= 2
+            reasons.append("⚠️ Price is strong (Above EMA 21)")
+            
+        if price < sma200:
+            score += 1
+            reasons.append("✅ In long-term downtrend (Below SMA 200)")
+            
+        if rsi > 60:
+            score += 1
+            reasons.append("✅ RSI is elevated (Room to fall)")
+        elif rsi < 30:
+            score -= 1
+            reasons.append("⚠️ RSI is oversold (Risk of bounce)")
+
+    # --- Flow Analysis ---
+    # Check Net Flow in Options DB
+    if not df_flow.empty:
+        flow_ticker = df_flow[df_flow['Symbol'] == ticker]
+        if not flow_ticker.empty:
+            # Simple Net Delta
+            calls = flow_ticker[flow_ticker['Order Type'] == "Calls Bought"]['Dollars'].sum()
+            puts_sold = flow_ticker[flow_ticker['Order Type'] == "Puts Sold"]['Dollars'].sum()
+            puts_bought = flow_ticker[flow_ticker['Order Type'] == "Puts Bought"]['Dollars'].sum()
+            
+            net_bullish = calls + puts_sold - puts_bought
+            
+            if trade_type in ["Buy Calls", "Sell Puts", "Buy Shares"]:
+                if net_bullish > 1_000_000:
+                    score += 2
+                    reasons.append(f"✅ Strong Bullish Flow (+${net_bullish/1e6:.1f}M)")
+                elif net_bullish < -1_000_000:
+                    score -= 2
+                    reasons.append(f"⚠️ Bearish Flow detected (${net_bullish/1e6:.1f}M)")
+            else:
+                if net_bullish < -1_000_000:
+                    score += 2
+                    reasons.append(f"✅ Strong Bearish Flow ({net_bullish/1e6:.1f}M)")
+                elif net_bullish > 1_000_000:
+                    score -= 2
+                    reasons.append(f"⚠️ Bullish Flow detected (+${net_bullish/1e6:.1f}M)")
+
+    return min(max(score, 0), 10), reasons
+
+def run_trade_ideas_app(df_global):
+    st.title("💡 Trade Ideas Generator")
+    st.caption("Combine Technicals, Flows, and AI for high-conviction setups.")
+    
+    ticker_map = load_ticker_map()
+    
+    tabs = st.tabs(["🔎 Analyze Ticker", "🤖 Ask AI", "🏆 Top 3 Scans"])
+    
+    # --- TAB 1: TICKER ANALYZER ---
+    with tabs[0]:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            # Default to AAPL if map is empty, otherwise first key
+            default_t = "NVDA"
+            t_input = st.text_input("Ticker Symbol", value=default_t).upper().strip()
+        with c2:
+            trade_type = st.selectbox("Trade Type", ["Buy Calls", "Sell Puts", "Buy Puts", "Buy Shares"])
+        with c3:
+            duration = st.selectbox("Duration", ["Swing (1-4 Weeks)", "Leap (>1 Year)", "Scalp (Daily)"])
+            
+        if st.button("Analyze Trade", type="primary"):
+            with st.spinner(f"Pulling data for {t_input}..."):
+                tech_df = get_ticker_technicals(t_input, ticker_map)
+                
+                if tech_df is None:
+                    st.error(f"Could not load technical data for {t_input}. Check if it exists in the Ticker Map.")
+                else:
+                    # 1. Run Logic
+                    score, reasons = analyze_trade_setup(t_input, trade_type, tech_df, df_global)
+                    
+                    # 2. Display Result
+                    st.markdown("---")
+                    res_col1, res_col2 = st.columns([1, 2])
+                    
+                    with res_col1:
+                        st.metric("Conviction Score", f"{score}/10")
+                        if score >= 7:
+                            st.success("High Conviction Setup")
+                        elif score <= 4:
+                            st.error("Low Conviction Setup")
+                        else:
+                            st.warning("Neutral / Mixed Setup")
+                            
+                    with res_col2:
+                        st.subheader("Observations")
+                        for r in reasons:
+                            st.write(r)
+                            
+                    # 3. Mini Charts
+                    st.markdown("### 📉 Snapshot")
+                    # Assuming date is col 0, close is typically 'CLOSE'
+                    if 'CLOSE' in tech_df.columns:
+                        chart_data = tech_df.tail(90).set_index(tech_df.columns[0])['CLOSE']
+                        st.line_chart(chart_data)
+                    else:
+                        st.write("Chart data unavailable in CSV structure.")
+
+    # --- TAB 2: ASK AI (GEMINI) ---
+    with tabs[1]:
+        st.markdown("#### 🧠 AI Trade Thesis")
+        st.info("This module sends the gathered data to Google Gemini to write a trade plan.")
+        
+        ai_ticker = st.text_input("Ticker for AI", value="TSLA").upper().strip()
+        
+        if st.button("Generate AI Thesis"):
+            if "GOOGLE_API_KEY" not in st.secrets:
+                st.error("Please add `GOOGLE_API_KEY` to your .streamlit/secrets.toml file.")
+            else:
+                import google.generativeai as genai
+                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+                
+                with st.spinner("Gathering data and consulting the oracle..."):
+                    # Gather context
+                    tech_df = get_ticker_technicals(ai_ticker, ticker_map)
+                    
+                    # Technical Context String
+                    tech_context = "No technical data available."
+                    if tech_df is not None:
+                        last = tech_df.iloc[-1]
+                        tech_context = f"""
+                        Price: {last.get('CLOSE')}
+                        RSI(14): {last.get('RSI_14', last.get('RSI'))}
+                        EMA(8): {last.get('EMA_8', last.get('EMA8'))}
+                        EMA(21): {last.get('EMA_21', last.get('EMA21'))}
+                        SMA(200): {last.get('SMA_200', last.get('SMA200'))}
+                        Trend: {'Above' if last.get('CLOSE') > last.get('SMA_200', 0) else 'Below'} 200 SMA.
+                        """
+                    
+                    # Flow Context String
+                    flow_context = "No significant options flow."
+                    f_sub = df_global[df_global['Symbol'] == ai_ticker]
+                    if not f_sub.empty:
+                        bull_flow = f_sub[f_sub['Order Type'].isin(['Calls Bought', 'Puts Sold'])]['Dollars'].sum()
+                        bear_flow = f_sub[f_sub['Order Type'] == 'Puts Bought']['Dollars'].sum()
+                        flow_context = f"Recent Bullish Flow: ${bull_flow:,.0f}, Recent Bearish Flow: ${bear_flow:,.0f}"
+                        
+                    # Prompt Construction
+                    prompt = f"""
+                    Act as a senior derivatives trader. Analyze {ai_ticker} for a potential trade.
+                    
+                    DATA CONTEXT:
+                    {tech_context}
+                    
+                    OPTIONS FLOW CONTEXT:
+                    {flow_context}
+                    
+                    TASK:
+                    Write a concise trade thesis. 
+                    1. Determine the bias (Bullish/Bearish/Neutral).
+                    2. Suggest a specific structure (e.g., Sell Put Spread, Buy Call).
+                    3. List 3 key risks.
+                    
+                    Keep it professional, brief, and actionable.
+                    """
+                    
+                    try:
+                        model = genai.GenerativeModel('gemini-pro')
+                        response = model.generate_content(prompt)
+                        st.markdown("---")
+                        st.markdown(response.text)
+                    except Exception as e:
+                        st.error(f"AI Error: {e}")
+
+    # --- TAB 3: TOP 3 SCANNER ---
+    with tabs[2]:
+        st.markdown("#### 🏆 Automated Opportunity Scanner")
+        st.write("Scans the Top 20 'Smart Money' tickers for the best technical alignment.")
+        
+        if st.button("Scan Top 20"):
+            progress = st.progress(0, text="Initializing scan...")
+            
+            # 1. Get Top 20 from Smart Money Logic (Reusing simplified logic from Rankings)
+            # This is a mini-version of the rankings calculation to get the list
+            f_filtered = df_global[df_global['Order Type'].isin(["Calls Bought", "Puts Sold", "Puts Bought"])].copy()
+            f_filtered["Signed_Dollars"] = np.where(
+                f_filtered['Order Type'].isin(["Calls Bought", "Puts Sold"]), 
+                f_filtered["Dollars"], -f_filtered["Dollars"]
+            )
+            stats = f_filtered.groupby("Symbol")["Signed_Dollars"].sum().reset_index().sort_values("Signed_Dollars", ascending=False)
+            top_tickers = stats.head(20)["Symbol"].tolist()
+            
+            candidates = []
+            
+            # 2. Iterate and Score
+            for i, t in enumerate(top_tickers):
+                progress.progress((i+1)/20, text=f"Analyzing {t}...")
+                t_df = get_ticker_technicals(t, ticker_map)
+                
+                if t_df is not None:
+                    # Score 'Bullish' setup by default for high flow tickers
+                    score, reasons = analyze_trade_setup(t, "Buy Calls", t_df, df_global)
+                    candidates.append({
+                        "Ticker": t,
+                        "Score": score,
+                        "Price": t_df.iloc[-1].get('CLOSE'),
+                        "Reasons": reasons
+                    })
+            
+            progress.empty()
+            
+            # 3. Sort and Display Top 3
+            candidates = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
+            
+            st.success("Scan Complete!")
+            
+            cols = st.columns(3)
+            for i, cand in enumerate(candidates):
+                with cols[i]:
+                    with st.container(border=True):
+                        st.markdown(f"### #{i+1} {cand['Ticker']}")
+                        st.metric("Score", f"{cand['Score']}/10", f"${cand['Price']:.2f}")
+                        for r in cand['Reasons']:
+                            st.caption(r)
 
 # --- 3. MAIN EXECUTION ---
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
@@ -1380,6 +1660,7 @@ try:
         st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
         st.Page(run_rsi_divergences_app, title="RSI Divergences", icon="📈", url_path="rsi_divergences"),
         st.Page(run_rsi_percentiles_app, title="RSI Percentiles", icon="🔢", url_path="rsi_percentiles"),
+        st.Page(lambda: run_trade_ideas_app(df_global), title="Trade Ideas", icon="💡", url_path="trade_ideas"),
     ])
 
     st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
