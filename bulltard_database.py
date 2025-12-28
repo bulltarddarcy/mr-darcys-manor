@@ -1091,10 +1091,11 @@ def run_pivot_tables_app(df):
         st.dataframe(tbl_rr.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl_rr, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
     else: st.caption("No matched RR pairs found.")
 
-def run_rsi_divergences_app():
-    st.title("📈 RSI Divergences")
+def run_rsi_scanner_app():
+    st.title("🤖 RSI Scanner")
     st.caption("ℹ️ On mobile, set your browser to View Desktop Site")
 
+    # Shared CSS
     st.markdown("""
         <style>
         .top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; }
@@ -1102,9 +1103,13 @@ def run_rsi_divergences_app():
         .rsi-table thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
         .rsi-table tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; vertical-align: middle !important; white-space: nowrap; height: 50px; }
         
-        /* Cell Highlighting */
-        .ev-positive { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
-        .ev-negative { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
+        .rsi-p-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        .rsi-p-table thead tr th { text-align: left; padding: 10px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; }
+        .rsi-p-table tbody tr td { padding: 12px 10px; border-bottom: 1px solid #eee; font-weight: 500; }
+        
+        /* Cell Highlighting & Colors */
+        .ev-positive, .cell-green { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
+        .ev-negative, .cell-red { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
         .ev-neutral { color: #5f6368; }
         .latest-date { background-color: rgba(255, 244, 229, 0.7) !important; font-weight: 700; color: #e67e22; }
         
@@ -1113,259 +1118,185 @@ def run_rsi_divergences_app():
         </style>
         """, unsafe_allow_html=True)
         
+    # 1. SHARED DATA SOURCE SELECTION
     dataset_map = load_dataset_config()
+    options = list(dataset_map.keys())
+    data_option = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed")
     
-    data_option = st.pills("Dataset", options=list(dataset_map.keys()), selection_mode="single", default=list(dataset_map.keys())[0], label_visibility="collapsed")
+    # Initialize variables for scanned results
+    res_div_df = pd.DataFrame()
+    res_pct_df = pd.DataFrame()
+    max_date_in_set = date.min
+    target_highlight_weekly = ""
+    target_highlight_daily = ""
     
-    with st.expander("ℹ️ Strategy Logic & Tag Explanations"):
-        f_col1, f_col2, f_col3 = st.columns(3)
-        with f_col1:
-            st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
-            st.markdown(f"""
-            * **Signal Identification**: Scans for price extremes (New Low for Bullish, New High for Bearish) within a **{SIGNAL_LOOKBACK_PERIOD}-period window**.
-            * **Divergence Mechanism**: Compares the RSI at a new price extreme to a previous RSI extreme found within the **{DIVERGENCE_LOOKBACK}-period lookback**.
-            * **True Pivot Logic**: The algorithm ensures the price point is a true local extreme (True Low/High). If the RSI crosses the 50 line between the two comparison points, the divergence is invalidated (reset).
-            """)
-        with f_col2:
-            st.markdown('<div class="footer-header">🔮 EXPECTED VALUE (EV) ANALYSIS</div>', unsafe_allow_html=True)
-            st.markdown(f"""
-            * **Data Pool**: Analyzes the **entire 3-year historical dataset** to find matching RSI environments.
-            * **RSI Matching**: Identifies historical instances where the RSI was within **±2 points** of the current RSI level.
-            * **Forward Projection**: Calculates the **Average (Mean)** percentage return for those matching instances exactly 30 and 90 periods into the future.
-            """)
-        with f_col3:
-            st.markdown('<div class="footer-header">🏷️ TECHNICAL TAGS</div>', unsafe_allow_html=True)
-            st.markdown(f"""
-            * **EMA{EMA8_PERIOD} / EMA{EMA21_PERIOD}**: Added if the current price is trading **above** (Bullish) or **below** (Bearish) these exponential moving averages.
-            * **VOL_HIGH**: Triggered if the signal candle volume is > 150% of the **{VOL_SMA_PERIOD}-period average**.
-            * **VOL_GROW**: Triggered if volume at the current signal point (P2) is higher than the volume at the previous extreme (P1).
-            """)
-
+    # 2. DATA PROCESSING (Shared for Efficiency)
     if data_option:
         try:
             target_url = st.secrets[dataset_map[data_option]]
             csv_buffer = get_confirmed_gdrive_data(target_url)
+            
             if csv_buffer and csv_buffer != "HTML_ERROR":
                 master = pd.read_csv(csv_buffer)
-                
-                # --- IDENTIFY MAX DATE FOR HIGHLIGHTING ---
-                # Search case-insensitively for date column
-                date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
-                max_dt = pd.to_datetime(master[date_col_raw]).max() if date_col_raw else date.today()
-                
-                # Daily Highlight: Exact string match
-                max_date_str = max_dt.strftime('%Y-%m-%d')
-                
-                # Weekly Highlight: Monday of the week containing the max date
-                # We subtract the weekday (Mon=0...Sun=6) from the date
-                monday_of_latest_week = (max_dt - timedelta(days=max_dt.weekday())).strftime('%Y-%m-%d')
-                
                 t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+                
+                # Identify Max Date
+                date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
+                if date_col_raw:
+                    max_dt_obj = pd.to_datetime(master[date_col_raw]).max()
+                    max_date_in_set = max_dt_obj.date()
+                    target_highlight_daily = max_dt_obj.strftime('%Y-%m-%d')
+                    target_highlight_weekly = (max_dt_obj - timedelta(days=max_dt_obj.weekday())).strftime('%Y-%m-%d')
+                
+                # SHARED "View Tickers" Expander
                 all_tickers = sorted(master[t_col].unique())
                 with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
                     sq = st.text_input("Filter...").upper()
                     ft = [t for t in all_tickers if sq in t]
                     cols = st.columns(6)
                     for i, ticker in enumerate(ft): cols[i % 6].write(ticker)
+
+                # 3. TABS
+                tab_div, tab_pct = st.tabs(["📉 Divergences", "🔢 Percentiles"])
                 
-                raw_results = []
-                progress_bar = st.progress(0, text="Scanning...")
+                # --- INPUTS FOR TAB 2 (Must be defined before loop) ---
+                with tab_pct:
+                    c_p1, c_p2 = st.columns(2)
+                    with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
+                    with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
+                
+                # --- MAIN SCAN LOOP (Runs Once for Both Strategies) ---
+                raw_results_div = []
+                raw_results_pct = []
+                
+                progress_bar = st.progress(0, text="Scanning strategies...")
                 grouped = master.groupby(t_col)
                 grouped_list = list(grouped)
                 total_groups = len(grouped_list)
                 
                 for i, (ticker, group) in enumerate(grouped_list):
+                    # Prepare Data ONCE
                     d_d, d_w = prepare_data(group.copy())
-                    if d_d is not None: raw_results.extend(find_divergences(d_d, ticker, 'Daily'))
-                    if d_w is not None: raw_results.extend(find_divergences(d_w, ticker, 'Weekly'))
                     
-                    if i % 5 == 0 or i == total_groups - 1:
+                    if d_d is not None:
+                        # 1. Run Divergence Scan (Daily)
+                        raw_results_div.extend(find_divergences(d_d, ticker, 'Daily'))
+                        # 2. Run Percentile Scan (Daily)
+                        raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0))
+                    
+                    if d_w is not None:
+                        # 3. Run Divergence Scan (Weekly)
+                        raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly'))
+                    
+                    if i % 10 == 0 or i == total_groups - 1:
                         progress_bar.progress((i + 1) / total_groups)
                 
-                if raw_results:
-                    res_df = pd.DataFrame(raw_results).sort_values(by='Signal Date', ascending=False)
-                    consolidated = res_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
-                    
-                    for tf in ['Daily', 'Weekly']:
-                        # Determine highlight target for this timeframe loop
-                        target_highlight = monday_of_latest_week if tf == 'Weekly' else max_date_str
+                progress_bar.empty()
+                
+                # --- OUTPUT TAB 1: DIVERGENCES ---
+                with tab_div:
+                    with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
+                        f_col1, f_col2, f_col3 = st.columns(3)
+                        with f_col1:
+                            st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
+                            st.markdown(f"""
+                            * **Signal**: Scans for price extremes (Low/High) in **{SIGNAL_LOOKBACK_PERIOD}p window**.
+                            * **Divergence**: Compares RSI at new extreme to previous extreme in **{DIVERGENCE_LOOKBACK}p lookback**.
+                            """)
+                        with f_col2:
+                            st.markdown('<div class="footer-header">🔮 EV ANALYSIS</div>', unsafe_allow_html=True)
+                            st.markdown(f"""
+                            * **Pool**: 3-Year historical dataset.
+                            * **Projection**: Avg return 30 & 90 periods later for matching RSI environments (±2 pts).
+                            """)
+                        with f_col3:
+                            st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
+                            st.markdown(f"""
+                            * **EMA**: Price relation to EMA{EMA8_PERIOD}/{EMA21_PERIOD}.
+                            * **VOL**: High volume (>150% SMA) or Growing volume.
+                            """)
+
+                    if raw_results_div:
+                        res_div_df = pd.DataFrame(raw_results_div).sort_values(by='Signal Date', ascending=False)
+                        # Deduplicate: 1 signal per Ticker/Type/Timeframe
+                        consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
                         
-                        for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                            st.subheader(f"{emoji} {tf} {s_type} Signals")
-                            tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
+                        for tf in ['Daily', 'Weekly']:
+                            target_highlight = target_highlight_weekly if tf == 'Weekly' else target_highlight_daily
                             
-                            if not tbl_df.empty:
-                                html_rows = ['<table class="rsi-table"><thead><tr><th style="width:7%">Ticker</th><th style="width:25%">Tags</th><th style="width:8%">P1 Date</th><th style="width:8%">Signal Date</th><th style="width:8%">RSI</th><th style="width:8%">P1 Price</th><th style="width:8%">P2 Price</th><th style="width:8%">Last Close</th><th style="width:10%">EV 30p</th><th style="width:10%">EV 90p</th></tr></thead><tbody>']
+                            for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
+                                st.subheader(f"{emoji} {tf} {s_type} Signals")
+                                tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                 
-                                for row in tbl_df.itertuples():
-                                    # Highlight check
-                                    is_latest = (row._6 == target_highlight)
-                                    date_cls = ' class="latest-date"' if is_latest else ''
+                                if not tbl_df.empty:
+                                    html_rows = ['<table class="rsi-table"><thead><tr><th style="width:7%">Ticker</th><th style="width:25%">Tags</th><th style="width:8%">P1 Date</th><th style="width:8%">Signal Date</th><th style="width:8%">RSI</th><th style="width:8%">P1 Price</th><th style="width:8%">P2 Price</th><th style="width:8%">Last Close</th><th style="width:10%">EV 30p</th><th style="width:10%">EV 90p</th></tr></thead><tbody>']
                                     
-                                    row_html = [
-                                        '<tr>',
-                                        f'<td style="text-align:left"><b>{row.Ticker}</b></td>',
-                                        f'<td style="text-align:left">{style_tags(row.Tags)}</td>',
-                                        f'<td style="text-align:center">{row._5}</td>', 
-                                        f'<td style="text-align:center"{date_cls}>{row._6}</td>', 
-                                        f'<td style="text-align:center">{row.RSI}</td>',
-                                        f'<td style="text-align:left">{row._8}</td>', 
-                                        f'<td style="text-align:left">{row._9}</td>', 
-                                        f'<td style="text-align:left">{row._10}</td>' 
-                                    ]
-                                    
-                                    for data in [row.ev30_raw, row.ev90_raw]:
-                                        if data:
-                                            is_pos = data['return'] > 0
-                                            cls = ("ev-positive" if is_pos else "ev-negative") if s_type == 'Bullish' else ("ev-positive" if not is_pos else "ev-negative")
-                                            row_html.append(f'<td class="{cls}">{data["return"]*100:+.1f}% <br><small>(${data["price"]:,.2f}, N={data["n"]})</small></td>')
-                                        else: 
-                                            row_html.append('<td class="ev-neutral">N/A<br><small>&nbsp;</small></td>')
-                                    
-                                    row_html.append('</tr>')
-                                    html_rows.append("".join(row_html))
-                                
-                                html_rows.append('</tbody></table>')
-                                st.markdown("".join(html_rows), unsafe_allow_html=True)
-                            else: st.write("No signals.")
-                else: st.warning("No signals.")
+                                    for row in tbl_df.itertuples():
+                                        is_latest = (row._6 == target_highlight)
+                                        date_cls = ' class="latest-date"' if is_latest else ''
+                                        
+                                        row_html = [
+                                            '<tr>',
+                                            f'<td style="text-align:left"><b>{row.Ticker}</b></td>',
+                                            f'<td style="text-align:left">{style_tags(row.Tags)}</td>',
+                                            f'<td style="text-align:center">{row._5}</td>', 
+                                            f'<td style="text-align:center"{date_cls}>{row._6}</td>', 
+                                            f'<td style="text-align:center">{row.RSI}</td>',
+                                            f'<td style="text-align:left">{row._8}</td>', 
+                                            f'<td style="text-align:left">{row._9}</td>', 
+                                            f'<td style="text-align:left">{row._10}</td>' 
+                                        ]
+                                        for data in [row.ev30_raw, row.ev90_raw]:
+                                            if data:
+                                                is_pos = data['return'] > 0
+                                                cls = ("ev-positive" if is_pos else "ev-negative") if s_type == 'Bullish' else ("ev-positive" if not is_pos else "ev-negative")
+                                                row_html.append(f'<td class="{cls}">{data["return"]*100:+.1f}% <br><small>(${data["price"]:,.2f}, N={data["n"]})</small></td>')
+                                            else: row_html.append('<td class="ev-neutral">N/A<br><small>&nbsp;</small></td>')
+                                        row_html.append('</tr>')
+                                        html_rows.append("".join(row_html))
+                                    html_rows.append('</tbody></table>')
+                                    st.markdown("".join(html_rows), unsafe_allow_html=True)
+                                else: st.info("No signals.")
+                    else: st.warning("No Divergence signals found.")
                 
-        except Exception as e: st.error(f"Error: {e}")
-
-def run_rsi_percentiles_app():
-    st.title("🔢 RSI Percentiles")
-    
-    # CSS for full row coloring + Date highlight
-    st.markdown("""
-        <style>
-        .rsi-p-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-        .rsi-p-table thead tr th { text-align: left; padding: 10px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; }
-        .rsi-p-table tbody tr td { padding: 12px 10px; border-bottom: 1px solid #eee; font-weight: 500; }
-        
-        /* Cell Colors for EVs */
-        .cell-green { background-color: #e6f4ea; color: #1e7e34; }
-        .cell-red { background-color: #fce8e6; color: #c5221f; }
-        
-        /* Date Highlighting - Added !important to override defaults */
-        .latest-date { background-color: rgba(255, 244, 229, 0.7) !important; font-weight: 700; color: #e67e22; }
-        </style>
-    """, unsafe_allow_html=True)
-    
-    dataset_map = load_dataset_config()
-    options = list(dataset_map.keys())
-    
-    data_option = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed")
-    
-    with st.expander("ℹ️ Strategy Logic & Explanations"):
-        st.markdown("""
-        * **Historical Context**: The algorithm analyzes up to **10 years** of daily price history.
-        * **Signal Trigger**: 
-            * RSI crosses **ABOVE** the Low Percentile (Leaving Low).
-            * RSI crosses **BELOW** the High Percentile (Leaving High).
-        * **EV 30p / 90p**: The expected return 30 or 90 **trading days** later based on historical matches (also 10-year max lookback).
-        * **Color Logic**:
-            * 🟢 **Green**: Indicates historical profitability. For 'Leaving Low' signals, this means EV > 0. For 'Leaving High' signals, this means EV < 0 (Shorting is profitable).
-            * 🔴 **Red**: Indicates historical loss. The historical EV contradicts the trade direction.
-        * **Filter**: Signals are excluded unless at least one timeframe (30p or 90p) has >= 5 historical matches.
-        """)
-    
-    if data_option:
-        # --- INPUTS FOR PERCENTILES ---
-        # NOTE: Moving inputs down to match requested order, checking if we have data first
-        pass
-        
-        results = []
-        status_text = st.empty()
-        
-        try:
-            target_url = st.secrets[dataset_map[data_option]]
-            csv_buffer = get_confirmed_gdrive_data(target_url)
-            
-            if csv_buffer and csv_buffer != "HTML_ERROR":
-                master = pd.read_csv(csv_buffer)
-                t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                
-                # Grab max date from the whole dataset first (approx)
-                date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
-                if date_col_raw:
-                    max_date_in_set = pd.to_datetime(master[date_col_raw]).max().date()
-                else: max_date_in_set = date.min
-
-                # --- NEW: VIEW SCANNED SYMBOLS ---
-                all_tickers = sorted(master[t_col].unique())
-                with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-                    sq = st.text_input("Filter...", key="rsi_p_filter").upper()
-                    ft = [t for t in all_tickers if sq in t]
-                    cols = st.columns(6)
-                    for i, ticker in enumerate(ft): cols[i % 6].write(ticker)
-                # ---------------------------------
-                
-                progress_bar = st.progress(0)
-                
-                # --- INPUTS MOVED HERE ---
-                c_p1, c_p2 = st.columns(2)
-                with c_p1:
-                    in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
-                with c_p2:
-                    in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
-                
-                grouped = master.groupby(t_col)
-                grouped_list = list(grouped)
-                total = len(grouped_list)
-                
-                for i, (ticker, group) in enumerate(grouped_list):
-                    status_text.text(f"Scanning {ticker}...")
-                    d_d, _ = prepare_data(group.copy())
-                    if d_d is not None:
-                        # PASSING DYNAMIC THRESHOLDS HERE
-                        sigs = find_rsi_percentile_signals(
-                            d_d, 
-                            ticker, 
-                            pct_low=in_low/100.0, 
-                            pct_high=in_high/100.0
-                        )
-                        results.extend(sigs)
+                # --- OUTPUT TAB 2: PERCENTILES ---
+                with tab_pct:
+                    with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
+                         st.markdown("""
+                        * **Historical Context**: 10-year daily price history analysis.
+                        * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
+                        * **EV 30p / 90p**: Expected return 30/90 trading days later based on matches (10-year lookback).
+                        * **Color Logic**: 🟢 Green = Historical profitability (Longs > 0, Shorts < 0). 🔴 Red = Historical loss.
+                        * **Filter**: Requires >= 5 historical matches.
+                        """)
                     
-                    if i % 10 == 0: progress_bar.progress((i + 1) / total)
-                progress_bar.progress(100)
-
-            status_text.empty()
-            
-            if results:
-                res_df = pd.DataFrame(results)
-                res_df = res_df.sort_values(by='Date', ascending=False)
-                
-                st.subheader(f"Found {len(res_df)} Opportunities")
-                
-                # Helper function for determining cell class
-                def get_ev_cell_html(ev_obj, signal_type):
-                    if not ev_obj: return "<td>N/A</td>"
-                    ret = ev_obj['return']
-                    n = ev_obj['n']
-                    is_green = (signal_type == 'Bullish' and ret > 0) or (signal_type == 'Bearish' and ret < 0)
-                    cls = "cell-green" if is_green else "cell-red"
-                    val_str = f"{ret*100:+.1f}% (N={n})"
-                    return f'<td class="{cls}">{val_str}</td>'
-
-                html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Signal</th><th>RSI</th><th>Threshold</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
-                
-                for r in res_df.itertuples():
-                    # Check if this row date matches the max date in the dataset
-                    is_latest = (r.Date_Obj == max_date_in_set)
-                    date_cls = ' class="latest-date"' if is_latest else ''
-                    
-                    ev30_html = get_ev_cell_html(r.EV30_Obj, r.Signal_Type)
-                    ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
+                    if raw_results_pct:
+                        res_pct_df = pd.DataFrame(raw_results_pct).sort_values(by='Date', ascending=False)
+                        st.subheader(f"Found {len(res_pct_df)} Opportunities")
                         
-                    row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td>{r.Signal}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
-                    html_rows.append(row_html)
-                
-                html_rows.append("</tbody></table>")
-                st.markdown("".join(html_rows), unsafe_allow_html=True)
-                
-            else:
-                st.info(f"No tickers found matching criteria (Crossing {in_low}th/{in_high}th percentile with N>=5 matches).")
-                
+                        def get_ev_cell_html(ev_obj, signal_type):
+                            if not ev_obj: return "<td>N/A</td>"
+                            ret = ev_obj['return']
+                            n = ev_obj['n']
+                            is_green = (signal_type == 'Bullish' and ret > 0) or (signal_type == 'Bearish' and ret < 0)
+                            cls = "cell-green" if is_green else "cell-red"
+                            val_str = f"{ret*100:+.1f}% (N={n})"
+                            return f'<td class="{cls}">{val_str}</td>'
+
+                        html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Signal</th><th>RSI</th><th>Threshold</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        
+                        for r in res_pct_df.itertuples():
+                            is_latest = (r.Date_Obj == max_date_in_set)
+                            date_cls = ' class="latest-date"' if is_latest else ''
+                            ev30_html = get_ev_cell_html(r.EV30_Obj, r.Signal_Type)
+                            ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
+                            row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td>{r.Signal}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
+                            html_rows.append(row_html)
+                        
+                        html_rows.append("</tbody></table>")
+                        st.markdown("".join(html_rows), unsafe_allow_html=True)
+                    else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
+
         except Exception as e:
             st.error(f"Analysis failed: {e}")
 
@@ -1563,8 +1494,157 @@ def fetch_and_prepare_ai_context(url, label, max_rows=90):
         return f"\n=== {label} DATA ERROR: {str(e)} ===\n"
     return f"\n=== {label} DATA NOT FOUND ===\n"
 
+def run_rsi_bot_app():
+    st.title("🤖 RSI Bot")
+    st.caption("Historical RSI backtester (Max 10 Year Lookback)")
+
+    # 1. Input Section
+    col_input, col_rest = st.columns([1, 3])
+    with col_input:
+        ticker = st.text_input("Enter Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
+    
+    if not ticker:
+        st.info("Please enter a ticker to begin.")
+        return
+
+    # 2. Load Map & Data
+    ticker_map = load_ticker_map()
+    
+    if ticker not in ticker_map:
+        st.error("Sorry, this ticker is not available right now (not found in database).")
+        return
+
+    with st.spinner(f"Crunching numbers for {ticker}..."):
+        # Reuse existing data fetcher
+        df = get_ticker_technicals(ticker, ticker_map)
+        
+        if df is None or df.empty:
+            st.error("Sorry, data could not be retrieved for this ticker.")
+            return
+
+        # 3. Data Prep & Calculations
+        # Standardize columns
+        df.columns = [c.strip().upper() for c in df.columns]
+        
+        # Locate necessary columns
+        date_col = next((c for c in df.columns if 'DATE' in c), None)
+        close_col = next((c for c in df.columns if 'CLOSE' in c), None)
+        rsi_col = next((c for c in df.columns if 'RSI' in c), None) # Looks for RSI or RSI_14
+
+        if not all([date_col, close_col]):
+            st.error("Data source missing Date or Close columns.")
+            return
+
+        # Ensure datetime and sort
+        df[date_col] = pd.to_datetime(df[date_col])
+        df = df.sort_values(by=date_col).reset_index(drop=True)
+
+        # Calculate RSI if missing
+        if not rsi_col:
+            delta = df[close_col].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            df['RSI'] = 100 - (100 / (1 + rs))
+            rsi_col = 'RSI'
+
+        # Filter to Max 10 Years
+        cutoff_date = df[date_col].max() - timedelta(days=365*10)
+        df = df[df[date_col] >= cutoff_date].copy()
+
+        # Get Current Context
+        current_row = df.iloc[-1]
+        current_rsi = current_row[rsi_col]
+        current_date = current_row[date_col].date()
+        
+        rsi_min = current_rsi - 2.0
+        rsi_max = current_rsi + 2.0
+        
+        # Find Historical Matches (excluding today to prevent bias if market is open)
+        hist_df = df.iloc[:-1].copy()
+        matches = hist_df[(hist_df[rsi_col] >= rsi_min) & (hist_df[rsi_col] <= rsi_max)].copy()
+        
+        if matches.empty:
+            st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
+            return
+
+        # 4. Calculate Forward Returns
+        # We need the full dataframe to look forward from the match indices
+        full_close = df[close_col].values
+        match_indices = matches.index.values
+        total_len = len(full_close)
+
+        results = []
+        periods = [1, 3, 5, 7, 10, 14, 30, 60, 90, 180]
+        
+        for p in periods:
+            # Vectorized lookahead
+            # Valid indices are those where (idx + p) is still within bounds
+            valid_indices = match_indices[match_indices + p < total_len]
+            
+            if len(valid_indices) == 0:
+                results.append({"Days": p, "Win Rate": np.nan, "Avg Ret": np.nan, "Med Ret": np.nan})
+                continue
+                
+            entry_prices = full_close[valid_indices]
+            exit_prices = full_close[valid_indices + p]
+            
+            returns = (exit_prices - entry_prices) / entry_prices
+            
+            win_rate = np.mean(returns > 0) * 100
+            avg_ret = np.mean(returns) * 100
+            med_ret = np.median(returns) * 100
+            
+            results.append({
+                "Days": p, 
+                "Win Rate": win_rate, 
+                "Avg Ret": avg_ret, 
+                "Med Ret": med_ret
+            })
+
+        res_df = pd.DataFrame(results)
+
+        # 5. Display Results
+        
+        # Header Metrics
+        st.subheader(f"RSI Analysis: {ticker}")
+        m1, m2, m3 = st.columns(3)
+        with m1: st.metric("Current RSI", f"{current_rsi:.2f}", f"as of {current_date}")
+        with m2: st.metric("RSI Range", f"[{rsi_min:.2f}, {rsi_max:.2f}]", "Tolerance ±2")
+        with m3: st.metric("Matching Periods", f"{len(matches)}", "samples found")
+
+        # Formatting Helpers
+        def highlight_ret(val):
+            color = '#71d28a' if val > 0 else '#f29ca0'
+            return f'color: {color}; font-weight: bold;'
+        
+        format_dict = {
+            "Win Rate": "{:.1f}%",
+            "Avg Ret": "{:+.2f}%",
+            "Med Ret": "{:+.2f}%"
+        }
+
+        # Split into Short Term and Long Term
+        st.markdown("##### Short-Term Forward Returns")
+        short_term = res_df[res_df['Days'].isin([1, 3, 5, 7, 10, 14])].set_index("Days")
+        st.dataframe(
+            short_term.style.format(format_dict).applymap(highlight_ret, subset=["Avg Ret", "Med Ret"]),
+            use_container_width=False,
+            height=250
+        )
+
+        st.markdown("##### Long-Term Forward Returns")
+        long_term = res_df[res_df['Days'].isin([30, 60, 90, 180])].set_index("Days")
+        st.dataframe(
+            long_term.style.format(format_dict).applymap(highlight_ret, subset=["Avg Ret", "Med Ret"]),
+            use_container_width=False,
+            height=180
+        )
+
 def run_trade_ideas_app(df_global):
-    st.warning("🚧 Work in Progress: This page is experimental and features are still being tuned.")
+    # --- UPDATED WARNING MESSAGE ---
+    st.warning("⚠️ This page sucks right now. Honestly, don't use it. I am completely reworking it.")
+    
     st.title("💡 Trade Ideas Generator")
     st.caption("Combine Technicals, Flows, and AI for high-conviction setups.")
     
@@ -1805,8 +1885,9 @@ try:
         st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
         st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
         st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
-        st.Page(run_rsi_divergences_app, title="RSI Divergences", icon="📈", url_path="rsi_divergences"),
-        st.Page(run_rsi_percentiles_app, title="RSI Percentiles", icon="🔢", url_path="rsi_percentiles"),
+        # COMBINED PAGE HERE:
+        st.Page(run_rsi_scanner_app, title="RSI Scanner", icon="📊", url_path="rsi_scanner"), 
+        st.Page(run_rsi_bot_app, title="RSI Bot", icon="🤖", url_path="rsi_bot"),
         st.Page(lambda: run_trade_ideas_app(df_global), title="Trade Ideas", icon="💡", url_path="trade_ideas"),
     ])
 
