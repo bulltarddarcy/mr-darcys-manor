@@ -1020,18 +1020,18 @@ def run_pivot_tables_app(df):
     row1_c1, row1_c2, row1_c3 = st.columns(3); fmt = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
     with row1_c1:
         st.subheader("Calls Bought"); tbl = get_p(df_cb_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
+        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
     with row1_c2:
         st.subheader("Puts Sold"); tbl = get_p(df_ps_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
+        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
     with row1_c3:
         st.subheader("Puts Bought"); tbl = get_p(df_pb_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
+        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
     
     st.subheader("Risk Reversals")
     tbl_rr = get_p(df_rr_f, is_rr=True)
     if not tbl_rr.empty: 
-        st.dataframe(tbl_rr.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl_rr), column_config=COLUMN_CONFIG_PIVOT)
+        st.dataframe(tbl_rr.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl_rr, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
     else: st.caption("No matched RR pairs found.")
 
 def run_rsi_divergences_app():
@@ -1043,7 +1043,7 @@ def run_rsi_divergences_app():
         .top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; }
         .rsi-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2rem; }
         .rsi-table thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
-        .rsi-table tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; vertical-align: middle !important; white-space: nowrap; }
+        .rsi-table tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; vertical-align: middle !important; white-space: nowrap; height: 50px; }
         
         /* Cell Highlighting */
         .ev-positive { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
@@ -1322,7 +1322,6 @@ def load_ticker_map():
         if csv_buffer and csv_buffer != "HTML_ERROR":
             df = pd.read_csv(csv_buffer, header=None)
             # Assuming format is Ticker, ID or similar. 
-            # We'll standardize to a dictionary: {"AAPL": "12345...", "TSLA": "67890..."}
             if len(df.columns) >= 2:
                 return pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0].str.upper().str.strip()).to_dict()
     except Exception as e:
@@ -1336,16 +1335,13 @@ def get_ticker_technicals(ticker, ticker_map):
     if not file_id:
         return None
     
-    # Construct direct download URL
     url = f"https://docs.google.com/uc?export=download&id={file_id}"
     try:
         csv_buffer = get_confirmed_gdrive_data(url)
         if csv_buffer and csv_buffer != "HTML_ERROR":
             df = pd.read_csv(csv_buffer)
-            # Standardize columns just in case
             df.columns = [c.strip().upper() for c in df.columns]
             
-            # Sort by date
             date_col = next((c for c in df.columns if 'DATE' in c), None)
             if date_col:
                 df[date_col] = pd.to_datetime(df[date_col])
@@ -1362,6 +1358,7 @@ def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
     """
     score = 5  # Start neutral
     reasons = []
+    recommendation = "Neutral / Wait"
     
     # Get latest data points
     last = df_tech.iloc[-1]
@@ -1371,12 +1368,21 @@ def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
     sma200 = last.get('SMA_200', last.get('SMA200', 0))
     rsi = last.get('RSI_14', last.get('RSI', 50))
     
+    # Helper to find nearest support/resistance
+    levels = [l for l in [ema21, sma200] if l > 0]
+    nearest_support = max([l for l in levels if l < price], default=price*0.9)
+    nearest_resistance = min([l for l in levels if l > price], default=price*1.1)
+
+    is_bullish = False
+    is_bearish = False
+
     # --- Technical Analysis ---
-    if trade_type in ["Buy Calls", "Sell Puts", "Buy Shares"]:
-        # BULLISH RULES
+    # BULLISH CONTEXT
+    if trade_type in ["Buy Calls", "Sell Puts", "Buy Shares", "Risk Reversal"]:
         if price > ema8 and price > ema21:
             score += 2
             reasons.append("✅ Price is strong (Above EMA 8 & 21)")
+            is_bullish = True
         elif price < ema21:
             score -= 2
             reasons.append("⚠️ Price is weak (Below EMA 21)")
@@ -1393,12 +1399,13 @@ def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
         elif rsi > 70:
             score -= 1
             reasons.append("⚠️ RSI is overbought (Risk of pullback)")
-            
-    else:
-        # BEARISH RULES (Buy Puts, Sell Calls)
+
+    # BEARISH CONTEXT
+    else: 
         if price < ema8 and price < ema21:
             score += 2
             reasons.append("✅ Price is weak (Below EMA 8 & 21)")
+            is_bearish = True
         elif price > ema21:
             score -= 2
             reasons.append("⚠️ Price is strong (Above EMA 21)")
@@ -1415,18 +1422,16 @@ def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
             reasons.append("⚠️ RSI is oversold (Risk of bounce)")
 
     # --- Flow Analysis ---
-    # Check Net Flow in Options DB
     if not df_flow.empty:
         flow_ticker = df_flow[df_flow['Symbol'] == ticker]
         if not flow_ticker.empty:
-            # Simple Net Delta
             calls = flow_ticker[flow_ticker['Order Type'] == "Calls Bought"]['Dollars'].sum()
             puts_sold = flow_ticker[flow_ticker['Order Type'] == "Puts Sold"]['Dollars'].sum()
             puts_bought = flow_ticker[flow_ticker['Order Type'] == "Puts Bought"]['Dollars'].sum()
             
             net_bullish = calls + puts_sold - puts_bought
             
-            if trade_type in ["Buy Calls", "Sell Puts", "Buy Shares"]:
+            if trade_type in ["Buy Calls", "Sell Puts", "Buy Shares", "Risk Reversal"]:
                 if net_bullish > 1_000_000:
                     score += 2
                     reasons.append(f"✅ Strong Bullish Flow (+${net_bullish/1e6:.1f}M)")
@@ -1440,8 +1445,31 @@ def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
                 elif net_bullish > 1_000_000:
                     score -= 2
                     reasons.append(f"⚠️ Bullish Flow detected (+${net_bullish/1e6:.1f}M)")
+    
+    # --- Trade Logic Recommendation ---
+    final_score = min(max(score, 0), 10)
+    
+    if final_score >= 6:
+        if trade_type == "Risk Reversal":
+            # Bullish RR: Sell Put, Buy Call
+            put_strike = math.floor(nearest_support)
+            call_strike = math.ceil(price * 1.02)
+            recommendation = f"Bullish Risk Reversal: Sell {put_strike} Put (Support), Buy {call_strike} Call."
+        elif trade_type == "Sell Puts":
+            strike = math.floor(nearest_support)
+            recommendation = f"Sell Puts at ${strike} level (near support)."
+        elif trade_type == "Buy Calls":
+            strike = math.ceil(price)
+            recommendation = f"Buy ATM/OTM Calls (Strike ${strike}+)."
+        elif trade_type == "Buy Puts":
+            strike = math.floor(price)
+            recommendation = f"Buy ATM/OTM Puts (Strike ${strike}-)."
+        elif trade_type == "Buy Shares":
+            recommendation = "Accumulate Shares with stop below EMA21."
+    else:
+        recommendation = "Setup weak. Wait for better alignment."
 
-    return min(max(score, 0), 10), reasons
+    return final_score, reasons, recommendation
 
 def run_trade_ideas_app(df_global):
     st.warning("🚧 Work in Progress: This page is experimental and features are still being tuned.")
@@ -1456,11 +1484,10 @@ def run_trade_ideas_app(df_global):
     with tabs[0]:
         c1, c2, c3 = st.columns(3)
         with c1:
-            # Default to AAPL if map is empty, otherwise first key
             default_t = "NVDA"
             t_input = st.text_input("Ticker Symbol", value=default_t).upper().strip()
         with c2:
-            trade_type = st.selectbox("Trade Type", ["Buy Calls", "Sell Puts", "Buy Puts", "Buy Shares"])
+            trade_type = st.selectbox("Trade Type", ["Buy Calls", "Sell Puts", "Buy Puts", "Buy Shares", "Risk Reversal"])
         with c3:
             duration = st.selectbox("Duration", ["Swing (1-4 Weeks)", "Leap (>1 Year)", "Scalp (Daily)"])
             
@@ -1472,7 +1499,7 @@ def run_trade_ideas_app(df_global):
                     st.error(f"Could not load technical data for {t_input}. Check if it exists in the Ticker Map.")
                 else:
                     # 1. Run Logic
-                    score, reasons = analyze_trade_setup(t_input, trade_type, tech_df, df_global)
+                    score, reasons, rec = analyze_trade_setup(t_input, trade_type, tech_df, df_global)
                     
                     # 2. Display Result
                     st.markdown("---")
@@ -1480,26 +1507,39 @@ def run_trade_ideas_app(df_global):
                     
                     with res_col1:
                         st.metric("Conviction Score", f"{score}/10")
-                        if score >= 7:
-                            st.success("High Conviction Setup")
-                        elif score <= 4:
-                            st.error("Low Conviction Setup")
-                        else:
-                            st.warning("Neutral / Mixed Setup")
+                        if score >= 7: st.success("High Conviction Setup")
+                        elif score <= 4: st.error("Low Conviction Setup")
+                        else: st.warning("Neutral / Mixed Setup")
                             
                     with res_col2:
                         st.subheader("Observations")
-                        for r in reasons:
-                            st.write(r)
+                        for r in reasons: st.write(r)
+                        st.info(f"**Recommendation:** {rec}")
                             
                     # 3. Mini Charts
                     st.markdown("### 📉 Snapshot")
-                    # Assuming date is col 0, close is typically 'CLOSE'
-                    if 'CLOSE' in tech_df.columns:
-                        chart_data = tech_df.tail(90).set_index(tech_df.columns[0])['CLOSE']
-                        st.line_chart(chart_data)
+                    # Prepare chart df
+                    cols_to_plot = []
+                    if 'CLOSE' in tech_df.columns: cols_to_plot.append('CLOSE')
+                    if 'EMA_8' in tech_df.columns: cols_to_plot.append('EMA_8')
+                    if 'EMA8' in tech_df.columns: cols_to_plot.append('EMA8') # Fallback
+                    if 'EMA_21' in tech_df.columns: cols_to_plot.append('EMA_21')
+                    if 'EMA21' in tech_df.columns: cols_to_plot.append('EMA21')
+                    if 'SMA_200' in tech_df.columns: cols_to_plot.append('SMA_200')
+                    if 'SMA200' in tech_df.columns: cols_to_plot.append('SMA200')
+                    
+                    if cols_to_plot:
+                        # Normalize names for legend cleanliness
+                        chart_df = tech_df.tail(90).copy()
+                        rename_map = {c: c.replace('_', '') for c in cols_to_plot}
+                        chart_df = chart_df[cols_to_plot].rename(columns=rename_map)
+                        # Set index to date if available
+                        d_col = next((c for c in tech_df.columns if 'DATE' in c), None)
+                        if d_col: chart_df.index = tech_df.tail(90)[d_col]
+                        
+                        st.line_chart(chart_df)
                     else:
-                        st.write("Chart data unavailable in CSV structure.")
+                        st.write("Chart data unavailable.")
 
     # --- TAB 2: ASK AI (GEMINI) ---
     with tabs[1]:
@@ -1512,60 +1552,62 @@ def run_trade_ideas_app(df_global):
             if "GOOGLE_API_KEY" not in st.secrets:
                 st.error("Please add `GOOGLE_API_KEY` to your .streamlit/secrets.toml file.")
             else:
-                import google.generativeai as genai
-                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-                
-                with st.spinner("Gathering data and consulting the oracle..."):
-                    # Gather context
-                    tech_df = get_ticker_technicals(ai_ticker, ticker_map)
+                try:
+                    import google.generativeai as genai
+                    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
                     
-                    # Technical Context String
-                    tech_context = "No technical data available."
-                    if tech_df is not None:
-                        last = tech_df.iloc[-1]
-                        tech_context = f"""
-                        Price: {last.get('CLOSE')}
-                        RSI(14): {last.get('RSI_14', last.get('RSI'))}
-                        EMA(8): {last.get('EMA_8', last.get('EMA8'))}
-                        EMA(21): {last.get('EMA_21', last.get('EMA21'))}
-                        SMA(200): {last.get('SMA_200', last.get('SMA200'))}
-                        Trend: {'Above' if last.get('CLOSE') > last.get('SMA_200', 0) else 'Below'} 200 SMA.
-                        """
-                    
-                    # Flow Context String
-                    flow_context = "No significant options flow."
-                    f_sub = df_global[df_global['Symbol'] == ai_ticker]
-                    if not f_sub.empty:
-                        bull_flow = f_sub[f_sub['Order Type'].isin(['Calls Bought', 'Puts Sold'])]['Dollars'].sum()
-                        bear_flow = f_sub[f_sub['Order Type'] == 'Puts Bought']['Dollars'].sum()
-                        flow_context = f"Recent Bullish Flow: ${bull_flow:,.0f}, Recent Bearish Flow: ${bear_flow:,.0f}"
+                    with st.spinner("Gathering data and consulting the oracle..."):
+                        # Gather context
+                        tech_df = get_ticker_technicals(ai_ticker, ticker_map)
                         
-                    # Prompt Construction
-                    prompt = f"""
-                    Act as a senior derivatives trader. Analyze {ai_ticker} for a potential trade.
-                    
-                    DATA CONTEXT:
-                    {tech_context}
-                    
-                    OPTIONS FLOW CONTEXT:
-                    {flow_context}
-                    
-                    TASK:
-                    Write a concise trade thesis. 
-                    1. Determine the bias (Bullish/Bearish/Neutral).
-                    2. Suggest a specific structure (e.g., Sell Put Spread, Buy Call).
-                    3. List 3 key risks.
-                    
-                    Keep it professional, brief, and actionable.
-                    """
-                    
-                    try:
+                        # Technical Context String
+                        tech_context = "No technical data available."
+                        if tech_df is not None:
+                            last = tech_df.iloc[-1]
+                            tech_context = f"""
+                            Price: {last.get('CLOSE')}
+                            RSI(14): {last.get('RSI_14', last.get('RSI'))}
+                            EMA(8): {last.get('EMA_8', last.get('EMA8'))}
+                            EMA(21): {last.get('EMA_21', last.get('EMA21'))}
+                            SMA(200): {last.get('SMA_200', last.get('SMA200'))}
+                            Trend: {'Above' if last.get('CLOSE') > last.get('SMA_200', 0) else 'Below'} 200 SMA.
+                            """
+                        
+                        # Flow Context String
+                        flow_context = "No significant options flow."
+                        f_sub = df_global[df_global['Symbol'] == ai_ticker]
+                        if not f_sub.empty:
+                            bull_flow = f_sub[f_sub['Order Type'].isin(['Calls Bought', 'Puts Sold'])]['Dollars'].sum()
+                            bear_flow = f_sub[f_sub['Order Type'] == 'Puts Bought']['Dollars'].sum()
+                            flow_context = f"Recent Bullish Flow: ${bull_flow:,.0f}, Recent Bearish Flow: ${bear_flow:,.0f}"
+                            
+                        # Prompt Construction
+                        prompt = f"""
+                        Act as a senior derivatives trader. Analyze {ai_ticker} for a potential trade.
+                        
+                        DATA CONTEXT:
+                        {tech_context}
+                        
+                        OPTIONS FLOW CONTEXT:
+                        {flow_context}
+                        
+                        TASK:
+                        Write a concise trade thesis. 
+                        1. Determine the bias (Bullish/Bearish/Neutral).
+                        2. Suggest a specific structure (e.g., Risk Reversal, Sell Put Spread).
+                        3. List 3 key risks.
+                        
+                        Keep it professional, brief, and actionable.
+                        """
+                        
                         model = genai.GenerativeModel('gemini-pro')
                         response = model.generate_content(prompt)
                         st.markdown("---")
                         st.markdown(response.text)
-                    except Exception as e:
-                        st.error(f"AI Error: {e}")
+                except ImportError:
+                    st.error("Google Generative AI library not found. Please run `pip install google-generativeai`.")
+                except Exception as e:
+                    st.error(f"AI Error: {e}")
 
     # --- TAB 3: TOP 3 SCANNER ---
     with tabs[2]:
@@ -1575,48 +1617,90 @@ def run_trade_ideas_app(df_global):
         if st.button("Scan Top 20"):
             progress = st.progress(0, text="Initializing scan...")
             
-            # 1. Get Top 20 from Smart Money Logic (Reusing simplified logic from Rankings)
-            # This is a mini-version of the rankings calculation to get the list
+            # --- 1. REPLICATE SMART MONEY LOGIC EXACTLY ---
             f_filtered = df_global[df_global['Order Type'].isin(["Calls Bought", "Puts Sold", "Puts Bought"])].copy()
             f_filtered["Signed_Dollars"] = np.where(
                 f_filtered['Order Type'].isin(["Calls Bought", "Puts Sold"]), 
                 f_filtered["Dollars"], -f_filtered["Dollars"]
             )
-            stats = f_filtered.groupby("Symbol")["Signed_Dollars"].sum().reset_index().sort_values("Signed_Dollars", ascending=False)
-            top_tickers = stats.head(20)["Symbol"].tolist()
             
-            candidates = []
+            # Group stats
+            smart_stats = f_filtered.groupby("Symbol").agg(
+                Signed_Dollars=("Signed_Dollars", "sum")
+            ).reset_index()
             
-            # 2. Iterate and Score
-            for i, t in enumerate(top_tickers):
-                progress.progress((i+1)/20, text=f"Analyzing {t}...")
-                t_df = get_ticker_technicals(t, ticker_map)
+            # Helper for Market Cap
+            smart_stats["Market Cap"] = smart_stats["Symbol"].apply(lambda x: get_market_cap(x))
+            
+            # Momentum
+            unique_dates = sorted(f_filtered["Trade Date"].unique())
+            recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
+            f_mom = f_filtered[f_filtered["Trade Date"].isin(recent_dates)]
+            mom_stats = f_mom.groupby("Symbol")["Signed_Dollars"].sum().reset_index().rename(columns={"Signed_Dollars": "Momentum"})
+            
+            smart_stats = smart_stats.merge(mom_stats, on="Symbol", how="left").fillna(0)
+            valid_data = smart_stats[smart_stats["Market Cap"] > 0].copy()
+            
+            if valid_data.empty:
+                st.warning("Not enough data to run Smart Money logic.")
+            else:
+                valid_data["Impact"] = valid_data["Signed_Dollars"] / valid_data["Market Cap"]
                 
-                if t_df is not None:
-                    # Score 'Bullish' setup by default for high flow tickers
-                    score, reasons = analyze_trade_setup(t, "Buy Calls", t_df, df_global)
-                    candidates.append({
-                        "Ticker": t,
-                        "Score": score,
-                        "Price": t_df.iloc[-1].get('CLOSE'),
-                        "Reasons": reasons
-                    })
-            
-            progress.empty()
-            
-            # 3. Sort and Display Top 3
-            candidates = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
-            
-            st.success("Scan Complete!")
-            
-            cols = st.columns(3)
-            for i, cand in enumerate(candidates):
-                with cols[i]:
-                    with st.container(border=True):
-                        st.markdown(f"### #{i+1} {cand['Ticker']}")
-                        st.metric("Score", f"{cand['Score']}/10", f"${cand['Price']:.2f}")
-                        for r in cand['Reasons']:
-                            st.caption(r)
+                def normalize(series):
+                    mn, mx = series.min(), series.max()
+                    return (series - mn) / (mx - mn) if (mx != mn) else 0
+
+                # Bullish Score Calculation
+                b_flow = valid_data["Signed_Dollars"].clip(lower=0)
+                b_imp = valid_data["Impact"].clip(lower=0)
+                b_mom = valid_data["Momentum"].clip(lower=0)
+                
+                valid_data["Score_Bull"] = (
+                    (0.40 * normalize(b_flow)) + 
+                    (0.30 * normalize(b_imp)) + 
+                    (0.30 * normalize(b_mom))
+                ) * 100
+                
+                # Get Top 20 Bulls
+                top_tickers = valid_data.sort_values(by=["Score_Bull", "Signed_Dollars"], ascending=[False, False]).head(20)["Symbol"].tolist()
+                
+                with st.expander(f"View Scanned Tickers ({len(top_tickers)})"):
+                    st.write(", ".join(top_tickers))
+                
+                candidates = []
+                
+                # 2. Iterate and Score
+                for i, t in enumerate(top_tickers):
+                    progress.progress((i+1)/20, text=f"Analyzing {t}...")
+                    t_df = get_ticker_technicals(t, ticker_map)
+                    
+                    if t_df is not None:
+                        # Score 'Bullish' setup by default for high flow tickers
+                        score, reasons, rec = analyze_trade_setup(t, "Buy Calls", t_df, df_global)
+                        candidates.append({
+                            "Ticker": t,
+                            "Score": score,
+                            "Price": t_df.iloc[-1].get('CLOSE'),
+                            "Reasons": reasons,
+                            "Rec": rec
+                        })
+                
+                progress.empty()
+                
+                # 3. Sort and Display Top 3
+                candidates = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
+                
+                st.success("Scan Complete!")
+                
+                cols = st.columns(3)
+                for i, cand in enumerate(candidates):
+                    with cols[i]:
+                        with st.container(border=True):
+                            st.markdown(f"### #{i+1} {cand['Ticker']}")
+                            st.metric("Score", f"{cand['Score']}/10", f"${cand['Price']:.2f}")
+                            st.caption(f"**Action:** {cand['Rec']}")
+                            for r in cand['Reasons']:
+                                st.caption(r)
 
 # --- 3. MAIN EXECUTION ---
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
