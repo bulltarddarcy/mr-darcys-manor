@@ -1637,17 +1637,31 @@ def run_trade_ideas_app(df_global):
                         full_prompt = f"{system_prompt}\n\n==========\nLIVE DATA CONTEXT:\n{context_data}\n=========="
 
                     with st.spinner("Step 3/3: AI Analysis in Progress (this may take 30-60s)..."):
-                        # Use gemini-1.5-flash for larger context window handling if available
-                        try:
-                            model = genai.GenerativeModel('gemini-1.5-flash')
-                            response = model.generate_content(full_prompt)
-                        except:
-                            model = genai.GenerativeModel('gemini-pro') 
-                            response = model.generate_content(full_prompt)
-                            
-                        st.success("Analysis Complete!")
-                        st.markdown("---")
-                        st.markdown(response.text)
+                        # Iterative model selection to find a working one. 
+                        # Pro 1.5 is tried first as requested for reasoning depth.
+                        # Flash 1.5 is the reliable fallback with large context.
+                        # Older 1.0 models are removed as they cannot handle this data volume.
+                        candidate_models = ["gemini-1.5-pro", "gemini-1.5-flash"]
+                        response = None
+                        last_error = None
+                        
+                        for model_name in candidate_models:
+                            try:
+                                model = genai.GenerativeModel(model_name)
+                                response = model.generate_content(full_prompt)
+                                st.caption(f"✅ Success using model: {model_name}")
+                                break # Stop if successful
+                            except Exception as e:
+                                last_error = e
+                                continue # Try next model
+                        
+                        if response:
+                            st.success("Analysis Complete!")
+                            st.markdown("---")
+                            st.markdown(response.text)
+                        else:
+                            st.error(f"All AI models failed. Last error: {last_error}")
+                            st.info("Tip: Try updating the library: `pip install -U google-generativeai`")
                         
                 except Exception as e:
                     st.error(f"AI Pipeline Failed: {e}")
