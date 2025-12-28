@@ -10,6 +10,7 @@ import math
 import requests
 import re
 from io import StringIO
+import altair as alt  # Fix 1: Imported for dynamic charts
 
 # --- 1. GLOBAL DATA LOADING & UTILITIES ---
 
@@ -1158,7 +1159,9 @@ def run_rsi_divergences_app():
                                             is_pos = data['return'] > 0
                                             cls = ("ev-positive" if is_pos else "ev-negative") if s_type == 'Bullish' else ("ev-positive" if not is_pos else "ev-negative")
                                             row_html.append(f'<td class="{cls}">{data["return"]*100:+.1f}% <br><small>(${data["price"]:,.2f}, N={data["n"]})</small></td>')
-                                        else: row_html.append('<td class="ev-neutral">N/A</td>')
+                                        else: 
+                                            # FIX 3: Added <br><small>&nbsp;</small> to match height of data cells
+                                            row_html.append('<td class="ev-neutral">N/A<br><small>&nbsp;</small></td>')
                                     
                                     row_html.append('</tr>')
                                     html_rows.append("".join(row_html))
@@ -1425,6 +1428,21 @@ def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
             puts_sold = flow_ticker[flow_ticker['Order Type'] == "Puts Sold"]['Dollars'].sum()
             puts_bought = flow_ticker[flow_ticker['Order Type'] == "Puts Bought"]['Dollars'].sum()
             
+            # --- FIX 5: WHALE WATCHING (Tail Trades) ---
+            # Check for individual trades > $100k (adjust threshold as needed)
+            whales = flow_ticker[flow_ticker['Dollars'] >= 100000].copy()
+            if not whales.empty:
+                w_calls = whales[whales['Order Type'] == "Calls Bought"]['Dollars'].sum()
+                w_puts_buy = whales[whales['Order Type'] == "Puts Bought"]['Dollars'].sum()
+                
+                if w_calls > w_puts_buy:
+                    score += 1
+                    reasons.append(f"🐋 Whale Alert: Significant large bullish trades found (${w_calls:,.0f}).")
+                elif w_puts_buy > w_calls:
+                    score -= 1
+                    reasons.append(f"🐋 Whale Alert: Significant large bearish trades found (${w_puts_buy:,.0f}).")
+            # ----------------------------------------
+            
             net_bullish = calls + puts_sold - puts_bought
             
             if trade_type in ["Buy Calls", "Sell Puts", "Buy Shares", "Risk Reversal"]:
@@ -1529,11 +1547,26 @@ def run_trade_ideas_app(df_global):
                         chart_df = tech_df.tail(90).copy()
                         rename_map = {c: c.replace('_', '') for c in cols_to_plot}
                         chart_df = chart_df[cols_to_plot].rename(columns=rename_map)
-                        # Set index to date if available
-                        d_col = next((c for c in tech_df.columns if 'DATE' in c), None)
-                        if d_col: chart_df.index = tech_df.tail(90)[d_col]
                         
-                        st.line_chart(chart_df)
+                        # Ensure index is a proper Date column for Altair
+                        d_col = next((c for c in tech_df.columns if 'DATE' in c), None)
+                        if d_col: 
+                            chart_df.index = tech_df.tail(90)[d_col]
+                            chart_df.index.name = "Date"
+                        
+                        chart_df = chart_df.reset_index()
+
+                        # FIX 4: Use Altair to enable dynamic Y-axis (zero=False)
+                        melted_df = chart_df.melt('Date', var_name='Metric', value_name='Price')
+                        
+                        c = alt.Chart(melted_df).mark_line().encode(
+                            x='Date:T',
+                            y=alt.Y('Price:Q', scale=alt.Scale(zero=False)), # Dynamic Axis
+                            color='Metric:N',
+                            tooltip=['Date', 'Metric', 'Price']
+                        ).interactive()
+                        
+                        st.altair_chart(c, use_container_width=True)
                     else:
                         st.write("Chart data unavailable.")
 
@@ -1596,7 +1629,8 @@ def run_trade_ideas_app(df_global):
                         Keep it professional, brief, and actionable.
                         """
                         
-                        model = genai.GenerativeModel('gemini-pro')
+                        # FIX 6: Updated model name to a currently supported version
+                        model = genai.GenerativeModel('gemini-1.5-flash')
                         response = model.generate_content(prompt)
                         st.markdown("---")
                         st.markdown(response.text)
@@ -1613,7 +1647,7 @@ def run_trade_ideas_app(df_global):
         if st.button("Scan Top 20"):
             progress = st.progress(0, text="Initializing scan...")
             
-            # --- FIX: FILTER DATE RANGE TO MATCH RANKINGS TAB (LAST 14 DAYS) ---
+            # --- FIX 2: FILTER DATE RANGE TO MATCH RANKINGS TAB (LAST 14 DAYS) ---
             max_date = df_global["Trade Date"].max()
             start_date_filter = max_date - timedelta(days=14)
             
