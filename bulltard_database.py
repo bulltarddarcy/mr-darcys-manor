@@ -1028,7 +1028,6 @@ def run_pivot_tables_app(df):
         st.subheader("Puts Bought"); tbl = get_p(df_pb_f)
         if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl), column_config=COLUMN_CONFIG_PIVOT)
     
-    st.markdown("---")
     st.subheader("Risk Reversals")
     tbl_rr = get_p(df_rr_f, is_rr=True)
     if not tbl_rr.empty: 
@@ -1044,7 +1043,7 @@ def run_rsi_divergences_app():
         .top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; }
         .rsi-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2rem; }
         .rsi-table thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
-        .rsi-table tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; }
+        .rsi-table tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; vertical-align: middle !important; white-space: nowrap; }
         
         /* Cell Highlighting */
         .ev-positive { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
@@ -1095,9 +1094,14 @@ def run_rsi_divergences_app():
                 # --- IDENTIFY MAX DATE FOR HIGHLIGHTING ---
                 # Search case-insensitively for date column
                 date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
-                max_date_str = ""
-                if date_col_raw:
-                    max_date_str = pd.to_datetime(master[date_col_raw]).max().strftime('%Y-%m-%d')
+                max_dt = pd.to_datetime(master[date_col_raw]).max() if date_col_raw else date.today()
+                
+                # Daily Highlight: Exact string match
+                max_date_str = max_dt.strftime('%Y-%m-%d')
+                
+                # Weekly Highlight: Monday of the week containing the max date
+                # We subtract the weekday (Mon=0...Sun=6) from the date
+                monday_of_latest_week = (max_dt - timedelta(days=max_dt.weekday())).strftime('%Y-%m-%d')
                 
                 t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                 all_tickers = sorted(master[t_col].unique())
@@ -1126,7 +1130,9 @@ def run_rsi_divergences_app():
                     consolidated = res_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
                     
                     for tf in ['Daily', 'Weekly']:
-                        st.divider()
+                        # Determine highlight target for this timeframe loop
+                        target_highlight = monday_of_latest_week if tf == 'Weekly' else max_date_str
+                        
                         for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
                             st.subheader(f"{emoji} {tf} {s_type} Signals")
                             tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
@@ -1136,7 +1142,7 @@ def run_rsi_divergences_app():
                                 
                                 for row in tbl_df.itertuples():
                                     # Highlight check
-                                    is_latest = (row._6 == max_date_str)
+                                    is_latest = (row._6 == target_highlight)
                                     date_cls = ' class="latest-date"' if is_latest else ''
                                     
                                     row_html = [
@@ -1207,16 +1213,11 @@ def run_rsi_percentiles_app():
     
     if data_option:
         # --- INPUTS FOR PERCENTILES ---
-        c_p1, c_p2 = st.columns(2)
-        with c_p1:
-            in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
-        with c_p2:
-            in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
+        # NOTE: Moving inputs down to match requested order, checking if we have data first
+        pass
         
         results = []
         status_text = st.empty()
-        progress_bar = st.progress(0)
-        max_date_in_set = date.min
         
         try:
             target_url = st.secrets[dataset_map[data_option]]
@@ -1227,10 +1228,28 @@ def run_rsi_percentiles_app():
                 t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                 
                 # Grab max date from the whole dataset first (approx)
-                # Search case-insensitively for date column
                 date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
                 if date_col_raw:
                     max_date_in_set = pd.to_datetime(master[date_col_raw]).max().date()
+                else: max_date_in_set = date.min
+
+                # --- NEW: VIEW SCANNED SYMBOLS ---
+                all_tickers = sorted(master[t_col].unique())
+                with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
+                    sq = st.text_input("Filter...", key="rsi_p_filter").upper()
+                    ft = [t for t in all_tickers if sq in t]
+                    cols = st.columns(6)
+                    for i, ticker in enumerate(ft): cols[i % 6].write(ticker)
+                # ---------------------------------
+                
+                progress_bar = st.progress(0)
+                
+                # --- INPUTS MOVED HERE ---
+                c_p1, c_p2 = st.columns(2)
+                with c_p1:
+                    in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
+                with c_p2:
+                    in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
                 
                 grouped = master.groupby(t_col)
                 grouped_list = list(grouped)
@@ -1425,6 +1444,7 @@ def analyze_trade_setup(ticker, trade_type, df_tech, df_flow):
     return min(max(score, 0), 10), reasons
 
 def run_trade_ideas_app(df_global):
+    st.warning("🚧 Work in Progress: This page is experimental and features are still being tuned.")
     st.title("💡 Trade Ideas Generator")
     st.caption("Combine Technicals, Flows, and AI for high-conviction setups.")
     
