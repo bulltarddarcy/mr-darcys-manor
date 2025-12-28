@@ -1099,6 +1099,19 @@ def run_rsi_divergences_app():
                 if date_col_raw:
                     max_date_str = pd.to_datetime(master[date_col_raw]).max().strftime('%Y-%m-%d')
                 
+                # --- CALCULATE WEEKLY HIGHLIGHT TARGET ---
+                # Logic: If run Mon-Fri -> Highlight start of LAST week
+                #        If run Sat-Sun -> Highlight start of THIS week
+                today_obj = date.today()
+                wd = today_obj.weekday() # Mon=0, Sun=6
+                
+                if wd >= 5: # Sat or Sun
+                    days_sub = wd # Go back to this week's Monday
+                else: # Mon-Fri
+                    days_sub = wd + 7 # Go back to last week's Monday
+                
+                target_weekly_str = (today_obj - timedelta(days=days_sub)).strftime('%Y-%m-%d')
+                
                 t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                 all_tickers = sorted(master[t_col].unique())
                 with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
@@ -1136,7 +1149,11 @@ def run_rsi_divergences_app():
                                 
                                 for row in tbl_df.itertuples():
                                     # Highlight check
-                                    is_latest = (row._6 == max_date_str)
+                                    if tf == 'Daily':
+                                        is_latest = (row._6 == max_date_str)
+                                    else:
+                                        is_latest = (row._6 == target_weekly_str)
+                                        
                                     date_cls = ' class="latest-date"' if is_latest else ''
                                     
                                     row_html = [
@@ -1206,16 +1223,7 @@ def run_rsi_percentiles_app():
         """)
     
     if data_option:
-        # --- INPUTS FOR PERCENTILES ---
-        c_p1, c_p2 = st.columns(2)
-        with c_p1:
-            in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
-        with c_p2:
-            in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
-        
         results = []
-        status_text = st.empty()
-        progress_bar = st.progress(0)
         max_date_in_set = date.min
         
         try:
@@ -1231,6 +1239,25 @@ def run_rsi_percentiles_app():
                 date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
                 if date_col_raw:
                     max_date_in_set = pd.to_datetime(master[date_col_raw]).max().date()
+                
+                # --- VIEW SCANNED TICKERS ---
+                all_tickers = sorted(master[t_col].unique())
+                with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
+                    sq = st.text_input("Filter...").upper()
+                    ft = [t for t in all_tickers if sq in t]
+                    cols = st.columns(6)
+                    for i, ticker in enumerate(ft): cols[i % 6].write(ticker)
+
+                # --- PROGRESS BAR ---
+                status_text = st.empty()
+                progress_bar = st.progress(0)
+
+                # --- INPUTS FOR PERCENTILES ---
+                c_p1, c_p2 = st.columns(2)
+                with c_p1:
+                    in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
+                with c_p2:
+                    in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
                 
                 grouped = master.groupby(t_col)
                 grouped_list = list(grouped)
@@ -1251,43 +1278,42 @@ def run_rsi_percentiles_app():
                     
                     if i % 10 == 0: progress_bar.progress((i + 1) / total)
                 progress_bar.progress(100)
-
-            status_text.empty()
+                status_text.empty()
             
-            if results:
-                res_df = pd.DataFrame(results)
-                res_df = res_df.sort_values(by='Date', ascending=False)
-                
-                st.subheader(f"Found {len(res_df)} Opportunities")
-                
-                # Helper function for determining cell class
-                def get_ev_cell_html(ev_obj, signal_type):
-                    if not ev_obj: return "<td>N/A</td>"
-                    ret = ev_obj['return']
-                    n = ev_obj['n']
-                    is_green = (signal_type == 'Bullish' and ret > 0) or (signal_type == 'Bearish' and ret < 0)
-                    cls = "cell-green" if is_green else "cell-red"
-                    val_str = f"{ret*100:+.1f}% (N={n})"
-                    return f'<td class="{cls}">{val_str}</td>'
-
-                html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Signal</th><th>RSI</th><th>Threshold</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
-                
-                for r in res_df.itertuples():
-                    # Check if this row date matches the max date in the dataset
-                    is_latest = (r.Date_Obj == max_date_in_set)
-                    date_cls = ' class="latest-date"' if is_latest else ''
+                if results:
+                    res_df = pd.DataFrame(results)
+                    res_df = res_df.sort_values(by='Date', ascending=False)
                     
-                    ev30_html = get_ev_cell_html(r.EV30_Obj, r.Signal_Type)
-                    ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
+                    st.subheader(f"Found {len(res_df)} Opportunities")
+                    
+                    # Helper function for determining cell class
+                    def get_ev_cell_html(ev_obj, signal_type):
+                        if not ev_obj: return "<td>N/A</td>"
+                        ret = ev_obj['return']
+                        n = ev_obj['n']
+                        is_green = (signal_type == 'Bullish' and ret > 0) or (signal_type == 'Bearish' and ret < 0)
+                        cls = "cell-green" if is_green else "cell-red"
+                        val_str = f"{ret*100:+.1f}% (N={n})"
+                        return f'<td class="{cls}">{val_str}</td>'
+
+                    html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Signal</th><th>RSI</th><th>Threshold</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                    
+                    for r in res_df.itertuples():
+                        # Check if this row date matches the max date in the dataset
+                        is_latest = (r.Date_Obj == max_date_in_set)
+                        date_cls = ' class="latest-date"' if is_latest else ''
                         
-                    row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td>{r.Signal}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
-                    html_rows.append(row_html)
-                
-                html_rows.append("</tbody></table>")
-                st.markdown("".join(html_rows), unsafe_allow_html=True)
-                
-            else:
-                st.info(f"No tickers found matching criteria (Crossing {in_low}th/{in_high}th percentile with N>=5 matches).")
+                        ev30_html = get_ev_cell_html(r.EV30_Obj, r.Signal_Type)
+                        ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
+                            
+                        row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td>{r.Signal}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
+                        html_rows.append(row_html)
+                    
+                    html_rows.append("</tbody></table>")
+                    st.markdown("".join(html_rows), unsafe_allow_html=True)
+                    
+                else:
+                    st.info(f"No tickers found matching criteria (Crossing {in_low}th/{in_high}th percentile with N>=5 matches).")
                 
         except Exception as e:
             st.error(f"Analysis failed: {e}")
