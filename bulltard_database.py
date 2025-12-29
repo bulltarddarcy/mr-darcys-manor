@@ -1016,9 +1016,10 @@ def run_strike_zones_app(df):
             editor_input,
             column_config={
                 "Include": st.column_config.CheckboxColumn("Include", default=True),
-                # Format: allow Streamlit defaults for Contracts (commas) and use prefix for Dollars
-                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
-                "Contracts": st.column_config.NumberColumn("Qty"),
+                # Using None for format usually enables default comma separators for numeric types in modern Streamlit versions, 
+                # prioritizing the raw number sorting and readability over explicit printf formatting constraints.
+                "Dollars": st.column_config.NumberColumn("Dollars", format=None),
+                "Contracts": st.column_config.NumberColumn("Qty", format=None),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry"
             },
@@ -1287,9 +1288,9 @@ def run_rsi_scanner_app():
         .rsi-table thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
         .rsi-table tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; vertical-align: middle !important; white-space: nowrap; height: 50px; }
         
-        .rsi-p-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-        .rsi-p-table thead tr th { text-align: left; padding: 10px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; }
-        .rsi-p-table tbody tr td { padding: 12px 10px; border-bottom: 1px solid #eee; font-weight: 500; }
+        .rsi-p-table { width: auto; border-collapse: collapse; font-size: 14px; }
+        .rsi-p-table thead tr th { text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; white-space: nowrap; }
+        .rsi-p-table tbody tr td { padding: 8px 12px; border-bottom: 1px solid #eee; font-weight: 500; white-space: nowrap; }
         
         .ev-positive, .cell-green { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
         .ev-negative, .cell-red { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
@@ -1399,7 +1400,12 @@ def run_rsi_scanner_app():
                                 st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
                             else:
                                 def highlight_best(row):
-                                    condition = (row['Count'] > 30) and (row['Win Rate'] > 75)
+                                    days = row['Days']
+                                    if days <= 20: threshold = 30
+                                    elif days <= 60: threshold = 20
+                                    else: threshold = 10
+                                    
+                                    condition = (row['Count'] >= threshold) and (row['Win Rate'] > 75)
                                     color = 'background-color: rgba(144, 238, 144, 0.2)' if condition else ''
                                     return [color] * len(row)
 
