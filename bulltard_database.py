@@ -433,6 +433,7 @@ def find_divergences(df_tf, ticker, timeframe):
     high_vals = df_tf['High'].values
     vol_vals = df_tf['Volume'].values
     vol_sma_vals = df_tf['VolSMA'].values
+    close_vals = df_tf['Price'].values  # Added for EV calculation
     
     # For history lookups
     hist_indices = np.where(hist_mask)[0]
@@ -445,9 +446,7 @@ def find_divergences(df_tf, ticker, timeframe):
     
     latest_p = df_tf.iloc[-1]
     
-    # Pre-calc EV
-    ev30 = calculate_ev_data_numpy(rsi_hist, price_hist, latest_p['RSI'], 30, latest_p['Price'])
-    ev90 = calculate_ev_data_numpy(rsi_hist, price_hist, latest_p['RSI'], 90, latest_p['Price'])
+    # Removed pre-calculation of EV here to do it per-signal
     
     def get_date_str(idx): 
         ts = df_tf.index[idx]
@@ -509,6 +508,11 @@ def find_divergences(df_tf, ticker, timeframe):
                     if s_type == 'Bearish' and np.any(post_rsi >= p1_rsi_val): valid = False
                 
                 if valid:
+                    # Calculate EV based on Signal RSI and Signal Price
+                    signal_close_price = close_vals[i]
+                    ev30 = calculate_ev_data_numpy(rsi_hist, price_hist, p2_rsi, 30, signal_close_price)
+                    ev90 = calculate_ev_data_numpy(rsi_hist, price_hist, p2_rsi, 90, signal_close_price)
+
                     tags = []
                     if s_type == 'Bullish':
                         if latest_p['Price'] >= latest_p.get('EMA8', 0): tags.append(f"EMA{EMA8_PERIOD}")
