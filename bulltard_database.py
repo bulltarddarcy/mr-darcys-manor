@@ -1016,10 +1016,9 @@ def run_strike_zones_app(df):
             editor_input,
             column_config={
                 "Include": st.column_config.CheckboxColumn("Include", default=True),
-                # Using None for format usually enables default comma separators for numeric types in modern Streamlit versions, 
-                # prioritizing the raw number sorting and readability over explicit printf formatting constraints.
-                "Dollars": st.column_config.NumberColumn("Dollars", format=None),
-                "Contracts": st.column_config.NumberColumn("Qty", format=None),
+                # Format update: Dollars with $ and commas, Contracts with integer formatting (removes scientific notation)
+                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
+                "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry"
             },
@@ -1425,11 +1424,11 @@ def run_rsi_scanner_app():
                                     .apply(highlight_best, axis=1),
                                     use_container_width=False,
                                     column_config={
-                                        "Days": st.column_config.NumberColumn("Days", width="small"),
-                                        "Win Rate": st.column_config.TextColumn("Win Rate", width="small"),
-                                        "Avg Ret": st.column_config.TextColumn("Avg Ret", width="small"),
-                                        "Med Ret": st.column_config.TextColumn("Med Ret", width="small"),
-                                        "Count": st.column_config.NumberColumn("Count", width="small")
+                                        "Days": st.column_config.NumberColumn("Days", width=60),
+                                        "Win Rate": st.column_config.TextColumn("Win Rate", width=80),
+                                        "Avg Ret": st.column_config.TextColumn("Avg Ret", width=80),
+                                        "Med Ret": st.column_config.TextColumn("Med Ret", width=80),
+                                        "Count": st.column_config.NumberColumn("Count", width=60)
                                     },
                                     hide_index=True
                                 )
@@ -1577,7 +1576,7 @@ def run_rsi_scanner_app():
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_pct): cols[i % 6].write(ticker)
 
-                    c_p1, c_p2 = st.columns(2)
+                    c_p1, c_p2, c_buf = st.columns([1, 1, 4])
                     with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
                     with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
 
