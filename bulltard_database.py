@@ -1041,25 +1041,36 @@ def run_strike_zones_app(df):
     if "Include" not in edit_pool_raw.columns:
         edit_pool_raw.insert(0, "Include", True)
     
-    edit_pool_raw["Trade Date Str"] = edit_pool_raw["Trade Date"].dt.strftime("%d %b %y")
-    edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
+    # edit_pool_raw["Trade Date Str"] = edit_pool_raw["Trade Date"].dt.strftime("%d %b %y")
+    # edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
 
     if show_table:
-        editor_input = edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]].copy()
+        # Prepare the input dataframe for the editor
+        # We need 'Include' first.
+        # We keep 'Trade Date' and 'Expiry_DT' as datetimes for proper sorting.
+        # We keep 'Dollars' and 'Contracts' as numbers.
+        
+        editor_input = edit_pool_raw[["Include", "Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"]].copy()
+        
+        # Configure columns
+        column_configuration = {
+            "Include": st.column_config.CheckboxColumn("Include", default=True),
+            "Trade Date": st.column_config.DateColumn("Trade Date", format="DD MMM YY"),
+            "Expiry_DT": st.column_config.DateColumn("Expiry", format="DD MMM YY"),
+            "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"), # %d usually formats as integer. 
+            "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
+            order_type_col: st.column_config.TextColumn("Order Type"),
+            "Symbol": st.column_config.TextColumn("Symbol"),
+            "Strike": st.column_config.TextColumn("Strike"), # Strike is often string formatted "150" vs "150.0", keep as is or TextColumn
+        }
         
         # Ensure numbers are numeric for sorting, not strings
         st.subheader("Data Table & Selection")
         
         edited_df = st.data_editor(
             editor_input,
-            column_config={
-                "Include": st.column_config.CheckboxColumn("Include", default=True),
-                "Dollars": st.column_config.NumberColumn("Dollars"),
-                "Contracts": st.column_config.NumberColumn("Qty"),
-                "Trade Date Str": "Trade Date",
-                "Expiry Str": "Expiry"
-            },
-            disabled=["Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"],
+            column_config=column_configuration,
+            disabled=["Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"],
             hide_index=True,
             use_container_width=True,
             key="sz_editor"
