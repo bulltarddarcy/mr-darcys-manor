@@ -1062,159 +1062,6 @@ def run_strike_zones_app(df):
             
             st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them in the Data Tables box below.")
 
-def run_pivot_tables_app(df):
-    st.title("🎯 Pivot Tables")
-    max_data_date = get_max_trade_date(df)
-            
-    col_filters, col_calculator = st.columns([1, 1], gap="medium")
-    
-    st.markdown("""
-        <style>
-            .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
-                background-color: rgba(113, 210, 138, 0.1) !important;
-                color: #71d28a !important;
-                border: 1px solid #71d28a !important;
-                font-weight: 700 !important;
-                pointer-events: none !important;
-                cursor: default !important;
-            }
-        </style>
-    """, unsafe_allow_html=True)
-
-    with col_filters:
-        st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>🔍 Filters</h4>", unsafe_allow_html=True)
-        fc1, fc2, fc3 = st.columns(3)
-        with fc1: td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
-        with fc2: td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
-        with fc3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
-        
-        fc4, fc5, fc6 = st.columns(3)
-        with fc4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=0, key="pv_notional")]
-        with fc5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
-        with fc6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
-
-    with col_calculator:
-        st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
-        
-        cc1, cc2, cc3 = st.columns(3)
-        with cc1: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-        with cc2: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-        with cc3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
-        
-        dte = (c_expiry - date.today()).days
-        coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
-        annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
-
-        st.session_state["calc_out_ann"] = f"{annual_ret:.1f}%"
-        st.session_state["calc_out_coc"] = f"{coc_ret:.1f}%"
-        st.session_state["calc_out_dte"] = str(max(0, dte))
-
-        cc4, cc5, cc6 = st.columns(3)
-        with cc4: st.text_input("Annualised Return", key="calc_out_ann")
-        with cc5: st.text_input("Cash on Cash Return", key="calc_out_coc")
-        with cc6: st.text_input("Days to Expiration", key="calc_out_dte")
-
-    st.markdown("""
-    <div style="display: flex; gap: 20px; font-size: 14px; margin-top: 10px; margin-bottom: 20px; align-items: center;">
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#b7e1cd"></div> This Friday</div>
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#fce8b2"></div> Next Friday</div>
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#f4c7c3"></div> Two Fridays</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Market Cap filtering can be buggy. If empty, reset \'Mkt Cap Min\' to 0B.</div>', unsafe_allow_html=True)
-    st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Scroll down to see the Risk Reversals table.</div>', unsafe_allow_html=True)
-
-    d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
-    if d_range.empty: return
-
-    order_type_col = "Order Type" if "Order Type" in d_range.columns else "Order type"
-    
-    cb_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy()
-    ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
-    pb_pool = d_range[d_range[order_type_col] == "Puts Bought"].copy()
-    
-    keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
-    cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
-    rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
-    
-    if not rr_matches.empty:
-        rr_c = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_c', 'Strike_c']].copy()
-        rr_c.rename(columns={'Dollars_c': 'Dollars', 'Strike_c': 'Strike'}, inplace=True)
-        rr_c['Pair_ID'] = rr_matches.index
-        rr_c['Pair_Side'] = 0
-        
-        rr_p = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_p', 'Strike_p']].copy()
-        rr_p.rename(columns={'Dollars_p': 'Dollars', 'Strike_p': 'Strike'}, inplace=True)
-        rr_p['Pair_ID'] = rr_matches.index
-        rr_p['Pair_Side'] = 1
-        
-        df_rr = pd.concat([rr_c, rr_p])
-        df_rr['Strike'] = df_rr['Strike'].apply(clean_strike_fmt)
-        
-        match_keys = keys + ['occ']
-        def filter_out_matches(pool, matches):
-            temp_matches = matches[match_keys].copy()
-            temp_matches['_remove'] = True
-            merged = pool.merge(temp_matches, on=match_keys, how='left')
-            return merged[merged['_remove'].isna()].drop(columns=['_remove'])
-        cb_pool = filter_out_matches(cb_pool, rr_matches)
-        ps_pool = filter_out_matches(ps_pool, rr_matches)
-    else:
-        df_rr = pd.DataFrame(columns=['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars', 'Strike', 'Pair_ID', 'Pair_Side'])
-
-    def apply_f(data):
-        if data.empty: return data
-        f = data.copy()
-        if ticker_filter: f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
-        f = f[f["Dollars"] >= min_notional]
-        
-        if not f.empty:
-            unique_symbols = f["Symbol"].unique()
-            valid_symbols = set(unique_symbols)
-            
-            if min_mkt_cap > 0:
-                valid_symbols = {s for s in valid_symbols if get_market_cap(s) >= float(min_mkt_cap)}
-            
-            if ema_filter == "Yes":
-                valid_symbols = {s for s in valid_symbols if is_above_ema21(s)}
-            
-            f = f[f["Symbol"].isin(valid_symbols)]
-            
-        return f
-
-    df_cb_f, df_ps_f, df_pb_f, df_rr_f = apply_f(cb_pool), apply_f(ps_pool), apply_f(pb_pool), apply_f(df_rr)
-
-    def get_p(data, is_rr=False):
-        if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
-        sr = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
-        if is_rr: piv = data.merge(sr, on="Symbol").sort_values(by=["Total_Sym_Dollars", "Pair_ID", "Pair_Side"], ascending=[False, True, True])
-        else:
-            piv = data.groupby(["Symbol", "Strike", "Expiry_DT"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index().merge(sr, on="Symbol")
-            piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
-        piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
-        
-        piv["Symbol_Display"] = np.where(piv["Symbol"] == piv["Symbol"].shift(1), "", piv["Symbol"])
-        
-        return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
-
-    row1_c1, row1_c2, row1_c3 = st.columns(3); fmt = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
-    with row1_c1:
-        st.subheader("Calls Bought"); tbl = get_p(df_cb_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
-    with row1_c2:
-        st.subheader("Puts Sold"); tbl = get_p(df_ps_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
-    with row1_c3:
-        st.subheader("Puts Bought"); tbl = get_p(df_pb_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
-    
-    st.subheader("Risk Reversals")
-    tbl_rr = get_p(df_rr_f, is_rr=True)
-    if not tbl_rr.empty: 
-        st.dataframe(tbl_rr.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl_rr, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
-    else: st.caption("No matched RR pairs found.")
-
 def run_rsi_scanner_app():
     st.title("🤖 RSI Scanner")
     st.caption("ℹ️ On mobile, set your browser to View Desktop Site")
@@ -1307,7 +1154,7 @@ def run_rsi_scanner_app():
                             rsi_col = 'RSI'
 
                         # Filter to Max 10 Years
-                        cutoff_date = df[date_col].max() - timedelta(days=365*10)
+                        cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
                         df = df[df[date_col] >= cutoff_date].copy()
 
                         # Get Current Context
@@ -1325,11 +1172,7 @@ def run_rsi_scanner_app():
                         # METRICS IN LEFT COLUMN
                         with c_left:
                             st.markdown("---")
-                            m1, m2 = st.columns(2)
-                            with m1:
-                                st.markdown(f"""<div style="margin-bottom: 5px;"><div style="font-size: 0.8rem; color: #666;">Current RSI</div><div style="font-size: 1.2rem; font-weight: 600;">{current_rsi:.2f}</div></div>""", unsafe_allow_html=True)
-                            with m2:
-                                st.markdown(f"""<div style="margin-bottom: 5px;"><div style="font-size: 0.8rem; color: #666;">Matches Found</div><div style="font-size: 1.2rem; font-weight: 600;">{len(matches)}</div></div>""", unsafe_allow_html=True)
+                            st.markdown(f"""<div style="margin-bottom: 5px;"><div style="font-size: 0.8rem; color: #666;">Current RSI</div><div style="font-size: 1.2rem; font-weight: 600;">{current_rsi:.2f}</div></div>""", unsafe_allow_html=True)
 
                         
                         if matches.empty:
@@ -1389,15 +1232,15 @@ def run_rsi_scanner_app():
                                 format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
 
                                 st.markdown("#### Forward Returns")
-                                combined_table = res_df.set_index("Days")
+                                # DO NOT set Days as index, so we can highlight it. Hide index instead.
                                 st.dataframe(
-                                    combined_table.style
+                                    res_df.style
                                     .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
                                     .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
-                                    .apply(highlight_best, axis=1)
-                                    .hide(axis="columns", subset=["Count"]), 
+                                    .apply(highlight_best, axis=1),
                                     use_container_width=True,
-                                    height=400
+                                    height=400,
+                                    hide_index=True
                                 )
 
     
