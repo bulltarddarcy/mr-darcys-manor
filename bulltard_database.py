@@ -307,7 +307,8 @@ def style_tags(tag_str):
     colors = {f"EMA{EMA8_PERIOD}": "#4a90e2", f"EMA{EMA21_PERIOD}": "#9b59b6", "VOL_HIGH": "#e67e22", "VOL_GROW": "#27ae60"}
     html_parts = []
     for t in tags:
-        color = coldef fetch_yahoo_data(ticker):ppend(f'<span class="tag-bubble" style="background-color: {color};">{t}</span>')
+        color = colors.get(t, "#7f8c8d")
+        html_parts.append(f'<span class="tag-bubble" style="background-color: {color};">{t}</span>')
     return "".join(html_parts)
 
 def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current_price):
@@ -538,28 +539,25 @@ def fetch_yahoo_data(ticker):
         df = t.history(period="10y")
         if df.empty: return None
         
+        # FIX: Robustly handle the index being named "Date", "Datetime" or None
         df = df.reset_index()
         
-        # --- FIX: Robust Date Column Handling ---
-        # yfinance index is sometimes named 'Date', 'Datetime', or None.
-        # After reset_index, the date is always the 0th column.
+        # Ensure the date column (now at index 0) is named "DATE"
         date_col_name = df.columns[0]
         df = df.rename(columns={date_col_name: "DATE"})
         
-        # Ensure it's datetime
+        # Ensure proper datetime type
         if not pd.api.types.is_datetime64_any_dtype(df["DATE"]):
             df["DATE"] = pd.to_datetime(df["DATE"])
 
-        # Remove timezone if present
         if df["DATE"].dt.tz is not None:
             df["DATE"] = df["DATE"].dt.tz_localize(None)
             
-        # Standardize other columns
         df = df.rename(columns={"Close": "CLOSE", "Volume": "VOLUME", "High": "HIGH", "Low": "LOW", "Open": "OPEN"})
         df.columns = [c.upper() for c in df.columns]
         
-        # Calculate RSI
         delta = df["CLOSE"].diff()
+        # Corrected: Use Wilder's Smoothing (EWM) for RSI
         gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
         loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
         
@@ -568,9 +566,7 @@ def fetch_yahoo_data(ticker):
         df["RSI_14"] = df["RSI"]
         
         return df
-    except Exception as e:
-        # Optional: Print error to console for debugging if needed
-        print(f"YF Error for {ticker}: {e}") 
+    except Exception:
         return None
 
 # --- 2. APP MODULES ---
@@ -658,7 +654,7 @@ def run_rankings_app(df):
         return
 
     # --- TABS FOR VIEWING MODES ---
-    tab_rank, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money Rankings", "💡 Top 3 Trade Setups", "🤡 Bulltard Rankings"])
+    tab_rank, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money", "💡 Top 3", "🤡 Bulltard"])
 
     # 1. CALCULATE SMART MONEY DATA FIRST
     top_bulls = pd.DataFrame()
