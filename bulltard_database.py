@@ -558,12 +558,13 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods
         desc_str = ""
         thresh_val = 0.0
         
-        if prev['RSI'] < p10 and curr['RSI'] >= p10:
+        # Modified logic: Buffer of 1.0 point required
+        if prev['RSI'] < p10 and curr['RSI'] >= (p10 + 1.0):
             s_type = 'Bullish'
             desc_str = "Low" 
             thresh_val = p10
             
-        elif prev['RSI'] > p90 and curr['RSI'] <= p90:
+        elif prev['RSI'] > p90 and curr['RSI'] <= (p90 - 1.0):
             s_type = 'Bearish'
             desc_str = "High" 
             thresh_val = p90
@@ -1647,9 +1648,9 @@ def run_rsi_scanner_app():
                             ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
                             
                             if r.Signal_Type == 'Bullish':
-                                delta_str = f'<span style="color: #1e7e34; font-weight: bold;">{r.RSI:.0f} ↗ {r.Threshold:.0f}</span>'
+                                delta_str = f'<span style="color: #1e7e34;">{r.RSI:.0f} ↗ {r.Threshold:.0f}</span>'
                             else:
-                                delta_str = f'<span style="color: #c5221f; font-weight: bold;">{r.RSI:.0f} ↘ {r.Threshold:.0f}</span>'
+                                delta_str = f'<span style="color: #c5221f;">{r.RSI:.0f} ↘ {r.Threshold:.0f}</span>'
                                 
                             row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td style="white-space:nowrap; text-align:center;">{delta_str}</td>{ev30_html}{ev90_html}</tr>'
                             html_rows.append(row_html)
