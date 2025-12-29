@@ -9,6 +9,7 @@ import yfinance as yf
 import math
 import requests
 import re
+import time
 from io import StringIO
 import altair as alt
 import google.generativeai as genai
@@ -49,16 +50,16 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         keep = [c for c in want if c in existing_cols]
         df = df[keep].copy()
         
-        # Batch strip string columns
+        # Optimized cleaning
+        # 1. Batch string stripping
         str_cols = [c for c in ["Order Type", "Symbol", "Strike", "Expiry"] if c in df.columns]
         for c in str_cols:
             df[c] = df[c].astype(str).str.strip()
         
-        # Optimized numeric cleaning (avoid regex if possible for speed)
+        # 2. Optimized numeric conversion
         if "Dollars" in df.columns:
-            # Check if object/string to avoid overhead on already numeric
             if df["Dollars"].dtype == 'object':
-                df["Dollars"] = df["Dollars"].str.replace('$', '', regex=False).str.replace(',', '', regex=False)
+                df["Dollars"] = df["Dollars"].str.replace(r'[$,]', '', regex=True)
             df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
 
         if "Contracts" in df.columns:
@@ -87,13 +88,36 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def get_market_cap(symbol: str) -> float:
-    try:
-        t = yf.Ticker(symbol)
-        mc = t.fast_info.get('marketCap')
-        if mc: return float(mc)
-        return float(t.info.get('marketCap', 0))
-    except:
-        return 0.0
+    """Robust market cap fetcher with retries to prevent valid tickers from disappearing."""
+    for attempt in range(3):
+        try:
+            t = yf.Ticker(symbol)
+            # Try fast_info first (most reliable/fastest)
+            mc = t.fast_info.get('marketCap')
+            if mc: return float(mc)
+            
+            # Fallback to standard info
+            info = t.info
+            mc = info.get('marketCap')
+            if mc: return float(mc)
+            
+        except Exception:
+            # Wait briefly before retry if it's a network blip
+            time.sleep(0.1)
+    return 0.0
+
+def fetch_market_caps_batch(tickers):
+    """Parallel fetcher for market caps."""
+    results = {}
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        future_to_ticker = {executor.submit(get_market_cap, t): t for t in tickers}
+        for future in as_completed(future_to_ticker):
+            t = future_to_ticker[future]
+            try:
+                results[t] = future.result()
+            except:
+                results[t] = 0.0
+    return results
 
 @st.cache_data(ttl=300)
 def is_above_ema21(symbol: str) -> bool:
@@ -119,7 +143,7 @@ def get_stock_indicators(sym: str):
         
         sma200 = float(h_full["Close"].rolling(window=200).mean().iloc[-1]) if len(h_full) >= 200 else None
         
-        h_recent = h_full.iloc[-60:].copy() if len(h_recent := h_full.iloc[-60:].copy()) > 0 else h_full.copy()
+        h_recent = h_full.iloc[-60:].copy() if len(h_full) > 60 else h_full.copy()
         
         if len(h_recent) == 0: return None, None, None, None, None
         
@@ -433,7 +457,7 @@ def find_divergences(df_tf, ticker, timeframe):
     high_vals = df_tf['High'].values
     vol_vals = df_tf['Volume'].values
     vol_sma_vals = df_tf['VolSMA'].values
-    close_vals = df_tf['Price'].values 
+    close_vals = df_tf['Price'].values  # Added for EV calculation
     
     # For history lookups
     hist_indices = np.where(hist_mask)[0]
@@ -728,7 +752,11 @@ def run_rankings_app(df):
         ).reset_index()
         
         smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
-        smart_stats["Market Cap"] = smart_stats["Symbol"].apply(lambda x: get_market_cap(x))
+        
+        # --- OPTIMIZATION: BATCH MARKET CAP FETCHING ---
+        unique_tickers = smart_stats["Symbol"].unique().tolist()
+        batch_caps = fetch_market_caps_batch(unique_tickers)
+        smart_stats["Market Cap"] = smart_stats["Symbol"].map(batch_caps)
         
         valid_data = smart_stats[smart_stats["Market Cap"] >= mc_thresh].copy()
         
@@ -893,7 +921,14 @@ def run_rankings_app(df):
         scores_df["Last Trade"] = last_trade_series.dt.strftime("%d %b %y")
         
         res = scores_df.reset_index()
-        res["Market Cap"] = res["Symbol"].apply(lambda x: get_market_cap(x))
+        # Ensure batch caps available here too
+        if "batch_caps" in locals():
+            res["Market Cap"] = res["Symbol"].map(batch_caps)
+        else:
+             # Fallback if somehow execution didn't reach above (unlikely due to flow)
+            unique_ts = res["Symbol"].unique().tolist()
+            res["Market Cap"] = res["Symbol"].map(fetch_market_caps_batch(unique_ts))
+            
         res = res[res["Market Cap"] >= mc_thresh]
         
         rank_col_config = {
@@ -919,7 +954,6 @@ def run_rankings_app(df):
             final_list = []
             
             # This part is slower but it's the legacy tab. We can improve if needed by another batch fetch.
-            # Let's do a mini batch fetch here for speed.
             needed_tickers = candidates["Symbol"].tolist()
             mini_batch = fetch_technicals_batch(needed_tickers)
             
@@ -1013,15 +1047,15 @@ def run_strike_zones_app(df):
     if show_table:
         editor_input = edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]].copy()
         
+        # Ensure numbers are numeric for sorting, not strings
         st.subheader("Data Table & Selection")
         
         edited_df = st.data_editor(
             editor_input,
             column_config={
                 "Include": st.column_config.CheckboxColumn("Include", default=True),
-                # No format specified allows Streamlit default (usually with commas) to take effect while keeping data numeric
-                "Dollars": st.column_config.NumberColumn("Dollars", format=None),
-                "Contracts": st.column_config.NumberColumn("Qty", format=None),
+                "Dollars": st.column_config.NumberColumn("Dollars"),
+                "Contracts": st.column_config.NumberColumn("Qty"),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry"
             },
@@ -1357,7 +1391,8 @@ def run_rsi_scanner_app():
         c_left, c_right = st.columns([1, 6])
         
         with c_left:
-            ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
+            # FIX 1: ADDED KEY TO TEXT INPUT TO PREVENT TAB RESET
+            ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)", key="rsi_bt_ticker_input").strip().upper()
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
             rsi_metric_container = st.empty()
@@ -1498,8 +1533,7 @@ def run_rsi_scanner_app():
                 st.markdown(f"""
                 * **Data Pool**: Analyzes 10 years of history (where available).
                 * **Method**: Finds all historical instances where RSI was within **±2 points** of the signal candle.
-                * **Metric**: Calculates **Mean % Return** from **Signal Close**.
-                * **Note**: EV Price ($) is based on the Signal **Close**, while P2 Price displays the Pivot **Low/High**.
+                * **Metric**: Calculates the **Mean % Return** after 30 and 90 trading days.
                 * **Constraint**: Requires **N ≥ 5** historical matches to display.
                 """)
             with f_col3:
