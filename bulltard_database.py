@@ -1311,18 +1311,19 @@ def run_rsi_scanner_app():
             margin-bottom: 2rem;
             border: 1px solid #dee2e6;
             border-radius: 4px;
+            width: fit-content;
+            max-width: 100%;
         }
         
         .rsi-p-table { 
             width: auto; 
-            min-width: 600px; /* Forces scroll on small screens */
-            width: 100%;
+            min-width: 400px;
             border-collapse: collapse; 
             font-size: 14px; 
         }
         
-        .rsi-p-table thead tr th { text-align: left; padding: 8px 6px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; white-space: nowrap; font-size: 13px; }
-        .rsi-p-table tbody tr td { padding: 8px 6px; border-bottom: 1px solid #eee; font-weight: 500; white-space: nowrap; }
+        .rsi-p-table thead tr th { text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; white-space: nowrap; font-size: 13px; }
+        .rsi-p-table tbody tr td { padding: 8px 12px; border-bottom: 1px solid #eee; font-weight: 500; white-space: nowrap; }
         
         .ev-positive, .cell-green { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
         .ev-negative, .cell-red { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
