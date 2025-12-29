@@ -502,12 +502,12 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods
         
         if prev['RSI'] < p10 and curr['RSI'] >= p10:
             s_type = 'Bullish'
-            desc_str = f"Leaving Low {int(pct_low*100)}%"
+            desc_str = "Low" # Changed from "Leaving Low..."
             thresh_val = p10
             
         elif prev['RSI'] > p90 and curr['RSI'] <= p90:
             s_type = 'Bearish'
-            desc_str = f"Leaving High {int(pct_high*100)}%"
+            desc_str = "High" # Changed from "Leaving High..."
             thresh_val = p90
             
         if s_type:
@@ -955,19 +955,18 @@ def run_strike_zones_app(df):
     edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
 
     if show_table:
+        # Changed: We do NOT format Dollars/Contracts as strings here anymore to preserve numeric sorting
         editor_input = edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]].copy()
         
-        editor_input["Dollars"] = editor_input["Dollars"].apply(lambda x: f"${x:,.0f}")
-        editor_input["Contracts"] = editor_input["Contracts"].apply(lambda x: f"{x:,.0f}")
-
         st.subheader("Data Table & Selection")
         
         edited_df = st.data_editor(
             editor_input,
             column_config={
                 "Include": st.column_config.CheckboxColumn("Include", default=True),
-                "Dollars": st.column_config.TextColumn("Dollars"),
-                "Contracts": st.column_config.TextColumn("Qty"),
+                # Changed: Use NumberColumn to sort numerically but format visually
+                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
+                "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry"
             },
@@ -1262,17 +1261,15 @@ def run_rsi_scanner_app():
     # --- TAB 3: BACKTESTER (Independent, No Pills) ---
     with tab_bot:
         # Define layout: Compact Left column for Inputs, Wider Right column for Tables
-        c_left, c_right = st.columns([1, 4])
+        # Changed: [1, 4] -> [1, 6] to push the table closer to the left (by narrowing the first col percentage relative to second)
+        c_left, c_right = st.columns([1, 6])
         
         with c_left:
-            # Sub-columns to constrain width of inputs further
-            c_input, _ = st.columns([1, 1])
-            with c_input:
-                ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
-                lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
-                rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
-                # Placeholder for RSI output to appear here later
-                rsi_metric_container = st.empty()
+            ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
+            lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
+            rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
+            # Placeholder for RSI output to appear here later
+            rsi_metric_container = st.empty()
         
         # Calculate Logic
         if ticker:
@@ -1368,18 +1365,8 @@ def run_rsi_scanner_app():
                                 st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
                             else:
                                 def highlight_best(row):
-                                    # Dynamic N threshold based on period length
-                                    d = row['Days']
-                                    n = row['Count']
-                                    wr = row['Win Rate']
-                                    
-                                    # Step-down logic
-                                    if d <= 14: min_n = 30
-                                    elif d <= 60: min_n = 20
-                                    else: min_n = 10
-                                    
-                                    # Highlight condition
-                                    condition = (n >= min_n) and (wr > 75)
+                                    # Highlight if Count > 30 and Win Rate > 75%
+                                    condition = (row['Count'] > 30) and (row['Win Rate'] > 75)
                                     color = 'background-color: rgba(144, 238, 144, 0.2)' if condition else ''
                                     return [color] * len(row)
 
@@ -1401,11 +1388,11 @@ def run_rsi_scanner_app():
                                     .apply(highlight_best, axis=1),
                                     use_container_width=False, # Changed to False to compact columns
                                     column_config={
-                                        "Days": st.column_config.NumberColumn("Days", width=None),
+                                        "Days": st.column_config.NumberColumn("Days", width="small"),
                                         "Win Rate": st.column_config.TextColumn("Win Rate", width="small"),
                                         "Avg Ret": st.column_config.TextColumn("Avg Ret", width="small"),
                                         "Med Ret": st.column_config.TextColumn("Med Ret", width="small"),
-                                        "Count": st.column_config.NumberColumn("Count", width=None)
+                                        "Count": st.column_config.NumberColumn("Count", width="small")
                                     },
                                     hide_index=True
                                 )
@@ -1595,7 +1582,8 @@ def run_rsi_scanner_app():
                             val_str = f"{ret*100:+.1f}% (N={n})"
                             return f'<td class="{cls}">{val_str}</td>'
 
-                        html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Signal</th><th>RSI</th><th>Threshold</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        # Changed Header Names: Signal -> Exiting, Threshold -> RSI %ile
+                        html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Exiting</th><th>RSI</th><th>RSI %ile</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                         
                         for r in res_pct_df.itertuples():
                             is_latest = (r.Date_Obj == max_date_in_set)
