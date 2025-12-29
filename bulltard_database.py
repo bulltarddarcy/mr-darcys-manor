@@ -12,6 +12,7 @@ import re
 from io import StringIO
 import altair as alt
 import google.generativeai as genai
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- 0. PAGE CONFIGURATION (MUST BE FIRST) ---
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
@@ -43,7 +44,8 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df = pd.read_csv(url)
         want = ["Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Error"]
         
-        existing_cols = df.columns
+        # Filter columns efficiently
+        existing_cols = set(df.columns)
         keep = [c for c in want if c in existing_cols]
         df = df[keep].copy()
         
@@ -52,15 +54,16 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         for c in str_cols:
             df[c] = df[c].astype(str).str.strip()
         
-        # Optimized regex replacement
+        # Optimized numeric cleaning (avoid regex if possible for speed)
         if "Dollars" in df.columns:
-            df["Dollars"] = (df["Dollars"].astype(str)
-                            .str.replace(r'[$,]', '', regex=True))
+            # Check if object/string to avoid overhead on already numeric
+            if df["Dollars"].dtype == 'object':
+                df["Dollars"] = df["Dollars"].str.replace('$', '', regex=False).str.replace(',', '', regex=False)
             df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
 
         if "Contracts" in df.columns:
-            df["Contracts"] = (df["Contracts"].astype(str)
-                            .str.replace(',', '', regex=False))
+            if df["Contracts"].dtype == 'object':
+                df["Contracts"] = df["Contracts"].str.replace(',', '', regex=False)
             df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(0)
         
         if "Trade Date" in df.columns:
@@ -73,6 +76,7 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
             df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce").fillna(0.0)
             
         if "Error" in df.columns:
+            # Fast boolean indexing
             mask = df["Error"].astype(str).str.upper().isin({"TRUE", "1", "YES"})
             df = df[~mask]
             
@@ -106,6 +110,7 @@ def is_above_ema21(symbol: str) -> bool:
 
 @st.cache_data(ttl=300)
 def get_stock_indicators(sym: str):
+    """Fetches technicals for a single symbol."""
     try:
         ticker_obj = yf.Ticker(sym)
         h_full = ticker_obj.history(period="2y", interval="1d")
@@ -126,6 +131,22 @@ def get_stock_indicators(sym: str):
         return spot_val, ema8, ema21, sma200, h_recent
     except: 
         return None, None, None, None, None
+
+def fetch_technicals_batch(tickers):
+    """
+    Parallel fetcher for multiple tickers to speed up the loop.
+    Returns a dict {ticker: result_tuple}
+    """
+    results = {}
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        future_to_ticker = {executor.submit(get_stock_indicators, t): t for t in tickers}
+        for future in as_completed(future_to_ticker):
+            t = future_to_ticker[future]
+            try:
+                results[t] = future.result()
+            except:
+                results[t] = (None, None, None, None, None)
+    return results
 
 def get_table_height(df, max_rows=30):
     row_count = len(df)
@@ -312,6 +333,7 @@ def style_tags(tag_str):
     return "".join(html_parts)
 
 def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current_price):
+    # Optimized numpy calculation
     mask = (rsi_array >= target_rsi - 2) & (rsi_array <= target_rsi + 2)
     indices = np.where(mask)[0]
     
@@ -404,51 +426,87 @@ def find_divergences(df_tf, ticker, timeframe):
     
     cutoff_date = df_tf.index.max() - timedelta(days=365 * EV_LOOKBACK_YEARS)
     hist_mask = df_tf.index >= cutoff_date
-    rsi_hist = df_tf.loc[hist_mask, 'RSI'].values
-    price_hist = df_tf.loc[hist_mask, 'Price'].values
+    
+    # --- OPTIMIZATION: Use Numpy Arrays for looping ---
+    rsi_vals = df_tf['RSI'].values
+    low_vals = df_tf['Low'].values
+    high_vals = df_tf['High'].values
+    vol_vals = df_tf['Volume'].values
+    vol_sma_vals = df_tf['VolSMA'].values
+    
+    # For history lookups
+    hist_indices = np.where(hist_mask)[0]
+    if len(hist_indices) == 0:
+        rsi_hist = rsi_vals
+        price_hist = df_tf['Price'].values
+    else:
+        rsi_hist = rsi_vals[hist_indices]
+        price_hist = df_tf.loc[hist_mask, 'Price'].values
     
     latest_p = df_tf.iloc[-1]
     
+    # Pre-calc EV
     ev30 = calculate_ev_data_numpy(rsi_hist, price_hist, latest_p['RSI'], 30, latest_p['Price'])
     ev90 = calculate_ev_data_numpy(rsi_hist, price_hist, latest_p['RSI'], 90, latest_p['Price'])
     
-    def get_date_str(p): return df_tf.loc[p.name, 'ChartDate'].strftime('%Y-%m-%d') if timeframe.lower() == 'weekly' else p.name.strftime('%Y-%m-%d')
+    def get_date_str(idx): 
+        ts = df_tf.index[idx]
+        if timeframe.lower() == 'weekly': 
+             return df_tf.iloc[idx]['ChartDate'].strftime('%Y-%m-%d')
+        return ts.strftime('%Y-%m-%d')
     
     start_idx = max(DIVERGENCE_LOOKBACK, n_rows - SIGNAL_LOOKBACK_PERIOD)
     
+    # Loop over indices
     for i in range(start_idx, n_rows):
-        p2 = df_tf.iloc[i]
-        lookback = df_tf.iloc[i - DIVERGENCE_LOOKBACK : i]
+        # Current values
+        p2_rsi = rsi_vals[i]
+        p2_low = low_vals[i]
+        p2_high = high_vals[i]
+        p2_vol = vol_vals[i]
+        p2_volsma = vol_sma_vals[i]
         
-        is_vol_high = int(p2['Volume'] > (p2['VolSMA'] * 1.5)) if not pd.isna(p2['VolSMA']) else 0
+        # Lookback slice
+        lb_start = i - DIVERGENCE_LOOKBACK
+        lb_rsi = rsi_vals[lb_start:i]
+        lb_low = low_vals[lb_start:i]
+        lb_high = high_vals[lb_start:i]
+        
+        is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
         
         for s_type in ['Bullish', 'Bearish']:
             trigger = False
-            p1 = None
+            p1_idx_rel = -1
             
             if s_type == 'Bullish':
-                if p2['Low'] < lookback['Low'].min():
-                    p1_idx = lookback['RSI'].idxmin()
-                    p1 = lookback.loc[p1_idx]
+                # Price Low < Min of lookback Low
+                if p2_low < np.min(lb_low):
+                    p1_idx_rel = np.argmin(lb_rsi) # Index relative to slice
+                    p1_rsi = lb_rsi[p1_idx_rel]
                     
-                    if p2['RSI'] > (p1['RSI'] + RSI_DIFF_THRESHOLD):
-                        subset = df_tf.loc[p1.name : p2.name, 'RSI']
-                        if not (subset > 50).any(): trigger = True
+                    if p2_rsi > (p1_rsi + RSI_DIFF_THRESHOLD):
+                        idx_p1_abs = lb_start + p1_idx_rel
+                        subset_rsi = rsi_vals[idx_p1_abs : i + 1]
+                        if not np.any(subset_rsi > 50): trigger = True
             else: 
-                if p2['High'] > lookback['High'].max():
-                    p1_idx = lookback['RSI'].idxmax()
-                    p1 = lookback.loc[p1_idx]
+                if p2_high > np.max(lb_high):
+                    p1_idx_rel = np.argmax(lb_rsi)
+                    p1_rsi = lb_rsi[p1_idx_rel]
                     
-                    if p2['RSI'] < (p1['RSI'] - RSI_DIFF_THRESHOLD):
-                        subset = df_tf.loc[p1.name : p2.name, 'RSI']
-                        if not (subset < 50).any(): trigger = True
+                    if p2_rsi < (p1_rsi - RSI_DIFF_THRESHOLD):
+                        idx_p1_abs = lb_start + p1_idx_rel
+                        subset_rsi = rsi_vals[idx_p1_abs : i + 1]
+                        if not np.any(subset_rsi < 50): trigger = True
             
-            if trigger and p1 is not None:
-                post_df = df_tf.iloc[i + 1 :]
+            if trigger and p1_idx_rel != -1:
+                idx_p1_abs = lb_start + p1_idx_rel
+                
                 valid = True
-                if not post_df.empty:
-                    if s_type == 'Bullish' and (post_df['RSI'] <= p1['RSI']).any(): valid = False
-                    if s_type == 'Bearish' and (post_df['RSI'] >= p1['RSI']).any(): valid = False
+                if i < n_rows - 1:
+                    post_rsi = rsi_vals[i+1:]
+                    p1_rsi_val = rsi_vals[idx_p1_abs]
+                    if s_type == 'Bullish' and np.any(post_rsi <= p1_rsi_val): valid = False
+                    if s_type == 'Bearish' and np.any(post_rsi >= p1_rsi_val): valid = False
                 
                 if valid:
                     tags = []
@@ -460,14 +518,14 @@ def find_divergences(df_tf, ticker, timeframe):
                         if latest_p['Price'] <= latest_p.get('EMA21', 999999): tags.append(f"EMA{EMA21_PERIOD}")
                     
                     if is_vol_high: tags.append("VOL_HIGH")
-                    if p2['Volume'] > p1['Volume']: tags.append("VOL_GROW")
+                    if p2_vol > vol_vals[idx_p1_abs]: tags.append("VOL_GROW")
                     
                     divergences.append({
                         'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 'Tags': ", ".join(tags),
-                        'P1 Date': get_date_str(p1), 'Signal Date': get_date_str(p2),
-                        'RSI': f"{int(round(p1['RSI']))} → {int(round(p2['RSI']))}",
-                        'P1 Price': f"${p1['Low' if s_type=='Bullish' else 'High']:,.2f}", 
-                        'P2 Price': f"${p2['Low' if s_type=='Bullish' else 'High']:,.2f}", 
+                        'P1 Date': get_date_str(idx_p1_abs), 'Signal Date': get_date_str(i),
+                        'RSI': f"{int(round(rsi_vals[idx_p1_abs]))} → {int(round(p2_rsi))}",
+                        'P1 Price': f"${(low_vals[idx_p1_abs] if s_type=='Bullish' else high_vals[idx_p1_abs]):,.2f}", 
+                        'P2 Price': f"${(p2_low if s_type=='Bullish' else p2_high):,.2f}", 
                         'Last Close': f"${latest_p['Price']:,.2f}", 
                         'ev30_raw': ev30, 'ev90_raw': ev90
                     })
@@ -502,12 +560,12 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods
         
         if prev['RSI'] < p10 and curr['RSI'] >= p10:
             s_type = 'Bullish'
-            desc_str = "Low" # Changed from "Leaving Low..."
+            desc_str = "Low" 
             thresh_val = p10
             
         elif prev['RSI'] > p90 and curr['RSI'] <= p90:
             s_type = 'Bearish'
-            desc_str = "High" # Changed from "Leaving High..."
+            desc_str = "High" 
             thresh_val = p90
             
         if s_type:
@@ -539,14 +597,11 @@ def fetch_yahoo_data(ticker):
         df = t.history(period="10y")
         if df.empty: return None
         
-        # FIX: Robustly handle the index being named "Date", "Datetime" or None
         df = df.reset_index()
         
-        # Ensure the date column (now at index 0) is named "DATE"
         date_col_name = df.columns[0]
         df = df.rename(columns={date_col_name: "DATE"})
         
-        # Ensure proper datetime type
         if not pd.api.types.is_datetime64_any_dtype(df["DATE"]):
             df["DATE"] = pd.to_datetime(df["DATE"])
 
@@ -557,7 +612,6 @@ def fetch_yahoo_data(ticker):
         df.columns = [c.upper() for c in df.columns]
         
         delta = df["CLOSE"].diff()
-        # Corrected: Use Wilder's Smoothing (EWM) for RSI
         gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
         loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
         
@@ -631,7 +685,6 @@ def run_rankings_app(df):
     c1, c2, c3, c4 = st.columns([1, 1, 0.7, 1.3], gap="small")
     with c1: rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
     with c2: rank_end = st.date_input("Trade End Date", value=max_data_date, key="rank_end")
-    # Filters now apply globally to all tabs
     with c3: limit = st.number_input("Limit", value=20, min_value=1, max_value=200, key="rank_limit")
     with c4: 
         min_mkt_cap_rank = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="rank_mc")
@@ -653,13 +706,12 @@ def run_rankings_app(df):
         st.warning("No trades found.")
         return
 
-    # --- TABS FOR VIEWING MODES ---
     tab_rank, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money", "💡 Top 3", "🤡 Bulltard"])
 
-    # 1. CALCULATE SMART MONEY DATA FIRST
     top_bulls = pd.DataFrame()
     top_bears = pd.DataFrame()
-    
+    mc_thresh = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mkt_cap_rank, 1e10)
+
     with st.spinner("Crunching data..."):
         f_filtered["Signed_Dollars"] = np.where(
             f_filtered[order_type_col].isin(["Calls Bought", "Puts Sold"]), 
@@ -675,9 +727,6 @@ def run_rankings_app(df):
         smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
         smart_stats["Market Cap"] = smart_stats["Symbol"].apply(lambda x: get_market_cap(x))
         
-        # Apply Market Cap Filter (Global)
-        mc_map = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}
-        mc_thresh = mc_map.get(min_mkt_cap_rank, 1e10)
         valid_data = smart_stats[smart_stats["Market Cap"] >= mc_thresh].copy()
         
         # Add Momentum context
@@ -709,55 +758,55 @@ def run_rankings_app(df):
             
             valid_data["Last Trade"] = valid_data["Last_Trade"].dt.strftime("%d %b")
             
-            # Helper to check EMA trend if filter is active
-            def check_ema_filter(ticker, mode="Bull"):
-                if not filter_ema: return True, "—"
-                try:
-                    s, e8, _, _, _ = get_stock_indicators(ticker)
-                    if not s or not e8: return False, "—" # Strict?
-                    if mode == "Bull":
-                        return (s > e8), ("✅ >EMA8" if s > e8 else "⚠️ <EMA8")
-                    else:
-                        return (s < e8), ("✅ <EMA8" if s < e8 else "⚠️ >EMA8")
-                except: return False, "Err"
-
-            # Pre-filter large lists before checking EMA to save time (take top 3x limit)
+            # --- OPTIMIZATION: BATCH FETCHING FOR EMA FILTERS ---
+            # Pre-filter lists (3x limit)
             candidates_bull = valid_data.sort_values(by="Base_Score_Bull", ascending=False).head(limit * 3).copy()
             candidates_bear = valid_data.sort_values(by="Base_Score_Bear", ascending=False).head(limit * 3).copy()
             
-            # Score and Filter Bulls
+            all_tickers_to_fetch = set(candidates_bull["Symbol"]).union(set(candidates_bear["Symbol"]))
+            
+            # Fetch all needed technicals in parallel
+            batch_techs = fetch_technicals_batch(list(all_tickers_to_fetch)) if filter_ema else {}
+
+            def check_ema_filter_fast(ticker, mode="Bull"):
+                if not filter_ema: return True, "—"
+                s, e8, _, _, _ = batch_techs.get(ticker, (None, None, None, None, None))
+                if not s or not e8: return False, "—"
+                if mode == "Bull":
+                    return (s > e8), ("✅ >EMA8" if s > e8 else "⚠️ <EMA8")
+                else:
+                    return (s < e8), ("✅ <EMA8" if s < e8 else "⚠️ >EMA8")
+            
+            # Filter Bulls
             bull_results = []
             for idx, row in candidates_bull.iterrows():
-                passes, trend_s = check_ema_filter(row["Symbol"], "Bull")
+                passes, trend_s = check_ema_filter_fast(row["Symbol"], "Bull")
                 if passes:
                     row["Score"] = row["Base_Score_Bull"] * 100
                     row["Trend"] = trend_s
                     bull_results.append(row)
             top_bulls = pd.DataFrame(bull_results).head(limit)
             
-            # Score and Filter Bears
+            # Filter Bears
             bear_results = []
             for idx, row in candidates_bear.iterrows():
-                passes, trend_s = check_ema_filter(row["Symbol"], "Bear")
+                passes, trend_s = check_ema_filter_fast(row["Symbol"], "Bear")
                 if passes:
                     row["Score"] = row["Base_Score_Bear"] * 100
                     row["Trend"] = trend_s
                     bear_results.append(row)
             top_bears = pd.DataFrame(bear_results).head(limit)
 
-    # --- TAB 1: RANKING TABLES ---
     with tab_rank:
         if valid_data.empty:
             st.warning("Not enough data for Smart Money scores.")
         else:
-            # Matches old columns: Symbol, Score (Bar), Qty, Last
             sm_config = {
                 "Symbol": st.column_config.TextColumn("Ticker", width=60),
                 "Score": st.column_config.ProgressColumn("Score", format="%d", min_value=0, max_value=100),
                 "Trade_Count": st.column_config.NumberColumn("Qty", width=50),
                 "Last Trade": st.column_config.TextColumn("Last", width=70)
             }
-            
             cols_to_show = ["Symbol", "Score", "Trade_Count", "Last Trade"]
             
             sm1, sm2 = st.columns(2, gap="large")
@@ -771,7 +820,6 @@ def run_rankings_app(df):
                 if not top_bears.empty:
                     st.dataframe(top_bears[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=get_table_height(top_bears, max_rows=100))
 
-    # --- TAB 2: TOP 3 TRADE SETUPS (Using calculated top_bulls) ---
     with tab_ideas:
         if top_bulls.empty:
             st.info("No Bullish candidates found to analyze.")
@@ -785,6 +833,9 @@ def run_rankings_app(df):
                 
                 prog_bar = st.progress(0, text="Analyzing technicals...")
                 bull_list = top_bulls["Symbol"].tolist()
+                
+                # We can reuse batch_techs if we have them, otherwise fallback to single fetch
+                # For safety/simplicity in this specific "Deep Dive", we do fresh fetch or reuse if available
                 
                 for i, t in enumerate(bull_list):
                     prog_bar.progress((i+1)/len(bull_list), text=f"Checking {t}...")
@@ -822,7 +873,6 @@ def run_rankings_app(df):
                             for r in cand['Reasons']:
                                 st.caption(f"• {r}")
 
-    # --- TAB 3: BULLTARD RANKINGS (Renamed) ---
     with tab_vol:
         st.caption("ℹ️ Legacy Methodology: Score = (Calls + Puts Sold) - (Puts Bought).")
         st.caption("ℹ️ Note: These tables differ from Bulltard's because his rankings include expired trades.")
@@ -836,15 +886,11 @@ def run_rankings_app(df):
         scores_df["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
         scores_df["Trade Count"] = counts.sum(axis=1)
         
-        # Determine Last Trade Date for each symbol
         last_trade_series = f_filtered.groupby("Symbol")["Trade Date"].max()
         scores_df["Last Trade"] = last_trade_series.dt.strftime("%d %b %y")
         
-        # Determine Market Cap for filtering
         res = scores_df.reset_index()
         res["Market Cap"] = res["Symbol"].apply(lambda x: get_market_cap(x))
-        
-        # Apply Market Cap Filter (Global)
         res = res[res["Market Cap"] >= mc_thresh]
         
         rank_col_config = {
@@ -854,22 +900,29 @@ def run_rankings_app(df):
             "Score": st.column_config.NumberColumn("Score", width=50),
         }
         
-        # Sort initial lists
         pre_bull_df = res.sort_values(by=["Score", "Trade Count"], ascending=[False, False])
         pre_bear_df = res.sort_values(by=["Score", "Trade Count"], ascending=[True, False])
         
-        # Apply EMA Filter if active
         def get_filtered_list(source_df, mode="Bull"):
             if not filter_ema:
                 return source_df.head(limit)
             
-            final_list = []
-            # Check up to 3x limit to find enough candidates
+            # Using the same batch fetching approach for legacy tab would be best
+            # Collecting candidates
             candidates = source_df.head(limit * 3) 
+            # We can use the check_ema_filter_fast if the tickers were in the set, 
+            # but they might differ from Smart Money list. 
+            # For simplicity in this legacy tab, we'll iterate but limit count.
+            final_list = []
+            
+            # This part is slower but it's the legacy tab. We can improve if needed by another batch fetch.
+            # Let's do a mini batch fetch here for speed.
+            needed_tickers = candidates["Symbol"].tolist()
+            mini_batch = fetch_technicals_batch(needed_tickers)
             
             for _, r in candidates.iterrows():
                 try:
-                    s, e8, _, _, _ = get_stock_indicators(r["Symbol"])
+                    s, e8, _, _, _ = mini_batch.get(r["Symbol"], (None,None,None,None,None))
                     if s and e8:
                         if mode == "Bull" and s > e8: final_list.append(r)
                         elif mode == "Bear" and s < e8: final_list.append(r)
@@ -955,7 +1008,6 @@ def run_strike_zones_app(df):
     edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
 
     if show_table:
-        # Changed: Convert Dollar/Contract columns to real numbers for sorting
         editor_input = edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]].copy()
         
         st.subheader("Data Table & Selection")
@@ -964,9 +1016,8 @@ def run_strike_zones_app(df):
             editor_input,
             column_config={
                 "Include": st.column_config.CheckboxColumn("Include", default=True),
-                # Changed: Removed format="$%d" to allow Streamlit default numeric formatting (with commas)
-                # Renamed header to indicate currency
-                "Dollars": st.column_config.NumberColumn("Dollars ($)"),
+                # Format: allow Streamlit defaults for Contracts (commas) and use prefix for Dollars
+                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
                 "Contracts": st.column_config.NumberColumn("Qty"),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry"
@@ -1226,10 +1277,9 @@ def run_pivot_tables_app(df):
     else: st.caption("No matched RR pairs found.")
 
 def run_rsi_scanner_app():
-    st.title("🤖 RSI Scanner")
+    st.title("📈 RSI Scanner")
     st.caption("ℹ️ On mobile, set your browser to View Desktop Site")
 
-    # Shared CSS
     st.markdown("""
         <style>
         .top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; }
@@ -1241,7 +1291,6 @@ def run_rsi_scanner_app():
         .rsi-p-table thead tr th { text-align: left; padding: 10px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; }
         .rsi-p-table tbody tr td { padding: 12px 10px; border-bottom: 1px solid #eee; font-weight: 500; }
         
-        /* Cell Highlighting & Colors */
         .ev-positive, .cell-green { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
         .ev-negative, .cell-red { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
         .ev-neutral { color: #5f6368; }
@@ -1252,42 +1301,32 @@ def run_rsi_scanner_app():
         </style>
         """, unsafe_allow_html=True)
     
-    # 1. SETUP TABS & DATA LOADING
     dataset_map = load_dataset_config()
     options = list(dataset_map.keys())
 
-    # 2. TABS (Defined Top-Level)
     tab_div, tab_pct, tab_bot = st.tabs(["📉 Divergences", "🔢 Percentiles", "🤖 Backtester"])
 
-    # --- TAB 3: BACKTESTER (Independent, No Pills) ---
     with tab_bot:
-        # Define layout: Compact Left column for Inputs, Wider Right column for Tables
         c_left, c_right = st.columns([1, 6])
         
         with c_left:
             ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
-            # Placeholder for RSI output to appear here later
             rsi_metric_container = st.empty()
         
-        # Calculate Logic
         if ticker:
             ticker_map = load_ticker_map()
             
-            # --- DATA FETCHING ---
             with st.spinner(f"Crunching numbers for {ticker}..."):
-                # Try Drive First
                 df = get_ticker_technicals(ticker, ticker_map)
                 
-                # Fallback to Yahoo Finance
                 if df is None or df.empty:
                     df = fetch_yahoo_data(ticker)
                 
                 if df is None or df.empty:
                     st.error(f"Sorry, data could not be retrieved for {ticker} (neither via Drive nor Yahoo Finance).")
                 else:
-                    # 3. Data Prep & Calculations
                     df.columns = [c.strip().upper() for c in df.columns]
                     
                     date_col = next((c for c in df.columns if 'DATE' in c), None)
@@ -1302,21 +1341,18 @@ def run_rsi_scanner_app():
 
                         if not rsi_col:
                             delta = df[close_col].diff()
-                            # Use Wilder's Smoothing (EWM) for RSI
                             gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
                             loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
                             rs = gain / loss
                             df['RSI'] = 100 - (100 / (1 + rs))
                             rsi_col = 'RSI'
 
-                        # Filter to User Lookback AND RESET INDEX
                         cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
                         df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True) 
 
                         current_row = df.iloc[-1]
                         current_rsi = current_row[rsi_col]
                         
-                        # UPDATE: Display RSI below inputs
                         rsi_metric_container.markdown(f"""<div style="margin-top: 10px; font-size: 0.9rem; color: #666;">Current RSI</div><div style="font-size: 1.5rem; font-weight: 600;">{current_rsi:.2f}</div>""", unsafe_allow_html=True)
                         
                         rsi_min = current_rsi - rsi_tol
@@ -1325,7 +1361,6 @@ def run_rsi_scanner_app():
                         hist_df = df.iloc[:-1].copy()
                         matches = hist_df[(hist_df[rsi_col] >= rsi_min) & (hist_df[rsi_col] <= rsi_max)].copy()
                         
-                        # 4. Calculate Forward Returns
                         full_close = df[close_col].values
                         match_indices = matches.index.values
                         total_len = len(full_close)
@@ -1359,20 +1394,17 @@ def run_rsi_scanner_app():
 
                         res_df = pd.DataFrame(results)
 
-                        # 5. RENDER TABLES IN RIGHT COLUMN
                         with c_right:
                             if matches.empty:
                                 st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
                             else:
                                 def highlight_best(row):
-                                    # Highlight if Count > 30 and Win Rate > 75%
                                     condition = (row['Count'] > 30) and (row['Win Rate'] > 75)
                                     color = 'background-color: rgba(144, 238, 144, 0.2)' if condition else ''
                                     return [color] * len(row)
 
                                 def highlight_ret(val):
                                     if val is None or pd.isna(val): return ''
-                                    # Skip string/non-numeric just in case
                                     if not isinstance(val, (int, float)): return ''
                                     color = '#71d28a' if val > 0 else '#f29ca0'
                                     return f'color: {color}; font-weight: bold;'
@@ -1380,13 +1412,12 @@ def run_rsi_scanner_app():
                                 format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
                                 format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
 
-                                # Combined Table with styling
                                 st.dataframe(
                                     res_df.style
                                     .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
                                     .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
                                     .apply(highlight_best, axis=1),
-                                    use_container_width=False, 
+                                    use_container_width=False,
                                     column_config={
                                         "Days": st.column_config.NumberColumn("Days", width="small"),
                                         "Win Rate": st.column_config.TextColumn("Win Rate", width="small"),
@@ -1397,21 +1428,17 @@ def run_rsi_scanner_app():
                                     hide_index=True
                                 )
 
-                        # Add Padding at bottom
                         st.markdown("<br><br><br>", unsafe_allow_html=True)
 
-    # --- TAB 1: DIVERGENCES (With Pills) ---
     with tab_div:
-        # Pills inside Tab
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="pills_div")
         
-        # NOTES
         with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
             f_col1, f_col2, f_col3 = st.columns(3)
             with f_col1:
                 st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
                 st.markdown(f"""
-                * **Identification**: Scans for **True Pivots** (localized extremes) over a **{SIGNAL_LOOKBACK_PERIOD}-period** window.
+                * **Identification**: Scans for **True Pivots** over a **{SIGNAL_LOOKBACK_PERIOD}-period** window.
                 * **Divergence**: 
                     * **Bullish**: Price makes a Lower Low, but RSI makes a Higher Low.
                     * **Bearish**: Price makes a Higher High, but RSI makes a Lower High.
@@ -1432,7 +1459,6 @@ def run_rsi_scanner_app():
                 * **Volume**: **VOL_HIGH** (>150% SMA) or **VOL_GROW** (P2 Vol > P1 Vol).
                 """)
         
-        # LOGIC
         if data_option_div:
             try:
                 target_url = st.secrets[dataset_map[data_option_div]]
@@ -1442,7 +1468,6 @@ def run_rsi_scanner_app():
                     master = pd.read_csv(csv_buffer)
                     t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                     
-                    # Identify Max Date
                     date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
                     if date_col_raw:
                         max_dt_obj = pd.to_datetime(master[date_col_raw]).max()
@@ -1513,12 +1538,9 @@ def run_rsi_scanner_app():
                     else: st.warning("No Divergence signals found.")
             except Exception as e: st.error(f"Analysis failed: {e}")
 
-    # --- TAB 2: PERCENTILES (With Pills) ---
     with tab_pct:
-        # Pills inside Tab
         data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="pills_pct")
         
-        # NOTES
         with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
              st.markdown("""
             * **Historical Context**: 10-year daily price history analysis.
@@ -1530,7 +1552,6 @@ def run_rsi_scanner_app():
         
         if data_option_pct:
             try:
-                # Re-load or cache check (streamlined duplication for separate tabs UI requirement)
                 target_url = st.secrets[dataset_map[data_option_pct]]
                 csv_buffer = get_confirmed_gdrive_data(target_url)
                 
@@ -1550,7 +1571,6 @@ def run_rsi_scanner_app():
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_pct): cols[i % 6].write(ticker)
 
-                    # INPUTS moved BELOW View Tickers
                     c_p1, c_p2 = st.columns(2)
                     with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
                     with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
@@ -1582,8 +1602,7 @@ def run_rsi_scanner_app():
                             val_str = f"{ret*100:+.1f}% (N={n})"
                             return f'<td class="{cls}">{val_str}</td>'
 
-                        # Changed Header Names: Signal -> Exiting, Threshold -> RSI %ile
-                        html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Exiting</th><th>RSI</th><th>RSI %ile</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Exit</th><th>RSI</th><th>RSI %ile</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                         
                         for r in res_pct_df.itertuples():
                             is_latest = (r.Date_Obj == max_date_in_set)
@@ -1610,7 +1629,6 @@ def run_trade_ideas_app(df_global):
             st.error("Missing URL_Prompt in secrets.toml")
         else:
             try:
-                import google.generativeai as genai
                 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
                 
                 with st.spinner("Step 1/3: Fetching System Prompt..."):
@@ -1707,7 +1725,6 @@ try:
         st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
         st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
         st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
-        # COMBINED PAGE HERE:
         st.Page(run_rsi_scanner_app, title="RSI Scanner", icon="📈", url_path="rsi_scanner"), 
         st.Page(lambda: run_trade_ideas_app(df_global), title="Trade Ideas", icon="💡", url_path="trade_ideas"),
     ])
