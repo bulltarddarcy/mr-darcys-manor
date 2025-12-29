@@ -1251,15 +1251,16 @@ def run_rsi_scanner_app():
     with tab_bot:
         st.subheader("Historical RSI Backtester")
         
-        # 1. INPUTS
-        c_in1, c_in2, c_in3 = st.columns([1, 1, 1])
-        with c_in1:
-            ticker = st.text_input("Enter Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
-        with c_in2:
-            lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
-        with c_in3:
-            rsi_tol = st.number_input("RSI Tolerance (+/-)", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
+        # Define layout: Compact Left column for Inputs/Metrics, Wider Right column for Tables
+        c_left, c_right = st.columns([1, 4])
         
+        with c_left:
+            st.markdown("#### Settings")
+            ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
+            lookback_years = st.number_input("Lookback (Yrs)", min_value=1, max_value=10, value=10)
+            rsi_tol = st.number_input("RSI Tol (+/-)", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
+        
+        # Calculate Logic
         if ticker:
             ticker_map = load_ticker_map()
             
@@ -1302,7 +1303,6 @@ def run_rsi_scanner_app():
 
                         current_row = df.iloc[-1]
                         current_rsi = current_row[rsi_col]
-                        current_date = current_row[date_col].date()
                         
                         rsi_min = current_rsi - rsi_tol
                         rsi_max = current_rsi + rsi_tol
@@ -1310,6 +1310,20 @@ def run_rsi_scanner_app():
                         hist_df = df.iloc[:-1].copy()
                         matches = hist_df[(hist_df[rsi_col] >= rsi_min) & (hist_df[rsi_col] <= rsi_max)].copy()
                         
+                        # RENDER METRICS IN LEFT COLUMN (Below Inputs)
+                        with c_left:
+                            st.markdown("---")
+                            st.markdown(f"""
+                            <div style="margin-bottom: 10px;">
+                                <div style="font-size: 0.9rem; color: #666;">Current RSI</div>
+                                <div style="font-size: 1.4rem; font-weight: 600;">{current_rsi:.2f}</div>
+                            </div>
+                            <div style="margin-bottom: 10px;">
+                                <div style="font-size: 0.9rem; color: #666;">Matches found</div>
+                                <div style="font-size: 1.4rem; font-weight: 600;">{len(matches)}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
                         # 4. Calculate Forward Returns
                         full_close = df[close_col].values
                         match_indices = matches.index.values
@@ -1343,21 +1357,12 @@ def run_rsi_scanner_app():
 
                         res_df = pd.DataFrame(results)
 
-                        # 5. Display Results (Compact Layout)
-                        st.markdown(f"### Results for {ticker}")
-                        
-                        # Layout: Left column (Metrics), Right column (Side-by-side tables)
-                        col_metrics, col_tables = st.columns([1, 4])
-                        
-                        with col_metrics:
-                            st.metric("Current RSI", f"{current_rsi:.2f}", f"as of {current_date}")
-                            st.metric("RSI Range", f"[{rsi_min:.1f}, {rsi_max:.1f}]", f"±{rsi_tol}")
-                            st.metric("Matches", f"{len(matches)}", f"samples")
-
-                        with col_tables:
+                        # 5. RENDER TABLES IN RIGHT COLUMN
+                        with c_right:
                             if matches.empty:
                                 st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
                             else:
+                                st.markdown(f"#### Results for {ticker}")
                                 def highlight_ret(val):
                                     if val is None or pd.isna(val): return ''
                                     color = '#71d28a' if val > 0 else '#f29ca0'
@@ -1369,7 +1374,7 @@ def run_rsi_scanner_app():
                                 t1, t2 = st.columns(2)
                                 
                                 with t1:
-                                    st.markdown("**Short-Term Returns**")
+                                    st.markdown("**Short-Term**")
                                     short_term = res_df[res_df['Days'].isin([1, 3, 5, 7, 10, 14])].set_index("Days")
                                     st.dataframe(
                                         short_term.style.format({
@@ -1379,7 +1384,7 @@ def run_rsi_scanner_app():
                                     )
 
                                 with t2:
-                                    st.markdown("**Long-Term Returns**")
+                                    st.markdown("**Long-Term**")
                                     long_term = res_df[res_df['Days'].isin([30, 60, 90, 180])].set_index("Days")
                                     st.dataframe(
                                         long_term.style.format({
