@@ -1249,16 +1249,13 @@ def run_rsi_scanner_app():
 
     # --- TAB 3: BACKTESTER (Independent, No Pills) ---
     with tab_bot:
-        st.subheader("Historical RSI Backtester")
-        
-        # Define layout: Compact Left column for Inputs/Metrics, Wider Right column for Tables
+        # Define layout: Compact Left column for Inputs, Wider Right column for Tables
         c_left, c_right = st.columns([1, 4])
         
         with c_left:
-            st.markdown("#### Settings")
             ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
-            lookback_years = st.number_input("Lookback (Yrs)", min_value=1, max_value=10, value=10)
-            rsi_tol = st.number_input("RSI Tol (+/-)", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
+            lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
+            rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
         
         # Calculate Logic
         if ticker:
@@ -1310,20 +1307,6 @@ def run_rsi_scanner_app():
                         hist_df = df.iloc[:-1].copy()
                         matches = hist_df[(hist_df[rsi_col] >= rsi_min) & (hist_df[rsi_col] <= rsi_max)].copy()
                         
-                        # RENDER METRICS IN LEFT COLUMN (Below Inputs)
-                        with c_left:
-                            st.markdown("---")
-                            st.markdown(f"""
-                            <div style="margin-bottom: 10px;">
-                                <div style="font-size: 0.9rem; color: #666;">Current RSI</div>
-                                <div style="font-size: 1.4rem; font-weight: 600;">{current_rsi:.2f}</div>
-                            </div>
-                            <div style="margin-bottom: 10px;">
-                                <div style="font-size: 0.9rem; color: #666;">Matches found</div>
-                                <div style="font-size: 1.4rem; font-weight: 600;">{len(matches)}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
-
                         # 4. Calculate Forward Returns
                         full_close = df[close_col].values
                         match_indices = matches.index.values
@@ -1336,7 +1319,7 @@ def run_rsi_scanner_app():
                             valid_indices = match_indices[match_indices + p < total_len]
                             
                             if len(valid_indices) == 0:
-                                results.append({"Days": p, "Win Rate": np.nan, "Avg Ret": np.nan, "Med Ret": np.nan})
+                                results.append({"Days": p, "Win Rate": np.nan, "Avg Ret": np.nan, "Med Ret": np.nan, "Count": 0})
                                 continue
                                 
                             entry_prices = full_close[valid_indices]
@@ -1352,7 +1335,8 @@ def run_rsi_scanner_app():
                                 "Days": p, 
                                 "Win Rate": win_rate, 
                                 "Avg Ret": avg_ret, 
-                                "Med Ret": med_ret
+                                "Med Ret": med_ret,
+                                "Count": len(valid_indices)
                             })
 
                         res_df = pd.DataFrame(results)
@@ -1362,9 +1346,16 @@ def run_rsi_scanner_app():
                             if matches.empty:
                                 st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
                             else:
-                                st.markdown(f"#### Results for {ticker}")
+                                def highlight_best(row):
+                                    # Highlight if Count > 30 and Win Rate > 75%
+                                    condition = (row['Count'] > 30) and (row['Win Rate'] > 75)
+                                    color = 'background-color: rgba(144, 238, 144, 0.2)' if condition else ''
+                                    return [color] * len(row)
+
                                 def highlight_ret(val):
                                     if val is None or pd.isna(val): return ''
+                                    # Skip string/non-numeric just in case
+                                    if not isinstance(val, (int, float)): return ''
                                     color = '#71d28a' if val > 0 else '#f29ca0'
                                     return f'color: {color}; font-weight: bold;'
                                 
@@ -1377,9 +1368,10 @@ def run_rsi_scanner_app():
                                     st.markdown("**Short-Term**")
                                     short_term = res_df[res_df['Days'].isin([1, 3, 5, 7, 10, 14])].set_index("Days")
                                     st.dataframe(
-                                        short_term.style.format({
-                                            "Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func
-                                        }).applymap(highlight_ret, subset=["Avg Ret", "Med Ret"]),
+                                        short_term.style
+                                        .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
+                                        .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
+                                        .apply(highlight_best, axis=1),
                                         use_container_width=True
                                     )
 
@@ -1387,12 +1379,20 @@ def run_rsi_scanner_app():
                                     st.markdown("**Long-Term**")
                                     long_term = res_df[res_df['Days'].isin([30, 60, 90, 180])].set_index("Days")
                                     st.dataframe(
-                                        long_term.style.format({
-                                            "Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func
-                                        }).applymap(highlight_ret, subset=["Avg Ret", "Med Ret"]),
+                                        long_term.style
+                                        .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
+                                        .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
+                                        .apply(highlight_best, axis=1),
                                         use_container_width=True
                                     )
-                        
+                                    
+                                    # METRICS UNDER TABLE 2
+                                    m1, m2 = st.columns(2)
+                                    with m1:
+                                        st.markdown(f"""<div style="margin-top: 10px;"><div style="font-size: 0.8rem; color: #666;">Current RSI</div><div style="font-size: 1.2rem; font-weight: 600;">{current_rsi:.2f}</div></div>""", unsafe_allow_html=True)
+                                    with m2:
+                                        st.markdown(f"""<div style="margin-top: 10px;"><div style="font-size: 0.8rem; color: #666;">Matches Found</div><div style="font-size: 1.2rem; font-weight: 600;">{len(matches)}</div></div>""", unsafe_allow_html=True)
+
                         # Add Padding at bottom
                         st.markdown("<br><br><br>", unsafe_allow_html=True)
 
