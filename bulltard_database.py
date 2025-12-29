@@ -955,7 +955,7 @@ def run_strike_zones_app(df):
     edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
 
     if show_table:
-        # Changed: We do NOT format Dollars/Contracts as strings here anymore to preserve numeric sorting
+        # Changed: Convert Dollar/Contract columns to real numbers for sorting
         editor_input = edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]].copy()
         
         st.subheader("Data Table & Selection")
@@ -964,9 +964,10 @@ def run_strike_zones_app(df):
             editor_input,
             column_config={
                 "Include": st.column_config.CheckboxColumn("Include", default=True),
-                # Changed: Use NumberColumn to sort numerically but format visually
-                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
-                "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
+                # Changed: Removed format="$%d" to allow Streamlit default numeric formatting (with commas)
+                # Renamed header to indicate currency
+                "Dollars": st.column_config.NumberColumn("Dollars ($)"),
+                "Contracts": st.column_config.NumberColumn("Qty"),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry"
             },
@@ -1261,7 +1262,6 @@ def run_rsi_scanner_app():
     # --- TAB 3: BACKTESTER (Independent, No Pills) ---
     with tab_bot:
         # Define layout: Compact Left column for Inputs, Wider Right column for Tables
-        # Changed: [1, 4] -> [1, 6] to push the table closer to the left (by narrowing the first col percentage relative to second)
         c_left, c_right = st.columns([1, 6])
         
         with c_left:
@@ -1386,7 +1386,7 @@ def run_rsi_scanner_app():
                                     .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
                                     .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
                                     .apply(highlight_best, axis=1),
-                                    use_container_width=False, # Changed to False to compact columns
+                                    use_container_width=False, 
                                     column_config={
                                         "Days": st.column_config.NumberColumn("Days", width="small"),
                                         "Win Rate": st.column_config.TextColumn("Win Rate", width="small"),
