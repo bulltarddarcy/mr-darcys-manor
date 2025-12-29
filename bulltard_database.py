@@ -746,9 +746,6 @@ def run_rankings_app(df):
                 "Last Trade": st.column_config.TextColumn("Last", width=70)
             }
             
-            # Rename columns to match the previous version's display logic if needed or just map
-            # We need to ensure the DF has the right columns
-            
             cols_to_show = ["Symbol", "Score", "Trade_Count", "Last Trade"]
             
             sm1, sm2 = st.columns(2, gap="large")
@@ -767,8 +764,7 @@ def run_rankings_app(df):
         if top_bulls.empty:
             st.info("No Bullish candidates found to analyze.")
         else:
-            st.markdown("##### 🚀 Top High-Conviction Setups")
-            st.caption(f"Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for technical confluence...")
+            st.caption(f"ℹ️ Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for technical confluence...")
             
             if st.button("Analyze Candidates"):
                 ticker_map = load_ticker_map()
@@ -815,8 +811,8 @@ def run_rankings_app(df):
 
     # --- TAB 3: BULLTARD RANKINGS (Renamed) ---
     with tab_vol:
-        st.subheader("Bulltard Rankings 🤡")
-        st.caption("Legacy Methodology: Score = (Calls + Puts Sold) - (Puts Bought). Includes expired trades.")
+        st.caption("ℹ️ Legacy Methodology: Score = (Calls + Puts Sold) - (Puts Bought).")
+        st.caption("ℹ️ Note: These tables differ from Bulltard's because his rankings include expired trades.")
         
         counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
         
