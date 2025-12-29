@@ -216,6 +216,129 @@ def load_dataset_config():
         st.error(f"Error loading config file: {e}")
     return {"Darcy Data": "URL_DARCY"}
 
+# --- MISSING FUNCTIONS ADDED HERE ---
+
+@st.cache_data(ttl=3600)
+def load_ticker_map():
+    """
+    Loads the master mapping of Ticker -> Google Drive File ID.
+    Used to locate the specific technical data file for a given stock.
+    """
+    try:
+        # Prefer secret, fallback to default constant
+        url = st.secrets.get("URL_TICKER_MAP", URL_TICKER_MAP_DEFAULT)
+        buffer = get_confirmed_gdrive_data(url)
+        if buffer and buffer != "HTML_ERROR":
+            df = pd.read_csv(buffer)
+            # Assumes Column 0 is Ticker, Column 1 is ID
+            if len(df.columns) >= 2:
+                # Create dictionary {TICKER: FILE_ID}
+                return dict(zip(df.iloc[:, 0].astype(str).str.strip().str.upper(), 
+                              df.iloc[:, 1].astype(str).str.strip()))
+    except Exception:
+        # Silently fail or log if needed, returning empty dict allows fallback to Yahoo
+        pass
+    return {}
+
+@st.cache_data(ttl=300)
+def get_ticker_technicals(ticker: str, mapping: dict):
+    """
+    Fetches the specific technical analysis CSV for a single ticker 
+    using the file ID from the ticker map.
+    """
+    if not mapping or ticker not in mapping:
+        return None
+        
+    file_id = mapping[ticker]
+    # Construct a direct download URL using the ID
+    file_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    
+    buffer = get_confirmed_gdrive_data(file_url)
+    if buffer and buffer != "HTML_ERROR":
+        try:
+            df = pd.read_csv(buffer)
+            # Basic cleanup to ensure standard columns exist
+            df.columns = [c.strip().upper() for c in df.columns]
+            return df
+        except:
+            return None
+    return None
+
+def fetch_and_prepare_ai_context(url, name, limit=90):
+    """
+    Helper for the AI Scanner. Fetches a CSV, truncates it to the last N rows,
+    and converts it to a string for the LLM prompt.
+    """
+    try:
+        buffer = get_confirmed_gdrive_data(url)
+        if buffer and buffer != "HTML_ERROR":
+            df = pd.read_csv(buffer)
+            # Keep only the last 'limit' rows to save tokens
+            df_recent = df.tail(limit)
+            csv_str = df_recent.to_csv(index=False)
+            return f"\n\n--- DATASET: {name} ---\n{csv_str}"
+    except Exception as e:
+        return f"\n[Error loading {name}: {e}]"
+    return ""
+
+def analyze_trade_setup(ticker, t_df, global_df):
+    """
+    Helper for Trade Ideas. Generates a basic score and trade suggestions
+    based on the loaded technical data.
+    """
+    score = 0
+    reasons = []
+    suggestions = {'Buy Calls': None, 'Sell Puts': None, 'Buy Commons': None}
+    
+    if t_df is None or t_df.empty:
+        return 0, ["No data"], suggestions
+
+    # Get latest data
+    last = t_df.iloc[-1]
+    close = last.get('CLOSE', 0)
+    ema8 = last.get('EMA_8', 0)
+    ema21 = last.get('EMA_21', 0)
+    sma200 = last.get('SMA_200', 0)
+    rsi = last.get('RSI_14', 50)
+    
+    # 1. Trend Score
+    if close > ema8 and close > ema21:
+        score += 2
+        reasons.append("Strong Trend (Price > EMA8 & EMA21)")
+    elif close > ema21:
+        score += 1
+        reasons.append("Moderate Trend (Price > EMA21)")
+        
+    # 2. Support Score
+    if close > sma200:
+        score += 2
+        reasons.append("Long-term Bullish (> SMA200)")
+        
+    # 3. Momentum Score
+    if 45 < rsi < 65:
+        score += 2
+        reasons.append(f"Healthy Momentum (RSI {rsi:.0f})")
+    elif rsi >= 70:
+        score -= 1
+        reasons.append("Overbought (RSI > 70)")
+        
+    # 4. Suggestions
+    # Sell Put idea
+    if close > ema21:
+        strike_target = math.floor(ema21)
+        suggestions['Sell Puts'] = f"Strike: ${strike_target} (EMA21 Support)"
+    
+    # Buy Call idea
+    if close > ema8:
+        suggestions['Buy Calls'] = f"ATM or slightly OTM (e.g., ${math.ceil(close)}) for momentum."
+        
+    # Commons
+    suggestions['Buy Commons'] = f"Entry: ${close:.2f}. Stop Loss: ${ema21:.2f}"
+    
+    return score, reasons, suggestions
+
+# --- END MISSING FUNCTIONS ---
+
 def style_tags(tag_str):
     if not tag_str: return ''
     tags = tag_str.split(", ")
@@ -555,9 +678,9 @@ def run_rankings_app(df):
     c1, c2, c3, c4 = st.columns([1, 1, 0.7, 1.3], gap="small")
     with c1: rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
     with c2: rank_end = st.date_input("Trade End Date", value=max_data_date, key="rank_end")
-    with c3: limit = st.number_input("Limit", value=15, min_value=1, max_value=200, key="rank_limit")
+    # Default limit changed to 20
+    with c3: limit = st.number_input("Limit", value=20, min_value=1, max_value=200, key="rank_limit")
     with c4: 
-        # Added Market Cap Filter Input
         min_mkt_cap_rank = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="rank_mc")
         filter_ema = st.checkbox("Hide < 8 EMA", value=False, key="rank_ema")
         
@@ -574,25 +697,20 @@ def run_rankings_app(df):
     f_filtered = f[f[order_type_col].isin(target_types)].copy()
     
     if f_filtered.empty:
-        st.warning("No trades of the specified sentiment types found in this range.")
+        st.warning("No trades found.")
         return
 
-    st.subheader("🧠 Smart Money (Multivariate Score)")
+    # --- TABS FOR VIEWING MODES ---
+    tab_rank, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money Rankings", "💡 Top 3 Trade Setups", "🤡 Volume Rankings"])
+
+    # 1. CALCULATE SMART MONEY DATA FIRST
+    top_bulls = pd.DataFrame()
+    top_bears = pd.DataFrame()
     
-    with st.expander("ℹ️ About Smart Money Methodology"):
-        st.markdown("""
-        * **The Algorithm:** Generates a **Smart Score (0-100)** by normalizing and weighing key variables.
-        * **Net Flow (30% Weight):** The raw dollar conviction (Calls + Puts Sold - Puts Bought).
-        * **Impact (25% Weight):** The Net Flow calculated as a percentage of Market Cap. Boosts smaller tickers receiving outsized flow.
-        * **Momentum (25% Weight):** The flow intensity over just the **last 3 trading days**, rewarding urgent action.
-        * **Trend (20% Weight):** Rewards tickers trading **above the 8 Day EMA**, ensuring technical alignment with flow.
-        """)
-    
-    with st.spinner("Processing Smart Money calculations... Please be patient, it is totally worth it!"):
+    with st.spinner("Crunching Smart Money scores..."):
         f_filtered["Signed_Dollars"] = np.where(
             f_filtered[order_type_col].isin(["Calls Bought", "Puts Sold"]), 
-            f_filtered["Dollars"], 
-            -f_filtered["Dollars"]
+            f_filtered["Dollars"], -f_filtered["Dollars"]
         )
         
         smart_stats = f_filtered.groupby("Symbol").agg(
@@ -604,7 +722,6 @@ def run_rankings_app(df):
         smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
         smart_stats["Market Cap"] = smart_stats["Symbol"].apply(lambda x: get_market_cap(x))
         
-        # Apply Market Cap Filter for Rankings
         mc_map = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}
         mc_thresh = mc_map.get(min_mkt_cap_rank, 1e10)
         valid_data = smart_stats[smart_stats["Market Cap"] >= mc_thresh].copy()
@@ -624,173 +741,176 @@ def run_rankings_app(df):
                 mn, mx = series.min(), series.max()
                 return (series - mn) / (mx - mn) if (mx != mn) else 0
 
-            # 1. Calculate Base Scores (Flow/Impact/Mom)
+            # Base Scores
             b_flow_norm = normalize(valid_data["Net Sentiment ($)"].clip(lower=0))
             b_imp_norm = normalize(valid_data["Impact"].clip(lower=0))
             b_mom_norm = normalize(valid_data["Momentum ($)"].clip(lower=0))
-            
             valid_data["Base_Score_Bull"] = (0.35 * b_flow_norm) + (0.30 * b_imp_norm) + (0.35 * b_mom_norm)
             
             br_flow_norm = normalize(-valid_data["Net Sentiment ($)"].clip(upper=0))
             br_imp_norm = normalize(-valid_data["Impact"].clip(upper=0))
             br_mom_norm = normalize(-valid_data["Momentum ($)"].clip(upper=0))
-            
             valid_data["Base_Score_Bear"] = (0.35 * br_flow_norm) + (0.30 * br_imp_norm) + (0.35 * br_mom_norm)
             
             valid_data["Last Trade"] = valid_data["Last_Trade"].dt.strftime("%d %b")
             
-            # Helper to fetch Trend status
-            def get_trend_data(sym):
-                s, e8, e21, sma200, _ = get_stock_indicators(sym)
-                return s, e8, e21
-
-            # 2. Optimization: Get Top 60 candidates by Base Score first, then apply Trend Weight
-            # This avoids fetching technicals for hundreds of irrelevant tickers
+            # Optimization: Sort by base score first to limit API calls
             pre_bulls = valid_data.sort_values(by="Base_Score_Bull", ascending=False).head(60).copy()
             pre_bears = valid_data.sort_values(by="Base_Score_Bear", ascending=False).head(60).copy()
             
-            # 3. Apply Trend Logic & Recalculate Final Score
-            # Weighting: 30% Flow, 25% Impact, 25% Momentum, 20% Trend
-            
             def finalize_score(row, mode="Bull"):
                 try:
-                    s, e8, e21 = get_trend_data(row["Symbol"])
+                    # We check trend here locally
+                    s, e8, e21, _, _ = get_stock_indicators(row["Symbol"])
                     trend_score = 0.0
                     trend_str = "—"
-                    
-                    if s is not None and e8 is not None:
+                    if s and e8:
                         if mode == "Bull":
                             if s > e8: 
-                                trend_score = 1.0
-                                trend_str = "✅ >EMA8"
+                                trend_score = 1.0; trend_str = "✅ >EMA8"
                             elif s > e21: 
-                                trend_score = 0.5
-                                trend_str = "⚠️ >EMA21"
-                            else:
-                                trend_str = "🔻 Weak"
-                        else: # Bear mode
-                            if s < e8:
-                                trend_score = 1.0
-                                trend_str = "✅ <EMA8"
-                            elif s < e21:
-                                trend_score = 0.5
-                                trend_str = "⚠️ <EMA21"
-                            else:
-                                trend_str = "🔻 Strong"
+                                trend_score = 0.5; trend_str = "⚠️ >EMA21"
+                            else: trend_str = "🔻 Weak"
+                        else:
+                            if s < e8: 
+                                trend_score = 1.0; trend_str = "✅ <EMA8"
+                            elif s < e21: 
+                                trend_score = 0.5; trend_str = "⚠️ <EMA21"
+                            else: trend_str = "🔻 Strong"
                     
-                    # Recalculate weighted score
-                    # Previous base was roughly sum(weights)=1.0 (35/30/35) -> Scale to 0.8 and add 0.2 trend
-                    # Logic: (Base_Score * 0.8) + (Trend_Score * 0.2)
                     final = (row[f"Base_Score_{mode}"] * 0.8) + (trend_score * 0.2)
                     return final * 100, trend_str
                 except:
                     return row[f"Base_Score_{mode}"] * 80, "—"
 
-            # Apply to Bulls
+            # Apply Logic
             res_bull = pre_bulls.apply(lambda r: finalize_score(r, "Bull"), axis=1, result_type='expand')
             pre_bulls["Score"], pre_bulls["Trend"] = res_bull[0], res_bull[1]
             
-            # Apply to Bears
             res_bear = pre_bears.apply(lambda r: finalize_score(r, "Bear"), axis=1, result_type='expand')
             pre_bears["Score"], pre_bears["Trend"] = res_bear[0], res_bear[1]
             
-            # 4. Final Sort & Filter
             if filter_ema:
                 pre_bulls = pre_bulls[pre_bulls["Trend"] == "✅ >EMA8"]
                 pre_bears = pre_bears[pre_bears["Trend"] == "✅ <EMA8"]
             
             top_bulls = pre_bulls.sort_values(by=["Score", "Net Sentiment ($)"], ascending=[False, False]).head(limit)
             top_bears = pre_bears.sort_values(by=["Score", "Net Sentiment ($)"], ascending=[False, True]).head(limit)
-            
+
+    # --- TAB 1: RANKING TABLES ---
+    with tab_rank:
+        if valid_data.empty:
+            st.warning("Not enough data for Smart Money scores.")
+        else:
             fmt_curr = lambda x: f"${x:,.0f}" if x >= 0 else f"(${abs(x):,.0f})"
-            
             sm_config = {
                 "Symbol": st.column_config.TextColumn("Ticker", width=50),
                 "Net Sentiment ($)": st.column_config.TextColumn("Net Flow", width=85),
-                "Trade_Count": st.column_config.NumberColumn("Qty", width=40, format="%d"),
-                "Last Trade": st.column_config.TextColumn("Last", width=50),
-                "Score": st.column_config.ProgressColumn(
-                    "Score",
-                    format="%d",
-                    min_value=0,
-                    max_value=100,
-                    width=None 
-                ),
+                "Score": st.column_config.ProgressColumn("Score", format="%d", min_value=0, max_value=100),
                 "Trend": st.column_config.TextColumn("Trend", width=70)
             }
 
             sm1, sm2 = st.columns(2, gap="large")
-            
             with sm1:
-                st.markdown("<div style='text-align:left; color: #71d28a; font-weight:bold; margin-bottom:5px;'>Top Bullish Scores</div>", unsafe_allow_html=True)
-                disp_bull = top_bulls[["Symbol", "Score", "Net Sentiment ($)", "Trade_Count", "Last Trade", "Trend"]].copy()
-                st.dataframe(
-                    disp_bull.style.format({"Net Sentiment ($)": fmt_curr}),
-                    use_container_width=True, 
-                    hide_index=True, 
-                    height=get_table_height(disp_bull), 
-                    column_config=sm_config
-                )
+                st.markdown("<div style='color: #71d28a; font-weight:bold;'>Top Bullish Scores</div>", unsafe_allow_html=True)
+                st.dataframe(top_bulls.style.format({"Net Sentiment ($)": fmt_curr}), use_container_width=True, hide_index=True, column_config=sm_config)
             
             with sm2:
-                st.markdown("<div style='text-align:left; color: #f29ca0; font-weight:bold; margin-bottom:5px;'>Top Bearish Scores</div>", unsafe_allow_html=True)
-                disp_bear = top_bears[["Symbol", "Score", "Net Sentiment ($)", "Trade_Count", "Last Trade", "Trend"]].copy()
-                st.dataframe(
-                    disp_bear.style.format({"Net Sentiment ($)": fmt_curr}),
-                    use_container_width=True, 
-                    hide_index=True, 
-                    height=get_table_height(disp_bear), 
-                    column_config=sm_config
-                )
+                st.markdown("<div style='color: #f29ca0; font-weight:bold;'>Top Bearish Scores</div>", unsafe_allow_html=True)
+                st.dataframe(top_bears.style.format({"Net Sentiment ($)": fmt_curr}), use_container_width=True, hide_index=True, column_config=sm_config)
 
+    # --- TAB 2: TOP 3 TRADE SETUPS (Using calculated top_bulls) ---
+    with tab_ideas:
+        if top_bulls.empty:
+            st.info("No Bullish candidates found to analyze.")
         else:
-            st.warning("Not enough data with valid Market Caps to generate scores.")
+            st.markdown("##### 🚀 Top High-Conviction Setups")
+            st.caption(f"Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for technical confluence...")
+            
+            if st.button("Analyze Candidates"):
+                ticker_map = load_ticker_map()
+                candidates = []
+                
+                prog_bar = st.progress(0, text="Analyzing technicals...")
+                bull_list = top_bulls["Symbol"].tolist()
+                
+                for i, t in enumerate(bull_list):
+                    prog_bar.progress((i+1)/len(bull_list), text=f"Checking {t}...")
+                    t_df = get_ticker_technicals(t, ticker_map)
+                    
+                    if t_df is not None:
+                        # Re-use the smart money score as a base, add technical score
+                        sm_score = top_bulls[top_bulls["Symbol"]==t]["Score"].iloc[0]
+                        tech_score, reasons, suggs = analyze_trade_setup(t, t_df, df)
+                        
+                        # Combined Score: 60% Smart Money, 40% Technicals
+                        final_conviction = (sm_score * 0.06) + (tech_score * 4) # approx 0-10 scale
+                        
+                        candidates.append({
+                            "Ticker": t,
+                            "Score": final_conviction,
+                            "Price": t_df.iloc[-1].get('CLOSE'),
+                            "Reasons": reasons,
+                            "Suggestions": suggs
+                        })
+                
+                prog_bar.empty()
+                
+                # Show top 3
+                best_ideas = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
+                
+                cols = st.columns(3)
+                for i, cand in enumerate(best_ideas):
+                    with cols[i]:
+                        with st.container(border=True):
+                            st.markdown(f"### #{i+1} {cand['Ticker']}")
+                            st.metric("Conviction", f"{cand['Score']:.1f}/10", f"${cand['Price']:.2f}")
+                            st.markdown("**Strategy:**")
+                            if cand['Suggestions']['Sell Puts']:
+                                st.success(f"🛡️ **Sell Put:** {cand['Suggestions']['Sell Puts']}")
+                            elif cand['Suggestions']['Buy Calls']:
+                                st.info(f"🟢 **Buy Call:** {cand['Suggestions']['Buy Calls']}")
+                            
+                            st.markdown("---")
+                            for r in cand['Reasons']:
+                                st.caption(f"• {r}")
 
-    st.markdown("---")
-    st.subheader("🤡 Bulltard Rankings (Volume Based)")
-    st.caption("ℹ️ **Legacy Methodology:** Score = (Calls Bought + Puts Sold) - (Puts Bought). Ranked by Score first, then Dollars. Ranking tables vary from Bulltard's as he includes expired trades and these do not. **Note: The Market Cap filter above does not apply to this section.**")
-    
-    counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
-    dollars = f_filtered.groupby(["Symbol", order_type_col])["Dollars"].sum().unstack(fill_value=0)
-    last_trades = f_filtered.groupby("Symbol")["Trade Date"].max().dt.strftime("%d %b %y")
-    
-    for col in target_types:
-        if col not in counts.columns: counts[col] = 0
-        if col not in dollars.columns: dollars[col] = 0
+    # --- TAB 3: VOLUME RANKINGS (Legacy) ---
+    with tab_vol:
+        st.subheader("🤡 Bulltard Rankings (Volume Based)")
+        st.caption("Legacy Methodology: Score = (Calls + Puts Sold) - (Puts Bought).")
         
-    scores_df = pd.DataFrame(index=counts.index)
-    scores_df["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
-    scores_df["Trade Count"] = counts["Calls Bought"] + counts["Puts Sold"] + counts["Puts Bought"]
-    scores_df["Dollars"] = dollars["Calls Bought"] + dollars["Puts Sold"] - dollars["Puts Bought"]
-    
-    res = scores_df.reset_index().merge(last_trades, on="Symbol")
-    res = res.rename(columns={"Trade Date": "Last Trade"})
-    display_cols = ["Symbol", "Trade Count", "Last Trade", "Dollars", "Score"]
-    
-    rank_col_config = {
-        "Symbol": st.column_config.TextColumn("Sym", width=40),
-        "Trade Count": st.column_config.NumberColumn("Trade Count", width=40),
-        "Last Trade": st.column_config.TextColumn("Last Trade", width=70),
-        "Dollars": st.column_config.TextColumn("Dollars", width=90),
-        "Score": st.column_config.NumberColumn("Score", width=40),
-    }
-    fmt_currency_legacy = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
-    fmt_score_legacy = lambda x: f"({abs(int(x))})" if x < 0 else f"{int(x)}"
-    
-    bull_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
-    bear_df = res[display_cols].sort_values(by=["Score", "Dollars"], ascending=[True, True]).head(limit)
-    
-    col_left, col_right = st.columns(2, gap="large")
-    with col_left:
-        st.markdown("<h4 style='color: #71d28a; margin:0;'>Bullish Volume</h4>", unsafe_allow_html=True)
-        b_disp = bull_df.copy()
-        b_disp["Dollars"] = b_disp["Dollars"].apply(fmt_currency_legacy)
-        st.dataframe(b_disp.style.format({"Trade Count": "{:,.0f}", "Score": fmt_score_legacy}), use_container_width=True, hide_index=True, height=get_table_height(bull_df), column_config=rank_col_config)
-    with col_right:
-        st.markdown("<h4 style='color: #f29ca0; margin:0;'>Bearish Volume</h4>", unsafe_allow_html=True)
-        br_disp = bear_df.copy()
-        br_disp["Dollars"] = br_disp["Dollars"].apply(fmt_currency_legacy)
-        st.dataframe(br_disp.style.format({"Trade Count": "{:,.0f}", "Score": fmt_score_legacy}), use_container_width=True, hide_index=True, height=get_table_height(bear_df), column_config=rank_col_config)
+        counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
+        dollars = f_filtered.groupby(["Symbol", order_type_col])["Dollars"].sum().unstack(fill_value=0)
+        
+        for col in target_types:
+            if col not in counts.columns: counts[col] = 0
+            if col not in dollars.columns: dollars[col] = 0
+            
+        scores_df = pd.DataFrame(index=counts.index)
+        scores_df["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
+        scores_df["Trade Count"] = counts.sum(axis=1)
+        scores_df["Dollars"] = dollars["Calls Bought"] + dollars["Puts Sold"] - dollars["Puts Bought"]
+        
+        res = scores_df.reset_index()
+        rank_col_config = {
+            "Symbol": st.column_config.TextColumn("Sym", width=40),
+            "Trade Count": st.column_config.NumberColumn("#", width=40),
+            "Dollars": st.column_config.TextColumn("$", width=90),
+            "Score": st.column_config.NumberColumn("Scr", width=40),
+        }
+        fmt_curr_leg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
+        
+        bull_df = res.sort_values(by=["Score", "Dollars"], ascending=[False, False]).head(limit)
+        bear_df = res.sort_values(by=["Score", "Dollars"], ascending=[True, True]).head(limit)
+        
+        v1, v2 = st.columns(2)
+        with v1:
+            st.markdown("#### Bullish Volume")
+            st.dataframe(bull_df.style.format({"Dollars": fmt_curr_leg}), use_container_width=True, hide_index=True, column_config=rank_col_config)
+        with v2:
+            st.markdown("#### Bearish Volume")
+            st.dataframe(bear_df.style.format({"Dollars": fmt_curr_leg}), use_container_width=True, hide_index=True, column_config=rank_col_config)
 
 def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
@@ -1487,193 +1607,55 @@ def run_rsi_scanner_app():
             st.error(f"Analysis failed: {e}")
 
 def run_trade_ideas_app(df_global):
-    # --- UPDATED WARNING MESSAGE ---
-    st.warning("⚠️ This page sucks right now. Honestly, don't use it. I am completely reworking it.")
+    st.title("🤖 AI Macro Portfolio Manager")
+    st.caption("This module ingests the Darcy, SP100, NQ100, and Macro datasets to generate a comprehensive strategy report.")
     
-    st.title("💡 Trade Ideas Generator")
-    st.caption("Combine Technicals, Flows, and AI for high-conviction setups.")
-    
-    ticker_map = load_ticker_map()
-    
-    # Renamed Tabs to reflect new structure
-    tabs = st.tabs(["🏆 Top 3 Scan", "🤖 Macro Scanner (AI)"])
-    
-    # --- TAB 1: TOP 3 SCANNER (Synced) ---
-    with tabs[0]:
-        st.markdown("#### 🏆 Automated Opportunity Scanner")
-        
-        with st.expander("ℹ️ Strategy & Scoring Logic"):
-            st.markdown("""
-            **Scoring Model (0-10):**
-            * **Trend (2pts):** Price > EMA8 & EMA21.
-            * **Flow (2pts):** Significant Net Bullish Options Flow.
-            * **Momentum (2pts):** RSI > 40 and < 70 (Healthy zone).
-            * **Support (2pts):** Price holding above SMA200.
-            * **Whales (+/- 1pt):** Bonus for single large block trades.
-            
-            **Trade Suggestions:**
-            * Generated dynamically based on support levels (EMA21/SMA200).
-            * **Sell Puts:** Targeted at support, ensuring < 10% OTM for premium viability.
-            """)
-            
-        if st.button("Scan Top 20"):
-            progress = st.progress(0, text="Initializing scan...")
-            
-            max_date = df_global["Trade Date"].max()
-            start_date_filter = max_date - timedelta(days=14)
-            
-            mask = (df_global["Trade Date"] >= start_date_filter) & (df_global["Trade Date"] <= max_date)
-            f_filtered = df_global[mask & df_global['Order Type'].isin(["Calls Bought", "Puts Sold", "Puts Bought"])].copy()
-            
-            f_filtered["Signed_Dollars"] = np.where(
-                f_filtered['Order Type'].isin(["Calls Bought", "Puts Sold"]), 
-                f_filtered["Dollars"], -f_filtered["Dollars"]
-            )
-            
-            smart_stats = f_filtered.groupby("Symbol").agg(
-                Signed_Dollars=("Signed_Dollars", "sum")
-            ).reset_index()
-            
-            smart_stats["Market Cap"] = smart_stats["Symbol"].apply(lambda x: get_market_cap(x))
-            
-            # Synced 10B Market Cap Filter
-            smart_stats = smart_stats[smart_stats["Market Cap"] >= 1e10]
+    if st.button("Run Global Macro Scan"):
+        if "GOOGLE_API_KEY" not in st.secrets:
+            st.error("Missing GOOGLE_API_KEY in secrets.toml")
+        elif "URL_Prompt" not in st.secrets:
+            st.error("Missing URL_Prompt in secrets.toml")
+        else:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+                
+                with st.spinner("Step 1/3: Fetching System Prompt..."):
+                    prompt_buffer = get_confirmed_gdrive_data(st.secrets["URL_Prompt"])
+                    if not prompt_buffer or prompt_buffer == "HTML_ERROR":
+                        st.error("Failed to load prompt.")
+                        st.stop()
+                    system_prompt = prompt_buffer.getvalue()
 
-            unique_dates = sorted(f_filtered["Trade Date"].unique())
-            recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
-            f_mom = f_filtered[f_filtered["Trade Date"].isin(recent_dates)]
-            mom_stats = f_mom.groupby("Symbol")["Signed_Dollars"].sum().reset_index().rename(columns={"Signed_Dollars": "Momentum"})
-            
-            smart_stats = smart_stats.merge(mom_stats, on="Symbol", how="left").fillna(0)
-            valid_data = smart_stats[smart_stats["Market Cap"] > 0].copy()
-            
-            if valid_data.empty:
-                st.warning("Not enough data to run Smart Money logic.")
-            else:
-                valid_data["Impact"] = valid_data["Signed_Dollars"] / valid_data["Market Cap"]
-                
-                def normalize(series):
-                    mn, mx = series.min(), series.max()
-                    return (series - mn) / (mx - mn) if (mx != mn) else 0
-
-                b_flow = valid_data["Signed_Dollars"].clip(lower=0)
-                b_imp = valid_data["Impact"].clip(lower=0)
-                b_mom = valid_data["Momentum"].clip(lower=0)
-                
-                valid_data["Score_Bull"] = (
-                    (0.40 * normalize(b_flow)) + 
-                    (0.30 * normalize(b_imp)) + 
-                    (0.30 * normalize(b_mom))
-                ) * 100
-                
-                top_tickers = valid_data.sort_values(by=["Score_Bull", "Signed_Dollars"], ascending=[False, False]).head(20)["Symbol"].tolist()
-                
-                candidates = []
-                
-                for i, t in enumerate(top_tickers):
-                    progress.progress((i+1)/20, text=f"Analyzing {t}...")
-                    t_df = get_ticker_technicals(t, ticker_map)
+                with st.spinner("Step 2/3: Ingesting Datasets..."):
+                    context_data = ""
+                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_DARCY"], "DARCY WATCHLIST", 90)
+                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_SP100"], "S&P 100", 90)
+                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_NQ100"], "NASDAQ 100", 90)
+                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_MACRO"], "MACRO INDICATORS", 90)
                     
-                    if t_df is not None:
-                        score, reasons, suggs = analyze_trade_setup(t, t_df, df_global)
-                        candidates.append({
-                            "Ticker": t,
-                            "Score": score,
-                            "Price": t_df.iloc[-1].get('CLOSE'),
-                            "Reasons": reasons,
-                            "Suggestions": suggs
-                        })
-                
-                progress.empty()
-                
-                candidates = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
-                
-                st.success("Scan Complete!")
-                
-                cols = st.columns(3)
-                for i, cand in enumerate(candidates):
-                    with cols[i]:
-                        with st.container(border=True):
-                            st.markdown(f"### #{i+1} {cand['Ticker']}")
-                            st.metric("Score", f"{cand['Score']}/10", f"${cand['Price']:.2f}")
-                            
-                            st.markdown("#### 🎯 Trade Suggestions")
-                            if cand['Suggestions']['Buy Calls']:
-                                st.markdown(f"**🟢 Calls**\n{cand['Suggestions']['Buy Calls']}")
-                            if cand['Suggestions']['Sell Puts']:
-                                st.markdown(f"**🛡️ Puts**\n{cand['Suggestions']['Sell Puts']}")
-                            if cand['Suggestions']['Buy Commons']:
-                                st.markdown(f"**📈 Shares**\n{cand['Suggestions']['Buy Commons']}")
-                                
-                            # Replaced Expander with Permanent View
-                            st.markdown("---")
-                            st.markdown("**Why this ticker?**")
-                            for r in cand['Reasons']:
-                                st.markdown(f"- {r}")
+                    full_prompt = f"{system_prompt}\n\n==========\nLIVE DATA CONTEXT:\n{context_data}\n=========="
 
-    # --- TAB 2: MACRO SCANNER (AI) ---
-    with tabs[1]:
-        st.markdown("#### 🤖 AI Macro Portfolio Manager")
-        st.info("This module ingests the Darcy, SP100, NQ100, and Macro datasets to generate a comprehensive strategy report.")
-        
-        if st.button("Run Global Macro Scan"):
-            if "GOOGLE_API_KEY" not in st.secrets:
-                st.error("Missing GOOGLE_API_KEY in secrets.toml")
-            elif "URL_Prompt" not in st.secrets:
-                st.error("Missing URL_Prompt in secrets.toml")
-            else:
-                try:
-                    import google.generativeai as genai
-                    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+                with st.spinner("Step 3/3: AI Analysis (may take 60s)..."):
+                    candidate_models = ["gemini-1.5-pro", "gemini-1.5-flash"]
+                    response = None
+                    for model_name in candidate_models:
+                        try:
+                            model = genai.GenerativeModel(model_name)
+                            response = model.generate_content(full_prompt)
+                            break 
+                        except Exception:
+                            continue 
                     
-                    with st.spinner("Step 1/3: Fetching System Prompt..."):
-                        prompt_url = st.secrets["URL_Prompt"]
-                        prompt_buffer = get_confirmed_gdrive_data(prompt_url)
-                        if not prompt_buffer or prompt_buffer == "HTML_ERROR":
-                            st.error("Failed to load prompt file from URL.")
-                            st.stop()
-                        system_prompt = prompt_buffer.getvalue()
-
-                    with st.spinner("Step 2/3: Ingesting & Pre-processing Datasets..."):
-                        # Ingest all required datasets
-                        # NOTE: Truncating to 90 rows to fit context window efficiently while keeping trend data
-                        context_data = ""
-                        context_data += fetch_and_prepare_ai_context(st.secrets["URL_DARCY"], "DARCY WATCHLIST", 90)
-                        context_data += fetch_and_prepare_ai_context(st.secrets["URL_SP100"], "S&P 100", 90)
-                        context_data += fetch_and_prepare_ai_context(st.secrets["URL_NQ100"], "NASDAQ 100", 90)
-                        context_data += fetch_and_prepare_ai_context(st.secrets["URL_MACRO"], "MACRO INDICATORS", 90)
-                        
-                        full_prompt = f"{system_prompt}\n\n==========\nLIVE DATA CONTEXT:\n{context_data}\n=========="
-
-                    with st.spinner("Step 3/3: AI Analysis in Progress (this may take 30-60s)..."):
-                        # Iterative model selection to find a working one. 
-                        # Pro 1.5 is tried first as requested for reasoning depth.
-                        # Flash 1.5 is the reliable fallback with large context.
-                        # Older 1.0 models are removed as they cannot handle this data volume.
-                        candidate_models = ["gemini-1.5-pro", "gemini-1.5-flash"]
-                        response = None
-                        last_error = None
-                        
-                        for model_name in candidate_models:
-                            try:
-                                model = genai.GenerativeModel(model_name)
-                                response = model.generate_content(full_prompt)
-                                st.caption(f"✅ Success using model: {model_name}")
-                                break # Stop if successful
-                            except Exception as e:
-                                last_error = e
-                                continue # Try next model
-                        
-                        if response:
-                            st.success("Analysis Complete!")
-                            st.markdown("---")
-                            st.markdown(response.text)
-                        else:
-                            st.error(f"All AI models failed. Last error: {last_error}")
-                            st.info("Tip: Try updating the library: `pip install -U google-generativeai`")
-                        
-                except Exception as e:
-                    st.error(f"AI Pipeline Failed: {e}")
+                    if response:
+                        st.success("Analysis Complete!")
+                        st.markdown("---")
+                        st.markdown(response.text)
+                    else:
+                        st.error("AI models failed. Check API Quota.")
+                    
+            except Exception as e:
+                st.error(f"AI Pipeline Failed: {e}")
 
 st.markdown("""<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
