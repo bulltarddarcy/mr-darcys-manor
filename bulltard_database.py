@@ -1647,9 +1647,9 @@ def run_rsi_scanner_app():
                             ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
                             
                             if r.Signal_Type == 'Bullish':
-                                delta_str = f"{r.RSI:.0f} &gt; {r.Threshold:.0f}"
+                                delta_str = f'<span style="color: #1e7e34; font-weight: bold;">{r.RSI:.0f} ↗ {r.Threshold:.0f}</span>'
                             else:
-                                delta_str = f"{r.RSI:.0f} &lt; {r.Threshold:.0f}"
+                                delta_str = f'<span style="color: #c5221f; font-weight: bold;">{r.RSI:.0f} ↘ {r.Threshold:.0f}</span>'
                                 
                             row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td style="white-space:nowrap; text-align:center;">{delta_str}</td>{ev30_html}{ev90_html}</tr>'
                             html_rows.append(row_html)
