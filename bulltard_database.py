@@ -1317,13 +1317,13 @@ def run_rsi_scanner_app():
         
         .rsi-p-table { 
             width: auto; 
-            min-width: 400px;
+            min-width: 320px; /* Fits on most mobile screens */
             border-collapse: collapse; 
-            font-size: 14px; 
+            font-size: 13px; 
         }
         
-        .rsi-p-table thead tr th { text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; white-space: nowrap; font-size: 13px; }
-        .rsi-p-table tbody tr td { padding: 8px 12px; border-bottom: 1px solid #eee; font-weight: 500; white-space: nowrap; }
+        .rsi-p-table thead tr th { text-align: left; padding: 8px 4px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; white-space: nowrap; font-size: 12px; }
+        .rsi-p-table tbody tr td { padding: 8px 4px; border-bottom: 1px solid #eee; font-weight: 500; white-space: nowrap; }
         
         .ev-positive, .cell-green { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
         .ev-negative, .cell-red { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
@@ -1638,14 +1638,20 @@ def run_rsi_scanner_app():
                             val_str = f"{ret*100:+.1f}%<br><span style='font-size:11px; color: #555'>(n={n})</span>"
                             return f'<td class="{cls}">{val_str}</td>'
 
-                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Exit</th><th>RSI %ile</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>RSI Δ</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                         
                         for r in res_pct_df.itertuples():
                             is_latest = (r.Date_Obj == max_date_in_set)
                             date_cls = ' class="latest-date"' if is_latest else ''
                             ev30_html = get_ev_cell_html(r.EV30_Obj, r.Signal_Type)
                             ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
-                            row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td>{r.Signal}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
+                            
+                            if r.Signal_Type == 'Bullish':
+                                delta_str = f"{r.RSI:.0f} &gt; {r.Threshold:.0f}"
+                            else:
+                                delta_str = f"{r.RSI:.0f} &lt; {r.Threshold:.0f}"
+                                
+                            row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td style="white-space:nowrap; text-align:center;">{delta_str}</td>{ev30_html}{ev90_html}</tr>'
                             html_rows.append(row_html)
                         
                         html_rows.append("</tbody></table></div>")
