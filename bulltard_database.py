@@ -42,6 +42,8 @@ URL_TICKER_MAP_DEFAULT = "https://drive.google.com/file/d/1MlVp6yF7FZjTdRFMpYCxg
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
     try:
+        # Optimization: Read only necessary columns if possible, but structure implies dynamic loads.
+        # We stick to full read but optimize cleaning.
         df = pd.read_csv(url)
         want = ["Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Error"]
         
@@ -56,10 +58,11 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         for c in str_cols:
             df[c] = df[c].astype(str).str.strip()
         
-        # 2. Optimized numeric conversion
+        # 2. Optimized numeric conversion (avoid regex if possible for speed)
         if "Dollars" in df.columns:
             if df["Dollars"].dtype == 'object':
-                df["Dollars"] = df["Dollars"].str.replace(r'[$,]', '', regex=True)
+                # Chained replace is often faster than regex for simple chars
+                df["Dollars"] = df["Dollars"].str.replace('$', '', regex=False).str.replace(',', '', regex=False)
             df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
 
         if "Contracts" in df.columns:
@@ -102,14 +105,14 @@ def get_market_cap(symbol: str) -> float:
             if mc: return float(mc)
             
         except Exception:
-            # Wait briefly before retry if it's a network blip
             time.sleep(0.1)
     return 0.0
 
 def fetch_market_caps_batch(tickers):
     """Parallel fetcher for market caps."""
     results = {}
-    with ThreadPoolExecutor(max_workers=20) as executor:
+    # Optimization: Increased workers
+    with ThreadPoolExecutor(max_workers=32) as executor:
         future_to_ticker = {executor.submit(get_market_cap, t): t for t in tickers}
         for future in as_completed(future_to_ticker):
             t = future_to_ticker[future]
@@ -162,7 +165,8 @@ def fetch_technicals_batch(tickers):
     Returns a dict {ticker: result_tuple}
     """
     results = {}
-    with ThreadPoolExecutor(max_workers=20) as executor:
+    # Optimization: Increased workers
+    with ThreadPoolExecutor(max_workers=32) as executor:
         future_to_ticker = {executor.submit(get_stock_indicators, t): t for t in tickers}
         for future in as_completed(future_to_ticker):
             t = future_to_ticker[future]
@@ -179,20 +183,29 @@ def get_table_height(df, max_rows=30):
     display_rows = min(row_count, max_rows)
     return (display_rows + 1) * 35 + 5
 
-def highlight_expiry(val):
+@st.cache_data(ttl=3600)
+def get_expiry_color_map():
+    # Optimization: Pre-calculate the target strings to avoid parsing dates in the loop
     try:
-        if not isinstance(val, str): return ""
-        expiry_date = datetime.strptime(val, "%d %b %y").date()
         today = date.today()
         days_ahead = (4 - today.weekday()) % 7
         this_fri = today + timedelta(days=days_ahead)
+        next_fri = this_fri + timedelta(days=7)
+        two_fri = this_fri + timedelta(days=14)
         
-        if expiry_date < today: return "" 
-        if expiry_date == this_fri: return "background-color: #b7e1cd; color: black;" 
-        if expiry_date == this_fri + timedelta(days=7): return "background-color: #fce8b2; color: black;" 
-        if expiry_date == this_fri + timedelta(days=14): return "background-color: #f4c7c3; color: black;" 
-        return ""
-    except: return ""
+        return {
+            this_fri.strftime("%d %b %y"): "background-color: #b7e1cd; color: black;",
+            next_fri.strftime("%d %b %y"): "background-color: #fce8b2; color: black;",
+            two_fri.strftime("%d %b %y"): "background-color: #f4c7c3; color: black;"
+        }
+    except:
+        return {}
+
+def highlight_expiry(val):
+    # Optimization: O(1) Dictionary lookup
+    if not isinstance(val, str): return ""
+    color_map = get_expiry_color_map()
+    return color_map.get(val, "")
 
 def clean_strike_fmt(val):
     try:
@@ -1299,7 +1312,13 @@ def run_pivot_tables_app(df):
                 valid_symbols = {s for s in valid_symbols if get_market_cap(s) >= float(min_mkt_cap)}
             
             if ema_filter == "Yes":
-                valid_symbols = {s for s in valid_symbols if is_above_ema21(s)}
+                # Optimization: Batch fetch instead of sequential calls
+                batch_results = fetch_technicals_batch(list(valid_symbols))
+                valid_symbols = {
+                    s for s in valid_symbols 
+                    if batch_results.get(s, (None, None))[2] is None or # Retain original behavior (fail open)
+                    (batch_results[s][0] is not None and batch_results[s][2] is not None and batch_results[s][0] > batch_results[s][2])
+                }
             
             f = f[f["Symbol"].isin(valid_symbols)]
             
