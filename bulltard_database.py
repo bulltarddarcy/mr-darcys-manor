@@ -1286,11 +1286,41 @@ def run_rsi_scanner_app():
     st.markdown("""
         <style>
         .top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; }
-        .rsi-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2rem; }
+        
+        /* SCROLLABLE WRAPPERS FOR MOBILE RESPONSIVENESS */
+        .rsi-table-wrapper {
+            overflow-x: auto;
+            margin-bottom: 2rem;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+        }
+        
+        .rsi-table { 
+            width: 100%; 
+            min-width: 1000px; /* Forces scroll on small screens instead of squishing */
+            border-collapse: collapse; 
+            table-layout: fixed; 
+            margin-bottom: 0; 
+        }
+        
         .rsi-table thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
         .rsi-table tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; vertical-align: middle !important; white-space: nowrap; height: 50px; }
         
-        .rsi-p-table { width: auto; border-collapse: collapse; font-size: 14px; }
+        .rsi-p-table-wrapper {
+            overflow-x: auto;
+            margin-bottom: 2rem;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+        }
+        
+        .rsi-p-table { 
+            width: auto; 
+            min-width: 600px; /* Forces scroll on small screens */
+            width: 100%;
+            border-collapse: collapse; 
+            font-size: 14px; 
+        }
+        
         .rsi-p-table thead tr th { text-align: left; padding: 8px 6px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; white-space: nowrap; font-size: 13px; }
         .rsi-p-table tbody tr td { padding: 8px 6px; border-bottom: 1px solid #eee; font-weight: 500; white-space: nowrap; }
         
@@ -1512,7 +1542,7 @@ def run_rsi_scanner_app():
                                 tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                 
                                 if not tbl_df.empty:
-                                    html_rows = ['<table class="rsi-table"><thead><tr><th style="width:7%">Ticker</th><th style="width:25%">Tags</th><th style="width:8%">P1 Date</th><th style="width:8%">Signal Date</th><th style="width:8%">RSI</th><th style="width:8%">P1 Price</th><th style="width:8%">P2 Price</th><th style="width:8%">Last Close</th><th style="width:10%">EV 30p</th><th style="width:10%">EV 90p</th></tr></thead><tbody>']
+                                    html_rows = ['<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="width:7%">Ticker</th><th style="width:25%">Tags</th><th style="width:8%">P1 Date</th><th style="width:8%">Signal Date</th><th style="width:8%">RSI</th><th style="width:8%">P1 Price</th><th style="width:8%">P2 Price</th><th style="width:8%">Last Close</th><th style="width:10%">EV 30p</th><th style="width:10%">EV 90p</th></tr></thead><tbody>']
                                     
                                     for row in tbl_df.itertuples():
                                         is_latest = (row._6 == target_highlight)
@@ -1537,7 +1567,7 @@ def run_rsi_scanner_app():
                                             else: row_html.append('<td class="ev-neutral">N/A<br><small>&nbsp;</small></td>')
                                         row_html.append('</tr>')
                                         html_rows.append("".join(row_html))
-                                    html_rows.append('</tbody></table>')
+                                    html_rows.append('</tbody></table></div>')
                                     st.markdown("".join(html_rows), unsafe_allow_html=True)
                                 else: st.info("No signals.")
                     else: st.warning("No Divergence signals found.")
@@ -1607,7 +1637,7 @@ def run_rsi_scanner_app():
                             val_str = f"{ret*100:+.1f}%<br><span style='font-size:11px; color: #555'>(n={n})</span>"
                             return f'<td class="{cls}">{val_str}</td>'
 
-                        html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Exit</th><th>RSI %ile</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Exit</th><th>RSI %ile</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                         
                         for r in res_pct_df.itertuples():
                             is_latest = (r.Date_Obj == max_date_in_set)
@@ -1617,7 +1647,7 @@ def run_rsi_scanner_app():
                             row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td>{r.Signal}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
                             html_rows.append(row_html)
                         
-                        html_rows.append("</tbody></table>")
+                        html_rows.append("</tbody></table></div>")
                         st.markdown("".join(html_rows), unsafe_allow_html=True)
                     else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
 
