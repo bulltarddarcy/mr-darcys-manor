@@ -1249,12 +1249,16 @@ def run_rsi_scanner_app():
 
     # --- TAB 3: BACKTESTER (Independent, No Pills) ---
     with tab_bot:
-        st.caption("Historical RSI backtester (Max 10 Year Lookback)")
-        st.caption("ℹ️ *Note: This tool uses the global Ticker Map or Yahoo Finance. It does not use the Dataset selector.*")
+        st.subheader("Historical RSI Backtester")
         
-        col_input, col_rest = st.columns([1, 3])
-        with col_input:
+        # 1. INPUTS
+        c_in1, c_in2, c_in3 = st.columns([1, 1, 1])
+        with c_in1:
             ticker = st.text_input("Enter Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
+        with c_in2:
+            lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
+        with c_in3:
+            rsi_tol = st.number_input("RSI Tolerance (+/-)", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
         
         if ticker:
             ticker_map = load_ticker_map()
@@ -1267,13 +1271,9 @@ def run_rsi_scanner_app():
                 # Fallback to Yahoo Finance
                 if df is None or df.empty:
                     df = fetch_yahoo_data(ticker)
-                    if df is not None:
-                        st.caption("ℹ️ Data fetched from Yahoo Finance (Drive file unavailable).")
-                else:
-                    st.caption("ℹ️ Data sourced from Google Drive Database.")
-
+                
                 if df is None or df.empty:
-                    st.error("Sorry, data could not be retrieved for this ticker.")
+                    st.error(f"Sorry, data could not be retrieved for {ticker} (neither via Drive nor Yahoo Finance).")
                 else:
                     # 3. Data Prep & Calculations
                     df.columns = [c.strip().upper() for c in df.columns]
@@ -1296,95 +1296,100 @@ def run_rsi_scanner_app():
                             df['RSI'] = 100 - (100 / (1 + rs))
                             rsi_col = 'RSI'
 
-                        # Filter to Max 10 Years AND RESET INDEX
-                        cutoff_date = df[date_col].max() - timedelta(days=365*10)
-                        df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True) # <--- FIXED INDEX MISMATCH
+                        # Filter to User Lookback AND RESET INDEX
+                        cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
+                        df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True) 
 
                         current_row = df.iloc[-1]
                         current_rsi = current_row[rsi_col]
                         current_date = current_row[date_col].date()
                         
-                        rsi_min = current_rsi - 2.0
-                        rsi_max = current_rsi + 2.0
+                        rsi_min = current_rsi - rsi_tol
+                        rsi_max = current_rsi + rsi_tol
                         
                         hist_df = df.iloc[:-1].copy()
                         matches = hist_df[(hist_df[rsi_col] >= rsi_min) & (hist_df[rsi_col] <= rsi_max)].copy()
                         
-                        if matches.empty:
-                            st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
-                        else:
-                            # 4. Calculate Forward Returns
-                            full_close = df[close_col].values
-                            match_indices = matches.index.values
-                            total_len = len(full_close)
+                        # 4. Calculate Forward Returns
+                        full_close = df[close_col].values
+                        match_indices = matches.index.values
+                        total_len = len(full_close)
 
-                            results = []
-                            periods = [1, 3, 5, 7, 10, 14, 30, 60, 90, 180]
+                        results = []
+                        periods = [1, 3, 5, 7, 10, 14, 30, 60, 90, 180]
+                        
+                        for p in periods:
+                            valid_indices = match_indices[match_indices + p < total_len]
                             
-                            for p in periods:
-                                valid_indices = match_indices[match_indices + p < total_len]
+                            if len(valid_indices) == 0:
+                                results.append({"Days": p, "Win Rate": np.nan, "Avg Ret": np.nan, "Med Ret": np.nan})
+                                continue
                                 
-                                if len(valid_indices) == 0:
-                                    results.append({"Days": p, "Win Rate": np.nan, "Avg Ret": np.nan, "Med Ret": np.nan})
-                                    continue
-                                    
-                                entry_prices = full_close[valid_indices]
-                                exit_prices = full_close[valid_indices + p]
-                                
-                                returns = (exit_prices - entry_prices) / entry_prices
-                                
-                                win_rate = np.mean(returns > 0) * 100
-                                avg_ret = np.mean(returns) * 100
-                                med_ret = np.median(returns) * 100
-                                
-                                results.append({
-                                    "Days": p, 
-                                    "Win Rate": win_rate, 
-                                    "Avg Ret": avg_ret, 
-                                    "Med Ret": med_ret
-                                })
-
-                            res_df = pd.DataFrame(results)
-
-                            # 5. Display Results
-                            st.subheader(f"RSI Analysis: {ticker}")
-                            m1, m2, m3 = st.columns(3)
-                            with m1: st.metric("Current RSI", f"{current_rsi:.2f}", f"as of {current_date}")
-                            with m2: st.metric("RSI Range", f"[{rsi_min:.2f}, {rsi_max:.2f}]", "Tolerance ±2")
-                            with m3: st.metric("Matching Periods", f"{len(matches)}", "samples found")
-
-                            def highlight_ret(val):
-                                if val is None or pd.isna(val): return ''
-                                color = '#71d28a' if val > 0 else '#f29ca0'
-                                return f'color: {color}; font-weight: bold;'
+                            entry_prices = full_close[valid_indices]
+                            exit_prices = full_close[valid_indices + p]
                             
-                            format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
-                            format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
-
-                            # LAYOUT: Side-by-Side Tables
-                            c_bt1, c_bt2 = st.columns(2)
+                            returns = (exit_prices - entry_prices) / entry_prices
                             
-                            with c_bt1:
-                                st.markdown("##### Short-Term Forward Returns")
-                                short_term = res_df[res_df['Days'].isin([1, 3, 5, 7, 10, 14])].set_index("Days")
-                                st.dataframe(
-                                    short_term.style.format({
-                                        "Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func
-                                    }).applymap(highlight_ret, subset=["Avg Ret", "Med Ret"]),
-                                    use_container_width=True,
-                                    height=250
-                                )
+                            win_rate = np.mean(returns > 0) * 100
+                            avg_ret = np.mean(returns) * 100
+                            med_ret = np.median(returns) * 100
+                            
+                            results.append({
+                                "Days": p, 
+                                "Win Rate": win_rate, 
+                                "Avg Ret": avg_ret, 
+                                "Med Ret": med_ret
+                            })
 
-                            with c_bt2:
-                                st.markdown("##### Long-Term Forward Returns")
-                                long_term = res_df[res_df['Days'].isin([30, 60, 90, 180])].set_index("Days")
-                                st.dataframe(
-                                    long_term.style.format({
-                                        "Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func
-                                    }).applymap(highlight_ret, subset=["Avg Ret", "Med Ret"]),
-                                    use_container_width=True,
-                                    height=180
-                                )
+                        res_df = pd.DataFrame(results)
+
+                        # 5. Display Results (Compact Layout)
+                        st.markdown(f"### Results for {ticker}")
+                        
+                        # Layout: Left column (Metrics), Right column (Side-by-side tables)
+                        col_metrics, col_tables = st.columns([1, 4])
+                        
+                        with col_metrics:
+                            st.metric("Current RSI", f"{current_rsi:.2f}", f"as of {current_date}")
+                            st.metric("RSI Range", f"[{rsi_min:.1f}, {rsi_max:.1f}]", f"±{rsi_tol}")
+                            st.metric("Matches", f"{len(matches)}", f"samples")
+
+                        with col_tables:
+                            if matches.empty:
+                                st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
+                            else:
+                                def highlight_ret(val):
+                                    if val is None or pd.isna(val): return ''
+                                    color = '#71d28a' if val > 0 else '#f29ca0'
+                                    return f'color: {color}; font-weight: bold;'
+                                
+                                format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
+                                format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
+
+                                t1, t2 = st.columns(2)
+                                
+                                with t1:
+                                    st.markdown("**Short-Term Returns**")
+                                    short_term = res_df[res_df['Days'].isin([1, 3, 5, 7, 10, 14])].set_index("Days")
+                                    st.dataframe(
+                                        short_term.style.format({
+                                            "Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func
+                                        }).applymap(highlight_ret, subset=["Avg Ret", "Med Ret"]),
+                                        use_container_width=True
+                                    )
+
+                                with t2:
+                                    st.markdown("**Long-Term Returns**")
+                                    long_term = res_df[res_df['Days'].isin([30, 60, 90, 180])].set_index("Days")
+                                    st.dataframe(
+                                        long_term.style.format({
+                                            "Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func
+                                        }).applymap(highlight_ret, subset=["Avg Ret", "Med Ret"]),
+                                        use_container_width=True
+                                    )
+                        
+                        # Add Padding at bottom
+                        st.markdown("<br><br><br>", unsafe_allow_html=True)
 
     # --- TAB 1: DIVERGENCES (With Pills) ---
     with tab_div:
