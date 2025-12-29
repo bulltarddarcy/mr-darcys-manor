@@ -376,8 +376,8 @@ def prepare_data(df):
     
     if 'RSI' not in df_d.columns:
         delta = df_d['Price'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
         rs = gain / loss
         df_d['RSI'] = 100 - (100 / (1 + rs))
         
@@ -547,8 +547,10 @@ def fetch_yahoo_data(ticker):
         df.columns = [c.upper() for c in df.columns]
         
         delta = df["CLOSE"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        # Corrected: Use Wilder's Smoothing (EWM) for RSI
+        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+        
         rs = gain / loss
         df["RSI"] = 100 - (100 / (1 + rs))
         df["RSI_14"] = df["RSI"]
@@ -1290,8 +1292,9 @@ def run_rsi_scanner_app():
 
                         if not rsi_col:
                             delta = df[close_col].diff()
-                            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                            # Use Wilder's Smoothing (EWM) for RSI
+                            gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+                            loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
                             rs = gain / loss
                             df['RSI'] = 100 - (100 / (1 + rs))
                             rsi_col = 'RSI'
@@ -1373,7 +1376,7 @@ def run_rsi_scanner_app():
                                     .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
                                     .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
                                     .apply(highlight_best, axis=1),
-                                    use_container_width=True,
+                                    use_container_width=False, # Changed to False to compact columns
                                     column_config={
                                         "Days": st.column_config.NumberColumn("Days", width="small"),
                                         "Win Rate": st.column_config.TextColumn("Win Rate", width="small"),
