@@ -1256,6 +1256,8 @@ def run_rsi_scanner_app():
             ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
+            # Placeholder for RSI output to appear here later
+            rsi_metric_container = st.empty()
         
         # Calculate Logic
         if ticker:
@@ -1300,6 +1302,9 @@ def run_rsi_scanner_app():
 
                         current_row = df.iloc[-1]
                         current_rsi = current_row[rsi_col]
+                        
+                        # UPDATE: Display RSI below inputs
+                        rsi_metric_container.markdown(f"""<div style="margin-top: 10px; font-size: 0.9rem; color: #666;">Current RSI</div><div style="font-size: 1.5rem; font-weight: 600;">{current_rsi:.2f}</div>""", unsafe_allow_html=True)
                         
                         rsi_min = current_rsi - rsi_tol
                         rsi_max = current_rsi + rsi_tol
@@ -1362,36 +1367,22 @@ def run_rsi_scanner_app():
                                 format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
                                 format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
 
-                                t1, t2 = st.columns(2)
-                                
-                                with t1:
-                                    st.markdown("**Short-Term**")
-                                    short_term = res_df[res_df['Days'].isin([1, 3, 5, 7, 10, 14])].set_index("Days")
-                                    st.dataframe(
-                                        short_term.style
-                                        .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
-                                        .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
-                                        .apply(highlight_best, axis=1),
-                                        use_container_width=True
-                                    )
-
-                                with t2:
-                                    st.markdown("**Long-Term**")
-                                    long_term = res_df[res_df['Days'].isin([30, 60, 90, 180])].set_index("Days")
-                                    st.dataframe(
-                                        long_term.style
-                                        .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
-                                        .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
-                                        .apply(highlight_best, axis=1),
-                                        use_container_width=True
-                                    )
-                                    
-                                    # METRICS UNDER TABLE 2
-                                    m1, m2 = st.columns(2)
-                                    with m1:
-                                        st.markdown(f"""<div style="margin-top: 10px;"><div style="font-size: 0.8rem; color: #666;">Current RSI</div><div style="font-size: 1.2rem; font-weight: 600;">{current_rsi:.2f}</div></div>""", unsafe_allow_html=True)
-                                    with m2:
-                                        st.markdown(f"""<div style="margin-top: 10px;"><div style="font-size: 0.8rem; color: #666;">Matches Found</div><div style="font-size: 1.2rem; font-weight: 600;">{len(matches)}</div></div>""", unsafe_allow_html=True)
+                                # Combined Table with styling
+                                st.dataframe(
+                                    res_df.style
+                                    .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
+                                    .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
+                                    .apply(highlight_best, axis=1),
+                                    use_container_width=True,
+                                    column_config={
+                                        "Days": st.column_config.NumberColumn("Days", width="small"),
+                                        "Win Rate": st.column_config.TextColumn("Win Rate", width="small"),
+                                        "Avg Ret": st.column_config.TextColumn("Avg Ret", width="small"),
+                                        "Med Ret": st.column_config.TextColumn("Med Ret", width="small"),
+                                        "Count": st.column_config.NumberColumn("Count", width="small")
+                                    },
+                                    hide_index=True
+                                )
 
                         # Add Padding at bottom
                         st.markdown("<br><br><br>", unsafe_allow_html=True)
