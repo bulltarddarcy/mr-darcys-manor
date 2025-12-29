@@ -1010,15 +1010,18 @@ def run_strike_zones_app(df):
     if show_table:
         editor_input = edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]].copy()
         
+        # Pre-format numbers to strings with commas for display
+        editor_input["Contracts"] = editor_input["Contracts"].apply(lambda x: f"{x:,.0f}")
+        editor_input["Dollars"] = editor_input["Dollars"].apply(lambda x: f"{x:,.0f}")
+        
         st.subheader("Data Table & Selection")
         
         edited_df = st.data_editor(
             editor_input,
             column_config={
                 "Include": st.column_config.CheckboxColumn("Include", default=True),
-                # No format specified allows Streamlit default (usually with commas) to take effect while keeping data numeric
-                "Dollars": st.column_config.NumberColumn("Dollars", format=None),
-                "Contracts": st.column_config.NumberColumn("Qty", format=None),
+                "Dollars": st.column_config.TextColumn("Dollars"),
+                "Contracts": st.column_config.TextColumn("Qty"),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry"
             },
