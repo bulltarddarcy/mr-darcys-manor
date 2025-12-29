@@ -1041,30 +1041,28 @@ def run_strike_zones_app(df):
     if "Include" not in edit_pool_raw.columns:
         edit_pool_raw.insert(0, "Include", True)
     
-    # edit_pool_raw["Trade Date Str"] = edit_pool_raw["Trade Date"].dt.strftime("%d %b %y")
-    # edit_pool_raw["Expiry Str"] = edit_pool_raw["Expiry_DT"].dt.strftime("%d %b %y")
-
     if show_table:
         # Prepare the input dataframe for the editor
-        # We need 'Include' first.
-        # We keep 'Trade Date' and 'Expiry_DT' as datetimes for proper sorting.
-        # We keep 'Dollars' and 'Contracts' as numbers.
-        
         editor_input = edit_pool_raw[["Include", "Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"]].copy()
         
-        # Configure columns
+        # --- CRITICAL FIX START ---
+        # 1. Ensure the columns are strictly numeric types (float/int) so sorting works mathematically.
+        editor_input["Dollars"] = pd.to_numeric(editor_input["Dollars"], errors='coerce').fillna(0)
+        editor_input["Contracts"] = pd.to_numeric(editor_input["Contracts"], errors='coerce').fillna(0)
+
+        # 2. Configure the columns to DISPLAY with currency/format, while keeping the data numeric.
         column_configuration = {
             "Include": st.column_config.CheckboxColumn("Include", default=True),
             "Trade Date": st.column_config.DateColumn("Trade Date", format="DD MMM YY"),
             "Expiry_DT": st.column_config.DateColumn("Expiry", format="DD MMM YY"),
-            "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"), # %d usually formats as integer. 
-            "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
+            "Dollars": st.column_config.NumberColumn("Dollars", format="$%.0f"), # Displays $ sign, sorts as number
+            "Contracts": st.column_config.NumberColumn("Qty", format="%.0f"),   # Displays as integer, sorts as number
             order_type_col: st.column_config.TextColumn("Order Type"),
             "Symbol": st.column_config.TextColumn("Symbol"),
-            "Strike": st.column_config.TextColumn("Strike"), # Strike is often string formatted "150" vs "150.0", keep as is or TextColumn
+            "Strike": st.column_config.TextColumn("Strike"),
         }
+        # --- CRITICAL FIX END ---
         
-        # Ensure numbers are numeric for sorting, not strings
         st.subheader("Data Table & Selection")
         
         edited_df = st.data_editor(
