@@ -307,8 +307,7 @@ def style_tags(tag_str):
     colors = {f"EMA{EMA8_PERIOD}": "#4a90e2", f"EMA{EMA21_PERIOD}": "#9b59b6", "VOL_HIGH": "#e67e22", "VOL_GROW": "#27ae60"}
     html_parts = []
     for t in tags:
-        color = colors.get(t, "#7f8c8d")
-        html_parts.append(f'<span class="tag-bubble" style="background-color: {color};">{t}</span>')
+        color = coldef fetch_yahoo_data(ticker):ppend(f'<span class="tag-bubble" style="background-color: {color};">{t}</span>')
     return "".join(html_parts)
 
 def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current_price):
@@ -540,14 +539,27 @@ def fetch_yahoo_data(ticker):
         if df.empty: return None
         
         df = df.reset_index()
-        if df["Date"].dt.tz is not None:
-            df["Date"] = df["Date"].dt.tz_localize(None)
+        
+        # --- FIX: Robust Date Column Handling ---
+        # yfinance index is sometimes named 'Date', 'Datetime', or None.
+        # After reset_index, the date is always the 0th column.
+        date_col_name = df.columns[0]
+        df = df.rename(columns={date_col_name: "DATE"})
+        
+        # Ensure it's datetime
+        if not pd.api.types.is_datetime64_any_dtype(df["DATE"]):
+            df["DATE"] = pd.to_datetime(df["DATE"])
+
+        # Remove timezone if present
+        if df["DATE"].dt.tz is not None:
+            df["DATE"] = df["DATE"].dt.tz_localize(None)
             
-        df = df.rename(columns={"Date": "DATE", "Close": "CLOSE", "Volume": "VOLUME", "High": "HIGH", "Low": "LOW", "Open": "OPEN"})
+        # Standardize other columns
+        df = df.rename(columns={"Close": "CLOSE", "Volume": "VOLUME", "High": "HIGH", "Low": "LOW", "Open": "OPEN"})
         df.columns = [c.upper() for c in df.columns]
         
+        # Calculate RSI
         delta = df["CLOSE"].diff()
-        # Corrected: Use Wilder's Smoothing (EWM) for RSI
         gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
         loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
         
@@ -556,7 +568,9 @@ def fetch_yahoo_data(ticker):
         df["RSI_14"] = df["RSI"]
         
         return df
-    except Exception:
+    except Exception as e:
+        # Optional: Print error to console for debugging if needed
+        print(f"YF Error for {ticker}: {e}") 
         return None
 
 # --- 2. APP MODULES ---
