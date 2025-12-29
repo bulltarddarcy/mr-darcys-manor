@@ -656,7 +656,8 @@ def run_database_app(df):
     st.title("📂 Database")
     max_data_date = get_max_trade_date(df)
     
-    c1, c2, c3, c4 = st.columns(4, gap="medium")
+    # MODIFIED: Input boxes take up first half (1:1:1:1), remaining space is padding (4)
+    c1, c2, c3, c4, _ = st.columns([1, 1, 1, 1, 4], gap="small")
     with c1:
         default_ticker = st.session_state.get("db_ticker", "")
         db_ticker = st.text_input("Ticker", value=default_ticker.upper(), key="db_ticker_input").strip().upper()
@@ -1388,6 +1389,8 @@ def run_rsi_scanner_app():
     tab_div, tab_pct, tab_bot = st.tabs(["📉 Divergences", "🔢 Percentiles", "🤖 Backtester"])
 
     with tab_bot:
+        st.info("ℹ️ Sometimes when you change the ticker for the first time, it can be buggy and go back to the RSI Divergences tab. Just ignore it and come back here and then it will work correctly moving forward. Sorry, I am not a programmer. Also, don't hack me.")
+        
         c_left, c_right = st.columns([1, 6])
         
         with c_left:
@@ -1613,7 +1616,8 @@ def run_rsi_scanner_app():
                                                 is_pos = data['return'] > 0
                                                 cls = ("ev-positive" if is_pos else "ev-negative") if s_type == 'Bullish' else ("ev-positive" if not is_pos else "ev-negative")
                                                 row_html.append(f'<td class="{cls}">{data["return"]*100:+.1f}% <br><small>(${data["price"]:,.2f}, N={data["n"]})</small></td>')
-                                            else: row_html.append('<td class="ev-neutral">N/A<br><small>&nbsp;</small></td>')
+                                            # MODIFIED: Removed <br><small>&nbsp;</small> so N/A aligns middle vertically
+                                            else: row_html.append('<td class="ev-neutral" style="vertical-align: middle;">N/A</td>')
                                         row_html.append('</tr>')
                                         html_rows.append("".join(row_html))
                                     html_rows.append('</tbody></table></div>')
