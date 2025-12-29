@@ -376,8 +376,9 @@ def prepare_data(df):
     
     if 'RSI' not in df_d.columns:
         delta = df_d['Price'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        # Use Standard RSI (Wilder's Smoothing) to match Yahoo
+        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
         rs = gain / loss
         df_d['RSI'] = 100 - (100 / (1 + rs))
         
@@ -547,8 +548,9 @@ def fetch_yahoo_data(ticker):
         df.columns = [c.upper() for c in df.columns]
         
         delta = df["CLOSE"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        # Use Standard RSI (Wilder's Smoothing) to match Yahoo
+        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
         rs = gain / loss
         df["RSI"] = 100 - (100 / (1 + rs))
         df["RSI_14"] = df["RSI"]
@@ -1288,8 +1290,9 @@ def run_rsi_scanner_app():
 
                         if not rsi_col:
                             delta = df[close_col].diff()
-                            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                            # Use EWM for Standard RSI (Wilder's Smoothing)
+                            gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+                            loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
                             rs = gain / loss
                             df['RSI'] = 100 - (100 / (1 + rs))
                             rsi_col = 'RSI'
@@ -1371,8 +1374,9 @@ def run_rsi_scanner_app():
                                         short_term.style
                                         .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
                                         .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
-                                        .apply(highlight_best, axis=1),
-                                        use_container_width=True
+                                        .apply(highlight_best, axis=1)
+                                        .hide(axis="columns", subset=["Count"]), # Hides Count Column
+                                        use_container_width=False
                                     )
 
                                 with t2:
@@ -1382,8 +1386,9 @@ def run_rsi_scanner_app():
                                         long_term.style
                                         .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
                                         .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
-                                        .apply(highlight_best, axis=1),
-                                        use_container_width=True
+                                        .apply(highlight_best, axis=1)
+                                        .hide(axis="columns", subset=["Count"]), # Hides Count Column
+                                        use_container_width=False
                                     )
                                     
                                     # METRICS UNDER TABLE 2
