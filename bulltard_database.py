@@ -578,7 +578,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods
             if valid_30 or valid_90:
                 signals.append({
                     'Ticker': ticker,
-                    'Date': curr.name.strftime('%Y-%m-%d'),
+                    'Date': curr.name.strftime('%b %d'),
                     'RSI': curr['RSI'],
                     'Signal': desc_str,
                     'Signal_Type': s_type,
@@ -1016,9 +1016,9 @@ def run_strike_zones_app(df):
             editor_input,
             column_config={
                 "Include": st.column_config.CheckboxColumn("Include", default=True),
-                # Format update: Dollars with $ and commas, Contracts with integer formatting (removes scientific notation)
-                "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
-                "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
+                # No format specified allows Streamlit default (usually with commas) to take effect while keeping data numeric
+                "Dollars": st.column_config.NumberColumn("Dollars", format=None),
+                "Contracts": st.column_config.NumberColumn("Qty", format=None),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry"
             },
@@ -1288,8 +1288,8 @@ def run_rsi_scanner_app():
         .rsi-table tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; vertical-align: middle !important; white-space: nowrap; height: 50px; }
         
         .rsi-p-table { width: auto; border-collapse: collapse; font-size: 14px; }
-        .rsi-p-table thead tr th { text-align: left; padding: 8px 12px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; white-space: nowrap; }
-        .rsi-p-table tbody tr td { padding: 8px 12px; border-bottom: 1px solid #eee; font-weight: 500; white-space: nowrap; }
+        .rsi-p-table thead tr th { text-align: left; padding: 8px 6px; border-bottom: 2px solid #ddd; background-color: #f9f9f9; color: #555; white-space: nowrap; font-size: 13px; }
+        .rsi-p-table tbody tr td { padding: 8px 6px; border-bottom: 1px solid #eee; font-weight: 500; white-space: nowrap; }
         
         .ev-positive, .cell-green { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
         .ev-negative, .cell-red { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
@@ -1372,7 +1372,7 @@ def run_rsi_scanner_app():
                             valid_indices = match_indices[match_indices + p < total_len]
                             
                             if len(valid_indices) == 0:
-                                results.append({"Days": p, "Win Rate": np.nan, "Avg Ret": np.nan, "Med Ret": np.nan, "Count": 0})
+                                results.append({"Days": p, "Win Rate": np.nan, "Avg Ret": np.nan, "Count": 0})
                                 continue
                                 
                             entry_prices = full_close[valid_indices]
@@ -1382,13 +1382,11 @@ def run_rsi_scanner_app():
                             
                             win_rate = np.mean(returns > 0) * 100
                             avg_ret = np.mean(returns) * 100
-                            med_ret = np.median(returns) * 100
                             
                             results.append({
                                 "Days": p, 
                                 "Win Rate": win_rate, 
                                 "Avg Ret": avg_ret, 
-                                "Med Ret": med_ret,
                                 "Count": len(valid_indices)
                             })
 
@@ -1419,15 +1417,14 @@ def run_rsi_scanner_app():
 
                                 st.dataframe(
                                     res_df.style
-                                    .format({"Win Rate": format_wr, "Avg Ret": format_func, "Med Ret": format_func})
-                                    .map(highlight_ret, subset=["Avg Ret", "Med Ret"])
+                                    .format({"Win Rate": format_wr, "Avg Ret": format_func})
+                                    .map(highlight_ret, subset=["Avg Ret"])
                                     .apply(highlight_best, axis=1),
                                     use_container_width=False,
                                     column_config={
                                         "Days": st.column_config.NumberColumn("Days", width=60),
                                         "Win Rate": st.column_config.TextColumn("Win Rate", width=80),
                                         "Avg Ret": st.column_config.TextColumn("Avg Ret", width=80),
-                                        "Med Ret": st.column_config.TextColumn("Med Ret", width=80),
                                         "Count": st.column_config.NumberColumn("Count", width=60)
                                     },
                                     hide_index=True
@@ -1595,7 +1592,7 @@ def run_rsi_scanner_app():
                     progress_bar.empty()
 
                     if raw_results_pct:
-                        res_pct_df = pd.DataFrame(raw_results_pct).sort_values(by='Date', ascending=False)
+                        res_pct_df = pd.DataFrame(raw_results_pct).sort_values(by='Date_Obj', ascending=False)
                         st.subheader(f"Found {len(res_pct_df)} Opportunities")
                         
                         def get_ev_cell_html(ev_obj, signal_type):
@@ -1604,17 +1601,17 @@ def run_rsi_scanner_app():
                             n = ev_obj['n']
                             is_green = (signal_type == 'Bullish' and ret > 0) or (signal_type == 'Bearish' and ret < 0)
                             cls = "cell-green" if is_green else "cell-red"
-                            val_str = f"{ret*100:+.1f}% (N={n})"
+                            val_str = f"{ret*100:+.1f}%<br><span style='font-size:11px; color: #555'>(n={n})</span>"
                             return f'<td class="{cls}">{val_str}</td>'
 
-                        html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Exit</th><th>RSI</th><th>RSI %ile</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        html_rows = ['<table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>Exit</th><th>RSI %ile</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                         
                         for r in res_pct_df.itertuples():
                             is_latest = (r.Date_Obj == max_date_in_set)
                             date_cls = ' class="latest-date"' if is_latest else ''
                             ev30_html = get_ev_cell_html(r.EV30_Obj, r.Signal_Type)
                             ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
-                            row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td>{r.Signal}</td><td>{r.RSI:.1f}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
+                            row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td>{r.Signal}</td><td>{r.Threshold:.1f}</td>{ev30_html}{ev90_html}</tr>'
                             html_rows.append(row_html)
                         
                         html_rows.append("</tbody></table>")
