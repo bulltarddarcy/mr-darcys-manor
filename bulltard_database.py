@@ -1045,23 +1045,20 @@ def run_strike_zones_app(df):
         # Prepare the input dataframe for the editor
         editor_input = edit_pool_raw[["Include", "Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"]].copy()
         
-        # --- CRITICAL FIX START ---
-        # 1. Ensure the columns are strictly numeric types (float/int) so sorting works mathematically.
+        # Ensure numeric types for proper sorting
         editor_input["Dollars"] = pd.to_numeric(editor_input["Dollars"], errors='coerce').fillna(0)
         editor_input["Contracts"] = pd.to_numeric(editor_input["Contracts"], errors='coerce').fillna(0)
 
-        # 2. Configure the columns to DISPLAY with currency/format, while keeping the data numeric.
         column_configuration = {
             "Include": st.column_config.CheckboxColumn("Include", default=True),
             "Trade Date": st.column_config.DateColumn("Trade Date", format="DD MMM YY"),
             "Expiry_DT": st.column_config.DateColumn("Expiry", format="DD MMM YY"),
-            "Dollars": st.column_config.NumberColumn("Dollars", format="$%.0f"), # Displays $ sign, sorts as number
-            "Contracts": st.column_config.NumberColumn("Qty", format="%.0f"),   # Displays as integer, sorts as number
+            "Dollars": st.column_config.NumberColumn("Dollars", format="$%.0f"),
+            "Contracts": st.column_config.NumberColumn("Qty", format="%.0f"),
             order_type_col: st.column_config.TextColumn("Order Type"),
             "Symbol": st.column_config.TextColumn("Symbol"),
             "Strike": st.column_config.TextColumn("Strike"),
         }
-        # --- CRITICAL FIX END ---
         
         st.subheader("Data Table & Selection")
         
@@ -1166,7 +1163,12 @@ def run_strike_zones_app(df):
             else:
                 e = f.copy()
                 days_diff = (pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days)
-                e["Bucket"] = pd.cut(days_diff, bins=[0, 7, 30, 90, 180, 10000], labels=["0-7d", "8-30d", "31-90d", "91-180d", ">180d"], include_lowest=True)
+                
+                # --- UPDATED BINS HERE ---
+                new_bins = [0, 7, 30, 60, 90, 120, 180, 365, 10000]
+                new_labels = ["0-7d", "8-30d", "31-60d", "61-90d", "91-120d", "121-180d", "181-365d", ">365d"]
+                
+                e["Bucket"] = pd.cut(days_diff, bins=new_bins, labels=new_labels, include_lowest=True)
                 
                 agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
                 
