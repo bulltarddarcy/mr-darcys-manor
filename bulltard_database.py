@@ -119,7 +119,7 @@ def get_stock_indicators(sym: str):
         
         sma200 = float(h_full["Close"].rolling(window=200).mean().iloc[-1]) if len(h_full) >= 200 else None
         
-        h_recent = h_full.iloc[-60:].copy() if len(h_full) > 60 else h_full.copy()
+        h_recent = h_full.iloc[-60:].copy() if len(h_recent := h_full.iloc[-60:].copy()) > 0 else h_full.copy()
         
         if len(h_recent) == 0: return None, None, None, None, None
         
@@ -433,7 +433,7 @@ def find_divergences(df_tf, ticker, timeframe):
     high_vals = df_tf['High'].values
     vol_vals = df_tf['Volume'].values
     vol_sma_vals = df_tf['VolSMA'].values
-    close_vals = df_tf['Price'].values  # Added for EV calculation
+    close_vals = df_tf['Price'].values 
     
     # For history lookups
     hist_indices = np.where(hist_mask)[0]
@@ -445,8 +445,6 @@ def find_divergences(df_tf, ticker, timeframe):
         price_hist = df_tf.loc[hist_mask, 'Price'].values
     
     latest_p = df_tf.iloc[-1]
-    
-    # Removed pre-calculation of EV here to do it per-signal
     
     def get_date_str(idx): 
         ts = df_tf.index[idx]
@@ -1015,15 +1013,15 @@ def run_strike_zones_app(df):
     if show_table:
         editor_input = edit_pool_raw[["Include", "Trade Date Str", order_type_col, "Symbol", "Strike", "Expiry Str", "Contracts", "Dollars"]].copy()
         
-        # Ensure numbers are numeric for sorting, not strings
         st.subheader("Data Table & Selection")
         
         edited_df = st.data_editor(
             editor_input,
             column_config={
                 "Include": st.column_config.CheckboxColumn("Include", default=True),
-                "Dollars": st.column_config.NumberColumn("Dollars"),
-                "Contracts": st.column_config.NumberColumn("Qty"),
+                # No format specified allows Streamlit default (usually with commas) to take effect while keeping data numeric
+                "Dollars": st.column_config.NumberColumn("Dollars", format=None),
+                "Contracts": st.column_config.NumberColumn("Qty", format=None),
                 "Trade Date Str": "Trade Date",
                 "Expiry Str": "Expiry"
             },
@@ -1500,7 +1498,8 @@ def run_rsi_scanner_app():
                 st.markdown(f"""
                 * **Data Pool**: Analyzes 10 years of history (where available).
                 * **Method**: Finds all historical instances where RSI was within **±2 points** of the signal candle.
-                * **Metric**: Calculates the **Mean % Return** after 30 and 90 trading days.
+                * **Metric**: Calculates **Mean % Return** from **Signal Close**.
+                * **Note**: EV Price ($) is based on the Signal **Close**, while P2 Price displays the Pivot **Low/High**.
                 * **Constraint**: Requires **N ≥ 5** historical matches to display.
                 """)
             with f_col3:
