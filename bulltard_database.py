@@ -1041,6 +1041,19 @@ def run_strike_zones_app(df):
             st.info("No rows selected. Check the 'Include' boxes below.")
         else:
             spot, ema8, ema21, sma200, history = get_stock_indicators(ticker)
+            
+            # Fallback logic: If primary fetch failed, try the robust yahoo fetcher
+            if spot is None:
+                df_y = fetch_yahoo_data(ticker)
+                if df_y is not None and not df_y.empty:
+                    try:
+                        spot = float(df_y["CLOSE"].iloc[-1])
+                        ema8 = float(df_y["CLOSE"].ewm(span=8, adjust=False).mean().iloc[-1])
+                        ema21 = float(df_y["CLOSE"].ewm(span=21, adjust=False).mean().iloc[-1])
+                        sma200 = float(df_y["CLOSE"].rolling(window=200).mean().iloc[-1]) if len(df_y) >= 200 else None
+                    except: 
+                        pass
+
             if spot is None: spot = 100.0
 
             def pct_from_spot(x):
