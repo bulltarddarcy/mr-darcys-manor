@@ -1265,11 +1265,14 @@ def run_rsi_scanner_app():
         c_left, c_right = st.columns([1, 4])
         
         with c_left:
-            ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
-            lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
-            rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
-            # Placeholder for RSI output to appear here later
-            rsi_metric_container = st.empty()
+            # Sub-columns to constrain width of inputs further
+            c_input, _ = st.columns([1, 1])
+            with c_input:
+                ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)").strip().upper()
+                lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
+                rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
+                # Placeholder for RSI output to appear here later
+                rsi_metric_container = st.empty()
         
         # Calculate Logic
         if ticker:
@@ -1365,8 +1368,18 @@ def run_rsi_scanner_app():
                                 st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
                             else:
                                 def highlight_best(row):
-                                    # Highlight if Count > 30 and Win Rate > 75%
-                                    condition = (row['Count'] > 30) and (row['Win Rate'] > 75)
+                                    # Dynamic N threshold based on period length
+                                    d = row['Days']
+                                    n = row['Count']
+                                    wr = row['Win Rate']
+                                    
+                                    # Step-down logic
+                                    if d <= 14: min_n = 30
+                                    elif d <= 60: min_n = 20
+                                    else: min_n = 10
+                                    
+                                    # Highlight condition
+                                    condition = (n >= min_n) and (wr > 75)
                                     color = 'background-color: rgba(144, 238, 144, 0.2)' if condition else ''
                                     return [color] * len(row)
 
@@ -1388,11 +1401,11 @@ def run_rsi_scanner_app():
                                     .apply(highlight_best, axis=1),
                                     use_container_width=False, # Changed to False to compact columns
                                     column_config={
-                                        "Days": st.column_config.NumberColumn("Days", width="small"),
+                                        "Days": st.column_config.NumberColumn("Days", width=None),
                                         "Win Rate": st.column_config.TextColumn("Win Rate", width="small"),
                                         "Avg Ret": st.column_config.TextColumn("Avg Ret", width="small"),
                                         "Med Ret": st.column_config.TextColumn("Med Ret", width="small"),
-                                        "Count": st.column_config.NumberColumn("Count", width="small")
+                                        "Count": st.column_config.NumberColumn("Count", width=None)
                                     },
                                     hide_index=True
                                 )
