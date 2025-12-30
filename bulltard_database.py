@@ -806,10 +806,10 @@ def run_database_app(df):
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
         db_ticker = st.text_input("Ticker (blank=all)", value=st.session_state.saved_db_ticker, key="db_ticker_input", on_change=save_db_state, args=("db_ticker_input", "saved_db_ticker")).strip().upper()
-    with c2: start_date = st.date_input("Trade Start Date", value=st.session_state.saved_db_start, key="db_start", on_change=save_db_state, args=("db_start", "saved_db_start"), format="MMM DD, YYYY")
-    with c3: end_date = st.date_input("Trade End Date", value=st.session_state.saved_db_end, key="db_end", on_change=save_db_state, args=("db_end", "saved_db_end"), format="MMM DD, YYYY")
+    with c2: start_date = st.date_input("Trade Start Date", value=st.session_state.saved_db_start, key="db_start", on_change=save_db_state, args=("db_start", "saved_db_start"))
+    with c3: end_date = st.date_input("Trade End Date", value=st.session_state.saved_db_end, key="db_end", on_change=save_db_state, args=("db_end", "saved_db_end"))
     with c4:
-        db_exp_end = st.date_input("Expiration Range (end)", value=st.session_state.saved_db_exp, key="db_exp", on_change=save_db_state, args=("db_exp", "saved_db_exp"), format="MMM DD, YYYY")
+        db_exp_end = st.date_input("Expiration Range (end)", value=st.session_state.saved_db_exp, key="db_exp", on_change=save_db_state, args=("db_exp", "saved_db_exp"))
     
     ot1, ot2, ot3, ot_pad = st.columns([1.5, 1.5, 1.5, 5.5])
     with ot1: inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_db_inc_cb, key="db_inc_cb", on_change=save_db_state, args=("db_inc_cb", "saved_db_inc_cb"))
@@ -954,13 +954,26 @@ def run_rankings_app(df):
     max_data_date = get_max_trade_date(df)
     start_default = max_data_date - timedelta(days=14)
     
+    # Persistence
+    if 'saved_rank_start' not in st.session_state: st.session_state.saved_rank_start = start_default
+    if 'saved_rank_end' not in st.session_state: st.session_state.saved_rank_end = max_data_date
+    if 'saved_rank_limit' not in st.session_state: st.session_state.saved_rank_limit = 20
+    if 'saved_rank_mc' not in st.session_state: st.session_state.saved_rank_mc = "10B"
+    if 'saved_rank_ema' not in st.session_state: st.session_state.saved_rank_ema = False
+
+    def save_rank_state(key, saved_key):
+        st.session_state[saved_key] = st.session_state[key]
+    
     c1, c2, c3, c4 = st.columns([1, 1, 0.7, 1.3], gap="small")
-    with c1: rank_start = st.date_input("Trade Start Date", value=start_default, key="rank_start")
-    with c2: rank_end = st.date_input("Trade End Date", value=max_data_date, key="rank_end")
-    with c3: limit = st.number_input("Limit", value=20, min_value=1, max_value=200, key="rank_limit")
+    with c1: rank_start = st.date_input("Trade Start Date", value=st.session_state.saved_rank_start, key="rank_start", on_change=save_rank_state, args=("rank_start", "saved_rank_start"))
+    with c2: rank_end = st.date_input("Trade End Date", value=st.session_state.saved_rank_end, key="rank_end", on_change=save_rank_state, args=("rank_end", "saved_rank_end"))
+    with c3: limit = st.number_input("Limit", value=st.session_state.saved_rank_limit, min_value=1, max_value=200, key="rank_limit", on_change=save_rank_state, args=("rank_limit", "saved_rank_limit"))
     with c4: 
-        min_mkt_cap_rank = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="rank_mc")
-        filter_ema = st.checkbox("Hide < 8 EMA", value=False, key="rank_ema")
+        opts_mc = ["0B", "2B", "10B", "50B", "100B"]
+        curr_mc = st.session_state.saved_rank_mc
+        idx_mc = opts_mc.index(curr_mc) if curr_mc in opts_mc else 2
+        min_mkt_cap_rank = st.selectbox("Min Market Cap", opts_mc, index=idx_mc, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
+        filter_ema = st.checkbox("Hide < 8 EMA", value=st.session_state.saved_rank_ema, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
         
     f = df.copy()
     if rank_start: f = f[f["Trade Date"].dt.date >= rank_start]
@@ -1366,6 +1379,11 @@ def run_pivot_tables_app(df):
     if 'saved_pv_notional' not in st.session_state: st.session_state.saved_pv_notional = "0M"
     if 'saved_pv_mkt_cap' not in st.session_state: st.session_state.saved_pv_mkt_cap = "0B"
     if 'saved_pv_ema' not in st.session_state: st.session_state.saved_pv_ema = "All"
+    
+    # Calculator Persistence
+    if 'saved_calc_strike' not in st.session_state: st.session_state.saved_calc_strike = 100.0
+    if 'saved_calc_premium' not in st.session_state: st.session_state.saved_calc_premium = 2.50
+    if 'saved_calc_expiry' not in st.session_state: st.session_state.saved_calc_expiry = date.today() + timedelta(days=30)
 
     def save_pv_state(key, saved_key):
         st.session_state[saved_key] = st.session_state[key]
@@ -1387,9 +1405,9 @@ def run_pivot_tables_app(df):
         st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>🔍 Filters</h4>", unsafe_allow_html=True)
         fc1, fc2, fc3 = st.columns(3)
         with fc1: 
-            td_start = st.date_input("Trade Start Date", value=st.session_state.saved_pv_start, key="pv_start", on_change=save_pv_state, args=("pv_start", "saved_pv_start"), format="MMM DD, YYYY")
+            td_start = st.date_input("Trade Start Date", value=st.session_state.saved_pv_start, key="pv_start", on_change=save_pv_state, args=("pv_start", "saved_pv_start"))
         with fc2: 
-            td_end = st.date_input("Trade End Date", value=st.session_state.saved_pv_end, key="pv_end", on_change=save_pv_state, args=("pv_end", "saved_pv_end"), format="MMM DD, YYYY")
+            td_end = st.date_input("Trade End Date", value=st.session_state.saved_pv_end, key="pv_end", on_change=save_pv_state, args=("pv_end", "saved_pv_end"))
         with fc3: 
             ticker_filter = st.text_input("Ticker (blank=all)", value=st.session_state.saved_pv_ticker, key="pv_ticker", on_change=save_pv_state, args=("pv_ticker", "saved_pv_ticker")).strip().upper()
         
@@ -1418,9 +1436,9 @@ def run_pivot_tables_app(df):
         st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
         
         cc1, cc2, cc3 = st.columns(3)
-        with cc1: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
-        with cc2: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-        with cc3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry", format="MMM DD, YYYY")
+        with cc1: c_strike = st.number_input("Strike Price", min_value=0.01, value=st.session_state.saved_calc_strike, step=1.0, format="%.2f", key="calc_strike", on_change=save_pv_state, args=("calc_strike", "saved_calc_strike"))
+        with cc2: c_premium = st.number_input("Premium", min_value=0.00, value=st.session_state.saved_calc_premium, step=0.05, format="%.2f", key="calc_premium", on_change=save_pv_state, args=("calc_premium", "saved_calc_premium"))
+        with cc3: c_expiry = st.date_input("Expiration", value=st.session_state.saved_calc_expiry, key="calc_expiry", on_change=save_pv_state, args=("calc_expiry", "saved_calc_expiry"))
         
         dte = (c_expiry - date.today()).days
         coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
@@ -1791,7 +1809,7 @@ def run_rsi_scanner_app():
                                         style_div_df(tbl_df),
                                         column_config={
                                             "Ticker": st.column_config.TextColumn("Ticker"),
-                                            "Tags": st.column_config.ListColumn("Tags", width="medium"), # WIDER TO PREVENT OVERLAP
+                                            "Tags": st.column_config.ListColumn("Tags", width="medium"), 
                                             "Date_Display": st.column_config.TextColumn(date_header),
                                             "RSI_Display": st.column_config.TextColumn("RSI Δ"),
                                             "Price_Display": st.column_config.TextColumn(price_header),
