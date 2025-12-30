@@ -367,9 +367,6 @@ def style_tags(tag_str):
     for i, t in enumerate(tags):
         color = colors.get(t, "#7f8c8d")
         html_parts.append(f'<span class="tag-bubble" style="background-color: {color};">{t}</span>')
-        # Wrap after every 2 tags
-        if (i + 1) % 2 == 0 and (i + 1) < len(tags):
-            html_parts.append("<br>")
     return "".join(html_parts)
 
 def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current_price):
@@ -891,51 +888,51 @@ def run_rankings_app(df):
             st.caption(f"ℹ️ Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for technical confluence...")
             st.caption("⚠️ Note: This methodology is a work in progress and should not be relied upon right now.")
             
-            if st.button("Analyze Candidates"):
-                ticker_map = load_ticker_map()
-                candidates = []
+            # REMOVED BUTTON FOR AUTO-LOAD
+            ticker_map = load_ticker_map()
+            candidates = []
+            
+            prog_bar = st.progress(0, text="Analyzing technicals...")
+            bull_list = top_bulls["Symbol"].tolist()
+            
+            # We can reuse batch_techs if we have them, otherwise fallback to single fetch
+            # For safety/simplicity in this specific "Deep Dive", we do fresh fetch or reuse if available
+            
+            for i, t in enumerate(bull_list):
+                prog_bar.progress((i+1)/len(bull_list), text=f"Checking {t}...")
+                t_df = get_ticker_technicals(t, ticker_map)
                 
-                prog_bar = st.progress(0, text="Analyzing technicals...")
-                bull_list = top_bulls["Symbol"].tolist()
-                
-                # We can reuse batch_techs if we have them, otherwise fallback to single fetch
-                # For safety/simplicity in this specific "Deep Dive", we do fresh fetch or reuse if available
-                
-                for i, t in enumerate(bull_list):
-                    prog_bar.progress((i+1)/len(bull_list), text=f"Checking {t}...")
-                    t_df = get_ticker_technicals(t, ticker_map)
+                if t_df is not None:
+                    sm_score = top_bulls[top_bulls["Symbol"]==t]["Score"].iloc[0]
+                    tech_score, reasons, suggs = analyze_trade_setup(t, t_df, df)
                     
-                    if t_df is not None:
-                        sm_score = top_bulls[top_bulls["Symbol"]==t]["Score"].iloc[0]
-                        tech_score, reasons, suggs = analyze_trade_setup(t, t_df, df)
-                        
-                        final_conviction = (sm_score * 0.06) + (tech_score * 4) 
-                        
-                        candidates.append({
-                            "Ticker": t,
-                            "Score": final_conviction,
-                            "Price": t_df.iloc[-1].get('CLOSE'),
-                            "Reasons": reasons,
-                            "Suggestions": suggs
-                        })
-                
-                prog_bar.empty()
-                best_ideas = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
-                
-                cols = st.columns(3)
-                for i, cand in enumerate(best_ideas):
-                    with cols[i]:
-                        with st.container(border=True):
-                            st.markdown(f"### #{i+1} {cand['Ticker']}")
-                            st.metric("Conviction", f"{cand['Score']:.1f}/10", f"${cand['Price']:.2f}")
-                            st.markdown("**Strategy:**")
-                            if cand['Suggestions']['Sell Puts']:
-                                st.success(f"🛡️ **Sell Put:** {cand['Suggestions']['Sell Puts']}")
-                            elif cand['Suggestions']['Buy Calls']:
-                                st.info(f"🟢 **Buy Call:** {cand['Suggestions']['Buy Calls']}")
-                            st.markdown("---")
-                            for r in cand['Reasons']:
-                                st.caption(f"• {r}")
+                    final_conviction = (sm_score * 0.06) + (tech_score * 4) 
+                    
+                    candidates.append({
+                        "Ticker": t,
+                        "Score": final_conviction,
+                        "Price": t_df.iloc[-1].get('CLOSE'),
+                        "Reasons": reasons,
+                        "Suggestions": suggs
+                    })
+            
+            prog_bar.empty()
+            best_ideas = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
+            
+            cols = st.columns(3)
+            for i, cand in enumerate(best_ideas):
+                with cols[i]:
+                    with st.container(border=True):
+                        st.markdown(f"### #{i+1} {cand['Ticker']}")
+                        st.metric("Conviction", f"{cand['Score']:.1f}/10", f"${cand['Price']:.2f}")
+                        st.markdown("**Strategy:**")
+                        if cand['Suggestions']['Sell Puts']:
+                            st.success(f"🛡️ **Sell Put:** {cand['Suggestions']['Sell Puts']}")
+                        elif cand['Suggestions']['Buy Calls']:
+                            st.info(f"🟢 **Buy Call:** {cand['Suggestions']['Buy Calls']}")
+                        st.markdown("---")
+                        for r in cand['Reasons']:
+                            st.caption(f"• {r}")
 
     with tab_vol:
         st.caption("ℹ️ Legacy Methodology: Score = (Calls + Puts Sold) - (Puts Bought).")
@@ -1378,7 +1375,7 @@ def run_pivot_tables_app(df):
 
 def run_rsi_scanner_app():
     st.title("📈 RSI Scanner")
-    st.caption("ℹ️ On mobile, set your browser to View Desktop Site")
+    # REMOVED MOBILE CAPTION HERE
 
     st.markdown("""
         <style>
@@ -1393,9 +1390,7 @@ def run_rsi_scanner_app():
         }
         
         .rsi-table { 
-            width: auto; 
-            max-width: 100%;
-            min-width: 600px; 
+            width: 100%; /* Changed back to 100% to fill container */
             border-collapse: collapse; 
             table-layout: fixed; 
             margin-bottom: 0; 
@@ -1554,7 +1549,8 @@ def run_rsi_scanner_app():
                                     res_df.style
                                     .format({"Win Rate": format_wr, "Avg Ret": format_func})
                                     .map(highlight_ret, subset=["Avg Ret"])
-                                    .apply(highlight_best, axis=1),
+                                    .apply(highlight_best, axis=1)
+                                    .set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),
                                     use_container_width=False,
                                     column_config={
                                         "Days": st.column_config.NumberColumn("Days", width=60),
@@ -1653,7 +1649,7 @@ def run_rsi_scanner_app():
                                 
                                 if not tbl_df.empty:
                                     # Removed fixed widths to allow content to dictate width (tighter fit)
-                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th>Ticker</th><th>Tags</th><th>{date_header}</th><th>RSI Δ</th><th>{price_header}</th><th>Last Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="width:5%">Ticker</th><th style="width:20%">Tags</th><th style="width:15%">{date_header}</th><th style="width:10%">RSI Δ</th><th style="width:15%">{price_header}</th><th style="width:10%">Last Close</th><th style="width:12%">EV 30p</th><th style="width:13%">EV 90p</th></tr></thead><tbody>']
                                     
                                     for row in tbl_df.itertuples():
                                         is_latest = (row.Signal_Date_ISO == target_highlight)
@@ -1750,7 +1746,7 @@ def run_rsi_scanner_app():
                             val_str = f"{ret*100:+.1f}%<br><span style='font-size:11px; color: #555'>(${price:,.2f}, n={n})</span>"
                             return f'<td class="{cls}">{val_str}</td>'
 
-                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th style="width:1%; white-space:nowrap;">Ticker</th><th style="width:1%; white-space:nowrap;">Date</th><th style="width:1%; white-space:nowrap;">RSI Δ</th><th style="width:1%; white-space:nowrap;">Signal Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th style="width:1%; white-space:nowrap;">Ticker</th><th style="width:1%; white-space:nowrap;">Date</th><th style="width:1%; white-space:nowrap;">RSI Δ</th><th style="width:1%; white-space:nowrap;">Signal<br>Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                         
                         for r in res_pct_df.itertuples():
                             is_latest = (r.Date_Obj == max_date_in_set)
