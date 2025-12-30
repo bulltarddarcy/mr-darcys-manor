@@ -668,15 +668,15 @@ def find_divergences(df_tf, ticker, timeframe):
 
                     divergences.append({
                         'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 
-                        'Tags': tags, # List for ListColumn
+                        'Tags': tags, 
                         'Signal_Date_ISO': sig_date_iso, 
                         'Date_Display': date_display,
                         'RSI_Display': rsi_display,
                         'Price_Display': price_display,
                         'Last_Close': f"${latest_p['Price']:,.2f}", 
-                        'EV30_Pct': ev30['return'] if ev30 else None,
+                        'EV30_Pct': ev30['return'] * 100 if ev30 else None, # Multiply by 100 for correct % display
                         'EV30_Info': fmt_ev_details(ev30),
-                        'EV90_Pct': ev90['return'] if ev90 else None,
+                        'EV90_Pct': ev90['return'] * 100 if ev90 else None, # Multiply by 100 for correct % display
                         'EV90_Info': fmt_ev_details(ev90)
                     })
     return divergences
@@ -739,9 +739,9 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods
                     'RSI_Display': rsi_disp,
                     'Signal_Price': f"${curr['Price']:,.2f}",
                     'Signal_Type': s_type,
-                    'EV30_Pct': ev30['return'] if valid_30 else None,
+                    'EV30_Pct': ev30['return'] * 100 if valid_30 else None, # Multiply by 100 for correct % display
                     'EV30_Info': fmt_ev_details(ev30 if valid_30 else None),
-                    'EV90_Pct': ev90['return'] if valid_90 else None,
+                    'EV90_Pct': ev90['return'] * 100 if valid_90 else None, # Multiply by 100 for correct % display
                     'EV90_Info': fmt_ev_details(ev90 if valid_90 else None)
                 })
             
@@ -840,7 +840,7 @@ def run_database_app(df):
         
     st.subheader("Non-Expired Trades")
     st.caption("⚠️ User should check OI to confirm trades are still open")
-    st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=True, hide_index=True, height=get_table_height(f_display, max_rows=30))
+    st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=False, hide_index=True, height=get_table_height(f_display, max_rows=30))
     # Padding at the bottom
     st.markdown("<br><br><br>", unsafe_allow_html=True)
 
@@ -962,11 +962,8 @@ def run_rankings_app(df):
     with c2: rank_end = st.date_input("Trade End Date", value=st.session_state.saved_rank_end, key="rank_end", on_change=save_rank_state, args=("rank_end", "saved_rank_end"))
     with c3: limit = st.number_input("Limit", value=st.session_state.saved_rank_limit, min_value=1, max_value=200, key="rank_limit", on_change=save_rank_state, args=("rank_limit", "saved_rank_limit"))
     with c4: 
-        opts_mc = ["0B", "2B", "10B", "50B", "100B"]
-        curr_mc = st.session_state.saved_rank_mc
-        idx_mc = opts_mc.index(curr_mc) if curr_mc in opts_mc else 2
-        min_mkt_cap_rank = st.selectbox("Min Market Cap", opts_mc, index=idx_mc, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
-        filter_ema = st.checkbox("Hide < 8 EMA", value=st.session_state.saved_rank_ema, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
+        min_mkt_cap_rank = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="rank_mc")
+        filter_ema = st.checkbox("Hide < 8 EMA", value=False, key="rank_ema")
         
     f = df.copy()
     if rank_start: f = f[f["Trade Date"].dt.date >= rank_start]
@@ -1565,6 +1562,7 @@ def run_rsi_scanner_app():
         c_left, c_right = st.columns([1, 6])
         
         with c_left:
+            # FIX 1: ADDED KEY TO TEXT INPUT TO PREVENT TAB RESET
             ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)", key="rsi_bt_ticker_input").strip().upper()
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
@@ -1674,7 +1672,8 @@ def run_rsi_scanner_app():
                                     res_df.style
                                     .format({"Win Rate": format_wr, "Avg Ret": format_func})
                                     .map(highlight_ret, subset=["Avg Ret"])
-                                    .apply(highlight_best, axis=1),
+                                    .apply(highlight_best, axis=1)
+                                    .set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),
                                     use_container_width=False,
                                     column_config={
                                         "Days": st.column_config.NumberColumn("Days", width=60),
@@ -1684,6 +1683,7 @@ def run_rsi_scanner_app():
                                     },
                                     hide_index=True
                                 )
+
                         st.markdown("<br><br><br>", unsafe_allow_html=True)
 
     with tab_div:
