@@ -847,7 +847,7 @@ def run_database_app(df):
         
     st.subheader("Non-Expired Trades")
     st.caption("⚠️ User should check OI to confirm trades are still open")
-    st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=False, hide_index=True, height=get_table_height(f_display, max_rows=30))
+    st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=True, hide_index=True, height=get_table_height(f_display, max_rows=30))
     # Padding at the bottom
     st.markdown("<br><br><br>", unsafe_allow_html=True)
 
@@ -1720,10 +1720,8 @@ def run_rsi_scanner_app():
             with f_col3:
                 st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
                 st.markdown(f"""
-                * **EMA{EMA8_PERIOD}**: Bullish (Price > EMA8) or Bearish (Price < EMA8).
-                * **EMA{EMA21_PERIOD}**: Bullish (Price > EMA21) or Bearish (Price < EMA21).
-                * **VOL_HIGH**: Signal candle volume is > 150% of the 30-day average.
-                * **VOL_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).
+                * **EMA Trends**: Checks if Price is respecting EMA{EMA8_PERIOD} (Momentum) or EMA{EMA21_PERIOD} (Trend).
+                * **Volume**: **VOL_HIGH** (>150% SMA) or **VOL_GROW** (P2 Vol > P1 Vol).
                 """)
         
         if data_option_div:
@@ -1802,7 +1800,7 @@ def run_rsi_scanner_app():
                                         style_div_df(tbl_df),
                                         column_config={
                                             "Ticker": st.column_config.TextColumn("Ticker"),
-                                            "Tags": st.column_config.ListColumn("Tags", width="large"), # ListColumn for Bubbles
+                                            "Tags": st.column_config.ListColumn("Tags", width="medium"), # ListColumn for Bubbles
                                             "Date_Display": st.column_config.TextColumn(date_header),
                                             "RSI_Display": st.column_config.TextColumn("RSI Δ"),
                                             "Price_Display": st.column_config.TextColumn(price_header),
