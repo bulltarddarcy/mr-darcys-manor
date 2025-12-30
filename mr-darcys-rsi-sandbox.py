@@ -1250,8 +1250,8 @@ def run_rsi_scanner_app(df_global):
                             profit_factor = gross_profit / gross_loss if gross_loss != 0 else 99.9
                             results.append({"Days": p, "Win Rate": win_rate, "Avg Ret": avg_ret, "Count": len(valid_indices), "Profit Factor": profit_factor, "EV": ev_val})
                         res_df = pd.DataFrame(results)
-                        # Reorder columns as requested: Days, Profit Factor, Win Rate, EV, Avg Return, Count
-                        res_df = res_df[["Days", "Profit Factor", "Win Rate", "EV", "Avg Ret", "Count"]]
+                        # Reorder columns as requested: Days, Profit Factor, Win Rate, EV, Count
+                        res_df = res_df[["Days", "Profit Factor", "Win Rate", "EV", "Count"]]
                         with c_right:
                             if matches.empty: st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
                             else:
@@ -1270,7 +1270,7 @@ def run_rsi_scanner_app(df_global):
                                     return f'color: {color}; font-weight: bold;'
                                 format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
                                 format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
-                                st.dataframe(res_df.style.format({"Win Rate": format_wr, "Avg Ret": format_func, "EV": format_func}).map(highlight_ret, subset=["Avg Ret", "EV"]).apply(highlight_best, axis=1).set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),use_container_width=False,column_config={"Days": st.column_config.NumberColumn("Days", width=60),"Win Rate": st.column_config.TextColumn("Win Rate", width=80),"Avg Ret": st.column_config.TextColumn("Avg Ret", width=80),"EV": st.column_config.TextColumn("EV", width=80),"Count": st.column_config.NumberColumn("Count", width=60),"Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f")},hide_index=True)
+                                st.dataframe(res_df.style.format({"Win Rate": format_wr, "EV": format_func}).map(highlight_ret, subset=["EV"]).apply(highlight_best, axis=1).set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),use_container_width=False,column_config={"Days": st.column_config.NumberColumn("Days", width=60),"Win Rate": st.column_config.TextColumn("Win Rate", width=80),"EV": st.column_config.TextColumn("EV", width=80),"Count": st.column_config.NumberColumn("Count", width=60),"Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f")},hide_index=True)
                         st.markdown("<br><br><br>", unsafe_allow_html=True)
     with tab_div:
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
@@ -1285,6 +1285,9 @@ def run_rsi_scanner_app(df_global):
             with f_col3:
                 st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
                 st.markdown(f"""* **EMA{EMA8_PERIOD}**: Bullish (Price > EMA8) or Bearish (Price < EMA8).\n* **EMA{EMA21_PERIOD}**: Bullish (Price > EMA21) or Bearish (Price < EMA21).\n* **VOL_HIGH**: Signal candle volume is > 150% of the 30-day average.\n* **VOL_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).""")
+        
+        min_n_div = st.number_input("Min N Threshold", min_value=1, value=1, step=1, key="rsi_div_min_n")
+        
         if data_option_div:
             try:
                 target_url = st.secrets[dataset_map[data_option_div]]
@@ -1317,6 +1320,10 @@ def run_rsi_scanner_app(df_global):
                     progress_bar.empty()
                     if raw_results_div:
                         res_div_df = pd.DataFrame(raw_results_div).sort_values(by='Signal_Date_ISO', ascending=False)
+                        # Filter by Min N
+                        if 'N' in res_div_df.columns:
+                            res_div_df = res_div_df[res_div_df['N'] >= min_n_div]
+                            
                         consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
                         for tf in ['Daily', 'Weekly']:
                             target_highlight = target_highlight_weekly if tf == 'Weekly' else target_highlight_daily
@@ -1368,7 +1375,7 @@ def run_rsi_scanner_app(df_global):
                         ft_pct = [t for t in all_tickers if sq_pct in t]
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_pct): cols[i % 6].write(ticker)
-                    c_p1, c_p2, c_p3, c_p4 = st.columns(4)
+                    c_p1, c_p2, c_p3, c_p4, c_p5 = st.columns(5)
                     with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1, key="rsi_pct_low")
                     with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1, key="rsi_pct_high")
                     with c_p3: show_filter = st.selectbox("Actions to Show", ["Everything", "Leaving High", "Leaving Low"], index=0, key="rsi_pct_show")
@@ -1376,6 +1383,8 @@ def run_rsi_scanner_app(df_global):
                     else: ref_date = date.today()
                     default_start = ref_date - timedelta(days=14)
                     with c_p4: filter_date = st.date_input("Latest Date", value=default_start, key="rsi_pct_date")
+                    with c_p5: min_n_pct = st.number_input("Min N", min_value=1, value=1, step=1, key="rsi_pct_min_n")
+                    
                     raw_results_pct = []
                     progress_bar = st.progress(0, text="Scanning Percentiles...")
                     grouped = master.groupby(t_col)
@@ -1388,6 +1397,11 @@ def run_rsi_scanner_app(df_global):
                     progress_bar.empty()
                     if raw_results_pct:
                         res_pct_df = pd.DataFrame(raw_results_pct).sort_values(by='Date_Obj', ascending=False)
+                        
+                        # Filter by Min N
+                        if 'N' in res_pct_df.columns:
+                            res_pct_df = res_pct_df[res_pct_df['N'] >= min_n_pct]
+                            
                         if show_filter == "Leaving High": res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bearish']
                         elif show_filter == "Leaving Low": res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
                         if filter_date: res_pct_df = res_pct_df[res_pct_df['Date_Obj'] >= filter_date]
