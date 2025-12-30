@@ -14,6 +14,7 @@ from io import StringIO
 import altair as alt
 import google.generativeai as genai
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 # Fallback if scipy is not installed
 try:
     from scipy.signal import argrelextrema
@@ -63,39 +64,48 @@ RSI_DIFF_THRESHOLD = 2
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
 EV_LOOKBACK_YEARS = 3
-MIN_N_THRESHOLD = 5
+MIN_N_THRESHOLD = 1 # CHANGED FROM 5 TO 1 (Effectively removing constraint)
 URL_TICKER_MAP_DEFAULT = "https://drive.google.com/file/d/1MlVp6yF7FZjTdRFMpYCxgF-ezyKvO4gG/view?usp=sharing"
 
-# --- 3. ALL HELPER FUNCTIONS (DEFINED FIRST TO AVOID NAME ERRORS) ---
+# --- 3. ALL HELPER FUNCTIONS ---
 
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(url)
         want = ["Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Error"]
+        
         existing_cols = set(df.columns)
         keep = [c for c in want if c in existing_cols]
         df = df[keep].copy()
+        
         str_cols = [c for c in ["Order Type", "Symbol", "Strike", "Expiry"] if c in df.columns]
         for c in str_cols:
             df[c] = df[c].astype(str).str.strip()
+        
         if "Dollars" in df.columns:
             if df["Dollars"].dtype == 'object':
                 df["Dollars"] = df["Dollars"].str.replace('$', '', regex=False).str.replace(',', '', regex=False)
             df["Dollars"] = pd.to_numeric(df["Dollars"], errors="coerce").fillna(0.0)
+
         if "Contracts" in df.columns:
             if df["Contracts"].dtype == 'object':
                 df["Contracts"] = df["Contracts"].str.replace(',', '', regex=False)
             df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(0)
+        
         if "Trade Date" in df.columns:
             df["Trade Date"] = pd.to_datetime(df["Trade Date"], errors="coerce")
+        
         if "Expiry" in df.columns:
             df["Expiry_DT"] = pd.to_datetime(df["Expiry"], errors="coerce")
+            
         if "Strike (Actual)" in df.columns:
             df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce").fillna(0.0)
+            
         if "Error" in df.columns:
             mask = df["Error"].astype(str).str.upper().isin({"TRUE", "1", "YES"})
             df = df[~mask]
+            
         return df
     except Exception as e:
         st.error(f"Error loading global data: {e}")
@@ -286,6 +296,7 @@ def fetch_and_prepare_ai_context(url, name, limit=90):
     return ""
 
 def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current_price):
+    # This is kept for compatibility but not primary used by the new backtester
     mask = (rsi_array >= target_rsi - 2) & (rsi_array <= target_rsi + 2)
     indices = np.where(mask)[0]
     if len(indices) == 0: return None
@@ -534,141 +545,72 @@ def prepare_data(df):
     else: df_w = None
     return df_d, df_w
 
-def find_divergences(df_tf, ticker, timeframe):
-    divergences = []
-    n_rows = len(df_tf)
-    if n_rows < DIVERGENCE_LOOKBACK + 1: return divergences
-    rsi_vals = df_tf['RSI'].values
-    low_vals = df_tf['Low'].values
-    high_vals = df_tf['High'].values
-    vol_vals = df_tf['Volume'].values
-    vol_sma_vals = df_tf['VolSMA'].values
-    close_vals = df_tf['Price'].values 
-    latest_p = df_tf.iloc[-1]
-    def get_date_str(idx, fmt='%Y-%m-%d'): 
-        ts = df_tf.index[idx]
-        if timeframe.lower() == 'weekly': return df_tf.iloc[idx]['ChartDate'].strftime(fmt)
-        return ts.strftime(fmt)
-    start_idx = max(DIVERGENCE_LOOKBACK, n_rows - SIGNAL_LOOKBACK_PERIOD)
-    for i in range(start_idx, n_rows):
-        p2_rsi = rsi_vals[i]
-        p2_low = low_vals[i]
-        p2_high = high_vals[i]
-        p2_vol = vol_vals[i]
-        p2_volsma = vol_sma_vals[i]
-        lb_start = i - DIVERGENCE_LOOKBACK
-        lb_rsi = rsi_vals[lb_start:i]
-        lb_low = low_vals[lb_start:i]
-        lb_high = high_vals[lb_start:i]
-        is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
-        for s_type in ['Bullish', 'Bearish']:
-            trigger = False
-            p1_idx_rel = -1
-            if s_type == 'Bullish':
-                if p2_low < np.min(lb_low):
-                    p1_idx_rel = np.argmin(lb_rsi)
-                    p1_rsi = lb_rsi[p1_idx_rel]
-                    if p2_rsi > (p1_rsi + RSI_DIFF_THRESHOLD):
-                        idx_p1_abs = lb_start + p1_idx_rel
-                        if not np.any(rsi_vals[idx_p1_abs : i + 1] > 50): trigger = True
-            else: 
-                if p2_high > np.max(lb_high):
-                    p1_idx_rel = np.argmax(lb_rsi)
-                    p1_rsi = lb_rsi[p1_idx_rel]
-                    if p2_rsi < (p1_rsi - RSI_DIFF_THRESHOLD):
-                        idx_p1_abs = lb_start + p1_idx_rel
-                        if not np.any(rsi_vals[idx_p1_abs : i + 1] < 50): trigger = True
-            if trigger and p1_idx_rel != -1:
-                idx_p1_abs = lb_start + p1_idx_rel
-                hist_sig_indices = find_historical_divergences(df_tf, s_type)
-                stats = backtest_signal_performance(hist_sig_indices, close_vals)
-                if stats:
-                    tags = []
-                    if s_type == 'Bullish':
-                        if latest_p['Price'] >= latest_p.get('EMA8', 0): tags.append(f"EMA{EMA8_PERIOD}")
-                        if latest_p['Price'] >= latest_p.get('EMA21', 0): tags.append(f"EMA{EMA21_PERIOD}")
-                    else:
-                        if latest_p['Price'] <= latest_p.get('EMA8', 999999): tags.append(f"EMA{EMA8_PERIOD}")
-                        if latest_p['Price'] <= latest_p.get('EMA21', 999999): tags.append(f"EMA{EMA21_PERIOD}")
-                    if is_vol_high: tags.append("VOL_HIGH")
-                    if p2_vol > vol_vals[idx_p1_abs]: tags.append("VOL_GROW")
-                    sig_date_iso = get_date_str(i, '%Y-%m-%d')
-                    p1_date_fmt = get_date_str(idx_p1_abs, '%b %d')
-                    sig_date_fmt = get_date_str(i, '%b %d')
-                    date_display = f"{p1_date_fmt} → {sig_date_fmt}"
-                    rsi_p1 = rsi_vals[idx_p1_abs]
-                    rsi_p2 = p2_rsi
-                    rsi_display = f"{int(round(rsi_p1))} ↗ {int(round(rsi_p2))}" if rsi_p2 > rsi_p1 else f"{int(round(rsi_p1))} ↘ {int(round(rsi_p2))}"
-                    price_p1 = low_vals[idx_p1_abs] if s_type=='Bullish' else high_vals[idx_p1_abs]
-                    price_p2 = p2_low if s_type=='Bullish' else p2_high
-                    price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
-                    divergences.append({
-                        'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 
-                        'Tags': tags, 
-                        'Signal_Date_ISO': sig_date_iso, 
-                        'Date_Display': date_display,
-                        'RSI_Display': rsi_display,
-                        'Price_Display': price_display,
-                        'Last_Close': f"${latest_p['Price']:,.2f}",
-                        'Best Period': stats['Best Period'],
-                        'Profit Factor': stats['Profit Factor'],
-                        'Win Rate': stats['Win Rate'],
-                        'EV': stats['EV'],
-                        'N': stats['N']
-                    })
-    return divergences
-
-def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods_to_scan=10):
-    signals = []
-    if len(df) < 200: return signals
-    full_rsi = df['RSI'].values
-    full_price = df['Price'].values
-    cutoff = df.index.max() - timedelta(days=365*10)
-    hist_df = df[df.index >= cutoff].copy()
-    if hist_df.empty: return signals
-    p10 = hist_df['RSI'].quantile(pct_low)
-    p90 = hist_df['RSI'].quantile(pct_high)
-    bull_mask = (pd.Series(full_rsi).shift(1) < p10) & (pd.Series(full_rsi) >= (p10 + 1.0))
-    hist_bull_indices = np.where(bull_mask)[0]
-    bear_mask = (pd.Series(full_rsi).shift(1) > p90) & (pd.Series(full_rsi) <= (p90 - 1.0))
-    hist_bear_indices = np.where(bear_mask)[0]
-    stats_bull = backtest_signal_performance(hist_bull_indices, full_price)
-    stats_bear = backtest_signal_performance(hist_bear_indices, full_price)
-    scan_window = df.iloc[-(periods_to_scan+1):]
-    latest_close = df['Price'].iloc[-1] 
-    for i in range(1, len(scan_window)):
-        prev = scan_window.iloc[i-1]
-        curr = scan_window.iloc[i]
-        s_type = None
-        thresh_val = 0.0
-        active_stats = None
-        if prev['RSI'] < p10 and curr['RSI'] >= (p10 + 1.0):
-            s_type = 'Bullish'
-            thresh_val = p10
-            active_stats = stats_bull
-        elif prev['RSI'] > p90 and curr['RSI'] <= (p90 - 1.0):
-            s_type = 'Bearish'
-            thresh_val = p90
-            active_stats = stats_bear
-        if s_type and active_stats:
-            rsi_disp = f"{thresh_val:.0f} ↗ {curr['RSI']:.0f}" if s_type == 'Bullish' else f"{thresh_val:.0f} ↘ {curr['RSI']:.0f}"
-            action_str = "Leaving Low" if s_type == 'Bullish' else "Leaving High"
-            signals.append({
-                'Ticker': ticker,
-                'Date': curr.name.strftime('%b %d'),
-                'Date_Obj': curr.name.date(),
-                'Action': action_str,
-                'RSI_Display': rsi_disp,
-                'Signal_Price': f"${curr['Price']:,.2f}",
-                'Last_Close': f"${latest_close:,.2f}", 
-                'Signal_Type': s_type,
-                'Best Period': active_stats['Best Period'],
-                'Profit Factor': active_stats['Profit Factor'],
-                'Win Rate': active_stats['Win Rate'],
-                'EV': active_stats['EV'],
-                'N': active_stats['N']
-            })
-    return signals
+@st.cache_data(ttl=600, show_spinner="Crunching Smart Money Data...")
+def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit):
+    f = df.copy()
+    if start_d: f = f[f["Trade Date"].dt.date >= start_d]
+    if end_d: f = f[f["Trade Date"].dt.date <= end_d]
+    if f.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
+    f_filtered = f[f[order_type_col].isin(target_types)].copy()
+    if f_filtered.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    f_filtered["Signed_Dollars"] = np.where(f_filtered[order_type_col].isin(["Calls Bought", "Puts Sold"]), f_filtered["Dollars"], -f_filtered["Dollars"])
+    smart_stats = f_filtered.groupby("Symbol").agg(Signed_Dollars=("Signed_Dollars", "sum"),Trade_Count=("Symbol", "count"),Last_Trade=("Trade Date", "max")).reset_index()
+    smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
+    unique_tickers = smart_stats["Symbol"].unique().tolist()
+    batch_caps = fetch_market_caps_batch(unique_tickers)
+    smart_stats["Market Cap"] = smart_stats["Symbol"].map(batch_caps)
+    valid_data = smart_stats[smart_stats["Market Cap"] >= mc_thresh].copy()
+    unique_dates = sorted(f_filtered["Trade Date"].unique())
+    recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
+    f_momentum = f_filtered[f_filtered["Trade Date"].isin(recent_dates)]
+    mom_stats = f_momentum.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
+    mom_stats.rename(columns={"Signed_Dollars": "Momentum ($)"}, inplace=True)
+    valid_data = valid_data.merge(mom_stats, on="Symbol", how="left").fillna(0)
+    top_bulls = pd.DataFrame()
+    top_bears = pd.DataFrame()
+    if not valid_data.empty:
+        valid_data["Impact"] = valid_data["Net Sentiment ($)"] / valid_data["Market Cap"]
+        def normalize(series):
+            mn, mx = series.min(), series.max()
+            return (series - mn) / (mx - mn) if (mx != mn) else 0
+        b_flow_norm = normalize(valid_data["Net Sentiment ($)"].clip(lower=0))
+        b_imp_norm = normalize(valid_data["Impact"].clip(lower=0))
+        b_mom_norm = normalize(valid_data["Momentum ($)"].clip(lower=0))
+        valid_data["Base_Score_Bull"] = (0.35 * b_flow_norm) + (0.30 * b_imp_norm) + (0.35 * b_mom_norm)
+        br_flow_norm = normalize(-valid_data["Net Sentiment ($)"].clip(upper=0))
+        br_imp_norm = normalize(-valid_data["Impact"].clip(upper=0))
+        br_mom_norm = normalize(-valid_data["Momentum ($)"].clip(upper=0))
+        valid_data["Base_Score_Bear"] = (0.35 * br_flow_norm) + (0.30 * br_imp_norm) + (0.35 * br_mom_norm)
+        valid_data["Last Trade"] = valid_data["Last_Trade"].dt.strftime("%d %b")
+        candidates_bull = valid_data.sort_values(by="Base_Score_Bull", ascending=False).head(limit * 3).copy()
+        candidates_bear = valid_data.sort_values(by="Base_Score_Bear", ascending=False).head(limit * 3).copy()
+        all_tickers_to_fetch = set(candidates_bull["Symbol"]).union(set(candidates_bear["Symbol"]))
+        batch_techs = fetch_technicals_batch(list(all_tickers_to_fetch)) if filter_ema else {}
+        def check_ema_filter_fast(ticker, mode="Bull"):
+            if not filter_ema: return True, "—"
+            s, e8, _, _, _ = batch_techs.get(ticker, (None, None, None, None, None))
+            if not s or not e8: return False, "—"
+            if mode == "Bull": return (s > e8), ("✅ >EMA8" if s > e8 else "⚠️ <EMA8")
+            else: return (s < e8), ("✅ <EMA8" if s < e8 else "⚠️ >EMA8")
+        bull_results = []
+        for idx, row in candidates_bull.iterrows():
+            passes, trend_s = check_ema_filter_fast(row["Symbol"], "Bull")
+            if passes:
+                row["Score"] = row["Base_Score_Bull"] * 100
+                row["Trend"] = trend_s
+                bull_results.append(row)
+        top_bulls = pd.DataFrame(bull_results).head(limit)
+        bear_results = []
+        for idx, row in candidates_bear.iterrows():
+            passes, trend_s = check_ema_filter_fast(row["Symbol"], "Bear")
+            if passes:
+                row["Score"] = row["Base_Score_Bear"] * 100
+                row["Trend"] = trend_s
+                bear_results.append(row)
+        top_bears = pd.DataFrame(bear_results).head(limit)
+    return top_bulls, top_bears, valid_data
 
 @st.cache_data(ttl=3600)
 def fetch_yahoo_data(ticker):
@@ -880,6 +822,7 @@ def run_pivot_tables_app(df):
     if 'saved_calc_premium' not in st.session_state: st.session_state.saved_calc_premium = 2.50
     if 'saved_calc_expiry' not in st.session_state: st.session_state.saved_calc_expiry = date.today() + timedelta(days=30)
     def save_pv_state(key, saved_key): st.session_state[saved_key] = st.session_state[key]
+    st.markdown("""<style>.st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {background-color: rgba(113, 210, 138, 0.1) !important;color: #71d28a !important;border: 1px solid #71d28a !important;font-weight: 700 !important;pointer-events: none !important;cursor: default !important;}</style>""", unsafe_allow_html=True)
     with col_filters:
         st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>🔍 Filters</h4>", unsafe_allow_html=True)
         fc1, fc2, fc3 = st.columns(3)
