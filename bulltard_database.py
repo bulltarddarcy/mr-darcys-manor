@@ -674,9 +674,9 @@ def find_divergences(df_tf, ticker, timeframe):
                         'RSI_Display': rsi_display,
                         'Price_Display': price_display,
                         'Last_Close': f"${latest_p['Price']:,.2f}", 
-                        'EV30_Pct': ev30['return'] * 100 if ev30 else None, # Multiply by 100 for correct % display
+                        'EV30_Pct': ev30['return'] * 100 if ev30 else None, 
                         'EV30_Info': fmt_ev_details(ev30),
-                        'EV90_Pct': ev90['return'] * 100 if ev90 else None, # Multiply by 100 for correct % display
+                        'EV90_Pct': ev90['return'] * 100 if ev90 else None, 
                         'EV90_Info': fmt_ev_details(ev90)
                     })
     return divergences
@@ -734,18 +734,22 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods
                     return f"${ev_data['price']:,.2f} (n={ev_data['n']})"
                 
                 rsi_disp = f"{thresh_val:.0f} ↗ {curr['RSI']:.0f}" if s_type == 'Bullish' else f"{thresh_val:.0f} ↘ {curr['RSI']:.0f}"
+                
+                # --- NEW: Action logic ---
+                action_str = "Leaving Low" if s_type == 'Bullish' else "Leaving High"
 
                 signals.append({
                     'Ticker': ticker,
                     'Date': curr.name.strftime('%b %d'),
                     'Date_Obj': curr.name.date(),
+                    'Action': action_str, # <--- NEW
                     'RSI_Display': rsi_disp,
                     'Signal_Price': f"${curr['Price']:,.2f}",
                     'Last_Close': f"${latest_close:,.2f}", 
                     'Signal_Type': s_type,
-                    'EV30_Pct': ev30['return'] * 100 if valid_30 else None, # Multiply by 100 for correct % display
+                    'EV30_Pct': ev30['return'] * 100 if valid_30 else None, 
                     'EV30_Info': fmt_ev_details(ev30 if valid_30 else None),
-                    'EV90_Pct': ev90['return'] * 100 if valid_90 else None, # Multiply by 100 for correct % display
+                    'EV90_Pct': ev90['return'] * 100 if valid_90 else None, 
                     'EV90_Info': fmt_ev_details(ev90 if valid_90 else None)
                 })
             
@@ -1906,6 +1910,7 @@ def run_rsi_scanner_app():
                             column_config={
                                 "Ticker": st.column_config.TextColumn("Ticker"),
                                 "Date": st.column_config.TextColumn("Date"),
+                                "Action": st.column_config.TextColumn("Action"),
                                 "RSI_Display": st.column_config.TextColumn("RSI Δ"),
                                 "Signal_Price": st.column_config.TextColumn("Signal Close"),
                                 "Last_Close": st.column_config.TextColumn("Last Close"), # <--- ADDED LAST CLOSE
