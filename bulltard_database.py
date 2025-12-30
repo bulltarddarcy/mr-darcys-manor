@@ -636,6 +636,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods
                     'Ticker': ticker,
                     'Date': curr.name.strftime('%b %d'),
                     'RSI': curr['RSI'],
+                    'Signal_Price': curr['Price'],  # Added for display
                     'Signal': desc_str,
                     'Signal_Type': s_type,
                     'Threshold': thresh_val,
@@ -1582,6 +1583,7 @@ def run_rsi_scanner_app():
                 * **Data Pool**: Analyzes 10 years of history (where available).
                 * **Method**: Finds all historical instances where RSI was within **±2 points** of the signal candle.
                 * **Metric**: Calculates the **Mean % Return** after 30 and 90 trading days.
+                * **Base Price**: Returns and Implied Prices are calculated off the **Signal Day Close** (not the Pivot Low/High).
                 * **Constraint**: Requires **N ≥ 5** historical matches to display.
                 """)
             with f_col3:
@@ -1643,8 +1645,11 @@ def run_rsi_scanner_app():
                                 st.subheader(f"{emoji} {tf} {s_type} Signals")
                                 tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                 
+                                price_header = "Low Price Δ" if s_type == 'Bullish' else "High Price Δ"
+                                
                                 if not tbl_df.empty:
-                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="width:6%">Ticker</th><th style="width:18%">Tags</th><th style="width:12%">{date_header}</th><th style="width:8%">RSI Δ</th><th style="width:12%">Price Δ</th><th style="width:8%">Last Close</th><th style="width:9%">EV 30p</th><th style="width:9%">EV 90p</th></tr></thead><tbody>']
+                                    # Removed fixed widths to allow content to dictate width (tighter fit)
+                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th>Ticker</th><th>Tags</th><th>{date_header}</th><th>RSI Δ</th><th>{price_header}</th><th>Last Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                                     
                                     for row in tbl_df.itertuples():
                                         is_latest = (row.Signal_Date_ISO == target_highlight)
@@ -1681,7 +1686,9 @@ def run_rsi_scanner_app():
              st.markdown("""
             * **Historical Context**: 10-year daily price history analysis.
             * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
+            * **RSI Display**: Shows the **Threshold RSI** (e.g. 10) → **Signal Day RSI**.
             * **EV 30p / 90p**: Expected return 30/90 trading days later based on matches (10-year lookback).
+            * **Base Price**: EV calculations are based on the **Signal Day Close**.
             * **Color Logic**: 🟢 Green = Historical profitability (Longs > 0, Shorts < 0). 🔴 Red = Historical loss.
             * **Filter**: Requires >= 5 historical matches.
             """)
@@ -1733,12 +1740,13 @@ def run_rsi_scanner_app():
                             if not ev_obj: return "<td>N/A</td>"
                             ret = ev_obj['return']
                             n = ev_obj['n']
+                            price = ev_obj['price']
                             is_green = (signal_type == 'Bullish' and ret > 0) or (signal_type == 'Bearish' and ret < 0)
                             cls = "cell-green" if is_green else "cell-red"
-                            val_str = f"{ret*100:+.1f}%<br><span style='font-size:11px; color: #555'>(n={n})</span>"
+                            val_str = f"{ret*100:+.1f}%<br><span style='font-size:11px; color: #555'>(${price:,.2f}, n={n})</span>"
                             return f'<td class="{cls}">{val_str}</td>'
 
-                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>RSI Δ</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>RSI Δ</th><th>Signal Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                         
                         for r in res_pct_df.itertuples():
                             is_latest = (r.Date_Obj == max_date_in_set)
@@ -1751,7 +1759,7 @@ def run_rsi_scanner_app():
                             else:
                                 delta_str = f'<span style="color: #c5221f;">{r.Threshold:.0f} ↘ {r.RSI:.0f}</span>'
                                 
-                            row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td style="white-space:nowrap; text-align:center;">{delta_str}</td>{ev30_html}{ev90_html}</tr>'
+                            row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td style="white-space:nowrap; text-align:center;">{delta_str}</td><td style="text-align:right;">${r.Signal_Price:,.2f}</td>{ev30_html}{ev90_html}</tr>'
                             html_rows.append(row_html)
                         
                         html_rows.append("</tbody></table></div>")
