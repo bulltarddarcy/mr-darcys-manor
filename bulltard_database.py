@@ -292,6 +292,16 @@ def fetch_and_prepare_ai_context(url, name, limit=90):
         return f"\n[Error loading {name}: {e}]"
     return ""
 
+def style_tags(tag_str):
+    if not tag_str: return ''
+    tags = tag_str.split(", ")
+    colors = {f"EMA{EMA8_PERIOD}": "#4a90e2", f"EMA{EMA21_PERIOD}": "#9b59b6", "VOL_HIGH": "#e67e22", "VOL_GROW": "#27ae60"}
+    html_parts = []
+    for t in tags:
+        color = colors.get(t, "#7f8c8d")
+        html_parts.append(f'<span class="tag-bubble" style="background-color: {color};">{t}</span>')
+    return "".join(html_parts)
+
 def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current_price):
     mask = (rsi_array >= target_rsi - 2) & (rsi_array <= target_rsi + 2)
     indices = np.where(mask)[0]
@@ -664,22 +674,14 @@ def find_divergences(df_tf, ticker, timeframe):
                     price_arrow = "↗" if price_p2 > price_p1 else "↘"
                     price_display = f"${price_p1:,.2f} {price_arrow} ${price_p2:,.2f}"
 
-                    def fmt_ev(ev_data):
-                        if not ev_data: return ""
-                        return f"{ev_data['return']*100:+.1f}%\n(${ev_data['price']:,.2f}, n={ev_data['n']})"
-
                     divergences.append({
-                        'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 
-                        'Tags': tags, # Pass list for interactive column
+                        'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 'Tags': ", ".join(tags),
                         'Signal_Date_ISO': sig_date_iso, 
                         'Date_Display': date_display,
                         'RSI_Display': rsi_display,
                         'Price_Display': price_display,
                         'Last_Close': f"${latest_p['Price']:,.2f}", 
-                        'EV30_Display': fmt_ev(ev30),
-                        'EV90_Display': fmt_ev(ev90),
-                        'EV30_Ret': ev30['return'] if ev30 else 0,
-                        'EV90_Ret': ev90['return'] if ev90 else 0
+                        'ev30_raw': ev30, 'ev90_raw': ev90
                     })
     return divergences
 
@@ -728,26 +730,17 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods
             valid_90 = ev90 and ev90['n'] >= 5
             
             if valid_30 or valid_90:
-                def fmt_ev(ev_data):
-                    if not ev_data: return ""
-                    return f"{ev_data['return']*100:+.1f}%\n(${ev_data['price']:,.2f}, n={ev_data['n']})"
-                
-                if s_type == 'Bullish':
-                    rsi_disp = f"{thresh_val:.0f} ↗ {curr['RSI']:.0f}"
-                else:
-                    rsi_disp = f"{thresh_val:.0f} ↘ {curr['RSI']:.0f}"
-
                 signals.append({
                     'Ticker': ticker,
                     'Date': curr.name.strftime('%b %d'),
-                    'Date_Obj': curr.name.date(),
-                    'RSI_Display': rsi_disp,
-                    'Signal_Price': f"${curr['Price']:,.2f}",
+                    'RSI': curr['RSI'],
+                    'Signal_Price': curr['Price'],  
+                    'Signal': desc_str,
                     'Signal_Type': s_type,
-                    'EV30_Display': fmt_ev(ev30 if valid_30 else None),
-                    'EV90_Display': fmt_ev(ev90 if valid_90 else None),
-                    'EV30_Ret': ev30['return'] if valid_30 else 0,
-                    'EV90_Ret': ev90['return'] if valid_90 else 0
+                    'Threshold': thresh_val,
+                    'EV30_Obj': ev30 if valid_30 else None,
+                    'EV90_Obj': ev90 if valid_90 else None,
+                    'Date_Obj': curr.name.date()
                 })
             
     return signals
@@ -791,7 +784,6 @@ def run_database_app(df):
     st.title("📂 Database")
     max_data_date = get_max_trade_date(df)
     
-    # Persistence
     if 'saved_db_ticker' not in st.session_state: st.session_state.saved_db_ticker = ""
     if 'saved_db_start' not in st.session_state: st.session_state.saved_db_start = max_data_date
     if 'saved_db_end' not in st.session_state: st.session_state.saved_db_end = max_data_date
@@ -846,9 +838,7 @@ def run_database_app(df):
         
     st.subheader("Non-Expired Trades")
     st.caption("⚠️ User should check OI to confirm trades are still open")
-    st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=True, hide_index=True, height=get_table_height(f_display, max_rows=30))
-    # Padding at the bottom
-    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=False, hide_index=True, height=get_table_height(f_display, max_rows=30))
 
 @st.cache_data(ttl=600, show_spinner="Crunching Smart Money Data...")
 def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit):
@@ -954,7 +944,6 @@ def run_rankings_app(df):
     max_data_date = get_max_trade_date(df)
     start_default = max_data_date - timedelta(days=14)
     
-    # Persistence
     if 'saved_rank_start' not in st.session_state: st.session_state.saved_rank_start = start_default
     if 'saved_rank_end' not in st.session_state: st.session_state.saved_rank_end = max_data_date
     if 'saved_rank_limit' not in st.session_state: st.session_state.saved_rank_limit = 20
@@ -995,13 +984,9 @@ def run_rankings_app(df):
 
     mc_thresh = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mkt_cap_rank, 1e10)
 
-    # Pre-init to empty to avoid reference errors if flow is unusual
-    top_bulls, top_bears, valid_data = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    top_bulls, top_bears, valid_data = calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
 
     with tab_rank:
-        # Move Calculation HERE to allow Bulltard to load independently
-        top_bulls, top_bears, valid_data = calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
-        
         if valid_data.empty:
             st.warning("Not enough data for Smart Money scores.")
         else:
@@ -1025,10 +1010,6 @@ def run_rankings_app(df):
                     st.dataframe(top_bears[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=get_table_height(top_bears, max_rows=100))
 
     with tab_ideas:
-        # Check if we need to calc again (mostly cached so fine)
-        if top_bulls.empty:
-             top_bulls, top_bears, valid_data = calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
-
         if top_bulls.empty:
             st.info("No Bullish candidates found to analyze.")
         else:
@@ -1102,9 +1083,11 @@ def run_rankings_app(df):
         scores_df["Last Trade"] = last_trade_series.dt.strftime("%d %b %y")
         
         res = scores_df.reset_index()
-        # Fallback logic for market caps if calculate_smart_money_score wasn't run
-        unique_ts = res["Symbol"].unique().tolist()
-        res["Market Cap"] = res["Symbol"].map(fetch_market_caps_batch(unique_ts))
+        if "batch_caps" in locals():
+            res["Market Cap"] = res["Symbol"].map(batch_caps)
+        else:
+            unique_ts = res["Symbol"].unique().tolist()
+            res["Market Cap"] = res["Symbol"].map(fetch_market_caps_batch(unique_ts))
             
         res = res[res["Market Cap"] >= mc_thresh]
         
@@ -1178,14 +1161,13 @@ def run_strike_zones_app(df):
     
     with col_settings:
         ticker = st.text_input("Ticker", value=st.session_state.saved_sz_ticker, key="sz_ticker", on_change=save_sz_state, args=("sz_ticker", "saved_sz_ticker")).strip().upper()
-        td_start = st.date_input("Trade Date (start)", value=st.session_state.saved_sz_start, key="sz_start", on_change=save_sz_state, args=("sz_start", "saved_sz_start"), format="MMM DD, YYYY")
-        td_end = st.date_input("Trade Date (end)", value=st.session_state.saved_sz_end, key="sz_end", on_change=save_sz_state, args=("sz_end", "saved_sz_end"), format="MMM DD, YYYY")
-        exp_end = st.date_input("Exp. Range (end)", value=st.session_state.saved_sz_exp, key="sz_exp", on_change=save_sz_state, args=("sz_exp", "saved_sz_exp"), format="MMM DD, YYYY")
+        td_start = st.date_input("Trade Date (start)", value=st.session_state.saved_sz_start, key="sz_start", on_change=save_sz_state, args=("sz_start", "saved_sz_start"))
+        td_end = st.date_input("Trade Date (end)", value=st.session_state.saved_sz_end, key="sz_end", on_change=save_sz_state, args=("sz_end", "saved_sz_end"))
+        exp_end = st.date_input("Exp. Range (end)", value=st.session_state.saved_sz_exp, key="sz_exp", on_change=save_sz_state, args=("sz_exp", "saved_sz_exp"))
         
         c_sub1, c_sub2 = st.columns(2)
         with c_sub1:
             st.markdown("**View Mode**")
-            # For radios, we need to map the session state to index if dynamic, but fixed strings are okay
             view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], index=0 if st.session_state.saved_sz_view == "Price Zones" else 1, label_visibility="collapsed", key="sz_view", on_change=save_sz_state, args=("sz_view", "saved_sz_view"))
             
             st.markdown("**Zone Width**")
@@ -1365,7 +1347,7 @@ def run_strike_zones_app(df):
                 
                 st.markdown("".join(html_out), unsafe_allow_html=True)
             
-            st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them below.")
+            st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them in the Data Tables box below.")
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
@@ -1373,6 +1355,7 @@ def run_pivot_tables_app(df):
             
     col_filters, col_calculator = st.columns([1, 1], gap="medium")
     
+    # --- Persistence Logic ---
     if 'saved_pv_start' not in st.session_state: st.session_state.saved_pv_start = max_data_date
     if 'saved_pv_end' not in st.session_state: st.session_state.saved_pv_end = max_data_date
     if 'saved_pv_ticker' not in st.session_state: st.session_state.saved_pv_ticker = ""
@@ -1516,6 +1499,7 @@ def run_pivot_tables_app(df):
                 valid_symbols = {s for s in valid_symbols if get_market_cap(s) >= float(min_mkt_cap)}
             
             if ema_filter == "Yes":
+                # Optimization: Batch fetch instead of sequential calls
                 batch_results = fetch_technicals_batch(list(valid_symbols))
                 valid_symbols = {
                     s for s in valid_symbols 
@@ -1561,12 +1545,89 @@ def run_pivot_tables_app(df):
 
 def run_rsi_scanner_app():
     st.title("📈 RSI Scanner")
-    
+    # REMOVED MOBILE CAPTION HERE
+
     st.markdown("""
         <style>
         .top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; }
+        
+        /* SCROLLABLE WRAPPERS FOR MOBILE RESPONSIVENESS */
+        .rsi-table-wrapper {
+            overflow-x: auto;
+            margin-bottom: 2rem;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            width: 100%; /* Full width */
+        }
+        
+        .rsi-table { 
+            width: 100%; /* Span full page */
+            min-width: 1000px; /* Force scroll on small screens */
+            border-collapse: collapse; 
+            margin-bottom: 0; 
+        }
+        
+        .rsi-table thead tr th { 
+            background-color: #f0f2f6 !important; 
+            color: #31333f !important; 
+            padding: 10px 15px !important; /* Added padding */
+            border-bottom: 2px solid #dee2e6; 
+            white-space: nowrap; /* Keep headers on one line */
+        }
+        
+        .rsi-table tbody tr td { 
+            padding: 8px 15px !important; /* Added padding to cells */
+            border-bottom: 1px solid #eee; 
+            font-size: 14px; 
+            vertical-align: middle !important; 
+        }
+        
+        .rsi-p-table-wrapper {
+            overflow-x: auto;
+            margin-bottom: 2rem;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            width: 100%; /* Full width of page */
+            max-width: 100%;
+        }
+        
+        .rsi-p-table { 
+            width: 100%; /* Span full width of container */
+            border-collapse: collapse; 
+            font-size: 14px; /* Standard size */
+        }
+        
+        .rsi-p-table thead tr th { 
+            text-align: center; /* MODIFIED: Default center */
+            padding: 12px 8px; 
+            border-bottom: 2px solid #ddd; 
+            background-color: #f9f9f9; 
+            color: #31333f; 
+            font-weight: bold;
+        }
+        
+        .rsi-p-table tbody tr td { 
+            text-align: center; /* MODIFIED: Default center */
+            padding: 10px 8px; 
+            border-bottom: 1px solid #eee; 
+            font-weight: 400; 
+        }
+        
+        /* Specific overrides for alignment */
+        .align-left { text-align: left !important; }
+        
+        .ev-positive, .cell-green { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
+        .ev-negative, .cell-red { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
+        .ev-neutral { color: #5f6368; }
+        .latest-date { background-color: rgba(255, 244, 229, 0.7) !important; font-weight: 700 !important; color: #e67e22; }
+        
+        .tag-bubble { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; margin: 2px 4px 2px 0; color: white; white-space: nowrap; }
         .footer-header { color: #31333f; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 5px; font-weight: bold; }
-        [data-testid="stDataFrame"] th { font-weight: 900 !important; }
+        
+        /* BACKTESTER BOLD HEADERS */
+        [data-testid="stDataFrame"] th {
+            font-weight: 900 !important;
+        }
         </style>
         """, unsafe_allow_html=True)
     
@@ -1581,6 +1642,7 @@ def run_rsi_scanner_app():
         c_left, c_right = st.columns([1, 6])
         
         with c_left:
+            # FIX 1: ADDED KEY TO TEXT INPUT TO PREVENT TAB RESET
             ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)", key="rsi_bt_ticker_input").strip().upper()
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
@@ -1690,7 +1752,8 @@ def run_rsi_scanner_app():
                                     res_df.style
                                     .format({"Win Rate": format_wr, "Avg Ret": format_func})
                                     .map(highlight_ret, subset=["Avg Ret"])
-                                    .apply(highlight_best, axis=1),
+                                    .apply(highlight_best, axis=1)
+                                    .set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),
                                     use_container_width=False,
                                     column_config={
                                         "Days": st.column_config.NumberColumn("Days", width=60),
@@ -1700,10 +1763,11 @@ def run_rsi_scanner_app():
                                     },
                                     hide_index=True
                                 )
+
                         st.markdown("<br><br><br>", unsafe_allow_html=True)
 
     with tab_div:
-        data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
+        data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="pills_div")
         
         with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
             f_col1, f_col2, f_col3 = st.columns(3)
@@ -1745,12 +1809,15 @@ def run_rsi_scanner_app():
                     if date_col_raw:
                         max_dt_obj = pd.to_datetime(master[date_col_raw]).max()
                         target_highlight_daily = max_dt_obj.strftime('%Y-%m-%d')
+                        
+                        # UPDATED WEEKLY HIGHLIGHT LOGIC:
+                        # If current day is Mon-Thu (weekday < 4), subtract extra week to target previous week
                         days_to_subtract = max_dt_obj.weekday() + (7 if max_dt_obj.weekday() < 4 else 0)
                         target_highlight_weekly = (max_dt_obj - timedelta(days=days_to_subtract)).strftime('%Y-%m-%d')
                     
                     all_tickers = sorted(master[t_col].unique())
                     with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-                        sq_div = st.text_input("Filter...", key="rsi_div_filter_ticker").upper()
+                        sq_div = st.text_input("Filter...", key="filter_div").upper()
                         ft_div = [t for t in all_tickers if sq_div in t]
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_div): cols[i % 6].write(ticker)
@@ -1784,50 +1851,40 @@ def run_rsi_scanner_app():
                                 price_header = "Low Price Δ" if s_type == 'Bullish' else "High Price Δ"
                                 
                                 if not tbl_df.empty:
-                                    def style_div_df(df_in):
-                                        def highlight_row(row):
-                                            styles = [''] * len(row)
-                                            # Highlight Date
-                                            if row['Signal_Date_ISO'] == target_highlight:
-                                                idx = df_in.columns.get_loc('Date_Display')
-                                                styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
-                                            
-                                            # Color EV
-                                            for col_name in ['EV30_Display', 'EV90_Display']:
-                                                if col_name in df_in.columns:
-                                                    ret_col = col_name.replace("Display", "Ret")
-                                                    val = row[ret_col]
-                                                    if val != 0:
-                                                        is_green = (s_type == 'Bullish' and val > 0) or (s_type == 'Bearish' and val < 0)
-                                                        bg = 'background-color: #e6f4ea; color: #1e7e34;' if is_green else 'background-color: #fce8e6; color: #c5221f;'
-                                                        idx = df_in.columns.get_loc(col_name)
-                                                        styles[idx] = f'{bg} font-weight: 500;'
-                                            return styles
-                                        return df_in.style.apply(highlight_row, axis=1)
-
-                                    st.dataframe(
-                                        style_div_df(tbl_df),
-                                        column_config={
-                                            "Ticker": st.column_config.TextColumn("Ticker"),
-                                            "Tags": st.column_config.ListColumn("Tags", width="medium"), 
-                                            "Date_Display": st.column_config.TextColumn(date_header),
-                                            "RSI_Display": st.column_config.TextColumn("RSI Δ"),
-                                            "Price_Display": st.column_config.TextColumn(price_header),
-                                            "Last_Close": st.column_config.TextColumn("Last Close"),
-                                            "EV30_Display": st.column_config.TextColumn("EV 30p"),
-                                            "EV90_Display": st.column_config.TextColumn("EV 90p"),
-                                            # Hide raw cols
-                                            "Signal_Date_ISO": None, "EV30_Ret": None, "EV90_Ret": None, "Type": None, "Timeframe": None, "ev30_raw": None, "ev90_raw": None
-                                        },
-                                        hide_index=True,
-                                        use_container_width=True
-                                    )
+                                    # Removed fixed widths to allow content to dictate width (tighter fit)
+                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="white-space:nowrap;">Ticker</th><th>Tags</th><th>{date_header}</th><th>RSI Δ</th><th>{price_header}</th><th>Last Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                                    
+                                    for row in tbl_df.itertuples():
+                                        is_latest = (row.Signal_Date_ISO == target_highlight)
+                                        date_cls = ' class="latest-date"' if is_latest else ''
+                                        
+                                        # MODIFIED TAGS CELL: Force wrapping with min-width and white-space normal
+                                        row_html = [
+                                            '<tr>',
+                                            f'<td style="text-align:left; white-space:nowrap;"><b>{row.Ticker}</b></td>',
+                                            f'<td style="text-align:left; white-space: normal; min-width: 140px; word-wrap: break-word;">{style_tags(row.Tags)}</td>',
+                                            f'<td style="text-align:center"{date_cls}>{row.Date_Display}</td>', 
+                                            f'<td style="text-align:center">{row.RSI_Display}</td>',
+                                            f'<td style="text-align:center">{row.Price_Display}</td>', 
+                                            f'<td style="text-align:left">{row.Last_Close}</td>' 
+                                        ]
+                                        for data in [row.ev30_raw, row.ev90_raw]:
+                                            if data:
+                                                is_pos = data['return'] > 0
+                                                cls = ("ev-positive" if is_pos else "ev-negative") if s_type == 'Bullish' else ("ev-positive" if not is_pos else "ev-negative")
+                                                row_html.append(f'<td class="{cls}">{data["return"]*100:+.1f}% <br><small>(${data["price"]:,.2f}, N={data["n"]})</small></td>')
+                                            # MODIFIED: Removed <br><small>&nbsp;</small> so N/A aligns middle vertically
+                                            else: row_html.append('<td class="ev-neutral" style="vertical-align: middle;">&nbsp;<br>&nbsp;</td>')
+                                        row_html.append('</tr>')
+                                        html_rows.append("".join(row_html))
+                                    html_rows.append('</tbody></table></div>')
+                                    st.markdown("".join(html_rows), unsafe_allow_html=True)
                                 else: st.info("No signals.")
                     else: st.warning("No Divergence signals found.")
             except Exception as e: st.error(f"Analysis failed: {e}")
 
     with tab_pct:
-        data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
+        data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="pills_pct")
         
         with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
              st.markdown("""
@@ -1856,15 +1913,15 @@ def run_rsi_scanner_app():
 
                     all_tickers = sorted(master[t_col].unique())
                     with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-                        sq_pct = st.text_input("Filter...", key="rsi_pct_filter_ticker").upper()
+                        sq_pct = st.text_input("Filter...", key="filter_pct").upper()
                         ft_pct = [t for t in all_tickers if sq_pct in t]
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_pct): cols[i % 6].write(ticker)
 
                     c_p1, c_p2, c_p3 = st.columns(3)
-                    with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1, key="rsi_pct_low")
-                    with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1, key="rsi_pct_high")
-                    with c_p3: show_filter = st.selectbox("Show", ["Everything", "Leaving High", "Leaving Low"], index=0, key="rsi_pct_show")
+                    with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
+                    with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
+                    with c_p3: show_filter = st.selectbox("Show", ["Everything", "Leaving High", "Leaving Low"], index=0)
 
                     raw_results_pct = []
                     progress_bar = st.progress(0, text="Scanning Percentiles...")
@@ -1890,44 +1947,35 @@ def run_rsi_scanner_app():
                             
                         st.subheader(f"Found {len(res_pct_df)} Opportunities")
                         
-                        def style_pct_df(df_in):
-                            def highlight_row(row):
-                                styles = [''] * len(row)
-                                # Highlight Date
-                                if row['Date_Obj'] == max_date_in_set:
-                                    idx = df_in.columns.get_loc('Date')
-                                    styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
+                        def get_ev_cell_html(ev_obj, signal_type):
+                            if not ev_obj: return "<td>N/A</td>"
+                            ret = ev_obj['return']
+                            n = ev_obj['n']
+                            price = ev_obj['price']
+                            is_green = (signal_type == 'Bullish' and ret > 0) or (signal_type == 'Bearish' and ret < 0)
+                            cls = "cell-green" if is_green else "cell-red"
+                            val_str = f"{ret*100:+.1f}%<br><span style='font-size:11px; color: #555'>(${price:,.2f}, n={n})</span>"
+                            return f'<td class="{cls}">{val_str}</td>'
+
+                        # --- MODIFICATION: ADDED ALIGN-LEFT CLASS TO TICKER, ALL OTHERS CENTER ---
+                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th class="align-left">Ticker</th><th>Date</th><th>RSI Δ</th><th>Signal<br>Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        
+                        for r in res_pct_df.itertuples():
+                            is_latest = (r.Date_Obj == max_date_in_set)
+                            date_cls = ' class="latest-date"' if is_latest else ''
+                            ev30_html = get_ev_cell_html(r.EV30_Obj, r.Signal_Type)
+                            ev90_html = get_ev_cell_html(r.EV90_Obj, r.Signal_Type)
+                            
+                            if r.Signal_Type == 'Bullish':
+                                delta_str = f'<span style="color: #1e7e34;">{r.Threshold:.0f} ↗ {r.RSI:.0f}</span>'
+                            else:
+                                delta_str = f'<span style="color: #c5221f;">{r.Threshold:.0f} ↘ {r.RSI:.0f}</span>'
                                 
-                                s_type = row['Signal_Type']
-                                # Color EV
-                                for col_name in ['EV30_Display', 'EV90_Display']:
-                                    if col_name in df_in.columns:
-                                        ret_col = col_name.replace("Display", "Ret")
-                                        val = row[ret_col]
-                                        if val != 0:
-                                            is_green = (s_type == 'Bullish' and val > 0) or (s_type == 'Bearish' and val < 0)
-                                            bg = 'background-color: #e6f4ea; color: #1e7e34;' if is_green else 'background-color: #fce8e6; color: #c5221f;'
-                                            idx = df_in.columns.get_loc(col_name)
-                                            styles[idx] = f'{bg} font-weight: 500;'
-                                return styles
-                            return df_in.style.apply(highlight_row, axis=1)
-
-                        st.dataframe(
-                            style_pct_df(res_pct_df),
-                            column_config={
-                                "Ticker": st.column_config.TextColumn("Ticker"),
-                                "Date": st.column_config.TextColumn("Date"),
-                                "RSI_Display": st.column_config.TextColumn("RSI Δ"),
-                                "Signal_Price": st.column_config.TextColumn("Signal Close"),
-                                "EV30_Display": st.column_config.TextColumn("EV 30p"),
-                                "EV90_Display": st.column_config.TextColumn("EV 90p"),
-                                # Hide raw
-                                "Signal_Type": None, "Threshold": None, "EV30_Obj": None, "EV90_Obj": None, "Date_Obj": None, "RSI": None, "EV30_Ret": None, "EV90_Ret": None
-                            },
-                            hide_index=True,
-                            use_container_width=True
-                        )
-
+                            row_html = f'<tr><td class="align-left"><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td style="white-space:nowrap; text-align:center;">{delta_str}</td><td style="text-align:center;">${r.Signal_Price:,.2f}</td>{ev30_html}{ev90_html}</tr>'
+                            html_rows.append(row_html)
+                        
+                        html_rows.append("</tbody></table></div>")
+                        st.markdown("".join(html_rows), unsafe_allow_html=True)
                     else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
 
             except Exception as e: st.error(f"Analysis failed: {e}")
