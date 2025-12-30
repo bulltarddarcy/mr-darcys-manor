@@ -155,7 +155,7 @@ def get_stock_indicators(sym: str):
         ema8  = float(close.ewm(span=8, adjust=False).mean().iloc[-1])
         ema21 = float(close.ewm(span=21, adjust=False).mean().iloc[-1])
         
-        return spot_val, ema8, ema21, sma200, h_recent
+        return spot_val, ema8, ema21, sma200, h_full # RETURN FULL HISTORY NOW for backtest
     except: 
         return None, None, None, None, None
 
@@ -315,50 +315,6 @@ def fetch_and_prepare_ai_context(url, name, limit=90):
         return f"\n[Error loading {name}: {e}]"
     return ""
 
-def analyze_trade_setup(ticker, t_df, global_df):
-    score = 0
-    reasons = []
-    suggestions = {'Buy Calls': None, 'Sell Puts': None, 'Buy Commons': None}
-    
-    if t_df is None or t_df.empty:
-        return 0, ["No data"], suggestions
-
-    last = t_df.iloc[-1]
-    close = last.get('CLOSE', 0)
-    ema8 = last.get('EMA_8', 0)
-    ema21 = last.get('EMA_21', 0)
-    sma200 = last.get('SMA_200', 0)
-    rsi = last.get('RSI_14', 50)
-    
-    if close > ema8 and close > ema21:
-        score += 2
-        reasons.append("Strong Trend (Price > EMA8 & EMA21)")
-    elif close > ema21:
-        score += 1
-        reasons.append("Moderate Trend (Price > EMA21)")
-        
-    if close > sma200:
-        score += 2
-        reasons.append("Long-term Bullish (> SMA200)")
-        
-    if 45 < rsi < 65:
-        score += 2
-        reasons.append(f"Healthy Momentum (RSI {rsi:.0f})")
-    elif rsi >= 70:
-        score -= 1
-        reasons.append("Overbought (RSI > 70)")
-        
-    if close > ema21:
-        strike_target = math.floor(ema21)
-        suggestions['Sell Puts'] = f"Strike: ${strike_target} (EMA21 Support)"
-    
-    if close > ema8:
-        suggestions['Buy Calls'] = f"ATM or slightly OTM (e.g., ${math.ceil(close)}) for momentum."
-        
-    suggestions['Buy Commons'] = f"Entry: ${close:.2f}. Stop Loss: ${ema21:.2f}"
-    
-    return score, reasons, suggestions
-
 def style_tags(tag_str):
     if not tag_str: return ''
     tags = tag_str.split(", ")
@@ -397,6 +353,208 @@ def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current
     avg_ret = np.mean(returns)
     ev_price = current_price * (1 + avg_ret)
     return {"price": ev_price, "n": len(returns), "return": avg_ret}
+
+# --- NEW HELPERS FOR TOP 3 ---
+
+def get_optimal_rsi_duration(history_df, current_rsi, tolerance=2.0):
+    """
+    Backtests the current RSI level to find the optimal holding period (expiration)
+    based on historical Win Rate and Return.
+    """
+    if history_df is None or len(history_df) < 100:
+        return 30, "Default (No Hist)"
+
+    # Ensure RSI column exists
+    if "RSI_14" not in history_df.columns and "RSI" not in history_df.columns:
+         # Calculate quickly if missing
+         delta = history_df["Close"].diff()
+         gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+         loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+         rs = gain / loss
+         history_df["RSI"] = 100 - (100 / (1 + rs))
+    
+    rsi_col = "RSI_14" if "RSI_14" in history_df.columns else "RSI"
+    
+    # Filter historical instances
+    rsi_vals = history_df[rsi_col].values
+    close_vals = history_df["Close"].values
+    
+    min_rsi = current_rsi - tolerance
+    max_rsi = current_rsi + tolerance
+    
+    mask = (rsi_vals >= min_rsi) & (rsi_vals <= max_rsi)
+    match_indices = np.where(mask)[0]
+    
+    if len(match_indices) < 5:
+        return 30, "Default (Low Samples)"
+        
+    periods = [14, 30, 45, 60]
+    best_p = 30
+    best_score = -999
+    
+    total_len = len(close_vals)
+    
+    for p in periods:
+        valid_indices = match_indices[match_indices + p < total_len]
+        if len(valid_indices) < 5: continue
+        
+        entries = close_vals[valid_indices]
+        exits = close_vals[valid_indices + p]
+        returns = (exits - entries) / entries
+        
+        win_rate = np.mean(returns > 0)
+        avg_ret = np.mean(returns)
+        
+        # Scoring: heavily weight Win Rate for "Selling Puts" safety, plus return
+        score = (win_rate * 2) + avg_ret 
+        
+        if score > best_score:
+            best_score = score
+            best_p = p
+            
+    return best_p, f"RSI Backtest (Optimal {best_p}d)"
+
+def find_whale_confluence(ticker, global_df, current_price, trade_type="Bullish"):
+    """
+    Scans the database for the largest relevant active trades to find a 'Whale Strike'.
+    """
+    if global_df.empty: return None
+
+    # Filter for ticker and future expiry
+    today_dt = pd.to_datetime(date.today())
+    f = global_df[
+        (global_df["Symbol"].astype(str).str.upper() == ticker) & 
+        (global_df["Expiry_DT"] > today_dt)
+    ].copy()
+    
+    if f.empty: return None
+
+    # Filter for bullish/bearish flows
+    if trade_type == "Bullish":
+        # Look for Puts Sold or Calls Bought
+        f = f[f["Order Type"].isin(["Puts Sold", "Calls Bought"])]
+    else:
+        # Look for Puts Bought (or Calls Sold if we tracked them, but mainly Puts Bought)
+        f = f[f["Order Type"] == "Puts Bought"]
+        
+    if f.empty: return None
+    
+    # Sort by Dollars to find the biggest trades
+    f = f.sort_values(by="Dollars", ascending=False)
+    
+    # Get top whale trade
+    whale_trade = f.iloc[0]
+    whale_strike = whale_trade["Strike (Actual)"]
+    whale_exp = whale_trade["Expiry_DT"]
+    whale_dollars = whale_trade["Dollars"]
+    whale_type = whale_trade["Order Type"]
+    
+    # Sanity check: Don't suggest a sold put ITM unless it's deep value
+    if trade_type == "Bullish" and "Puts" in whale_type and whale_strike > current_price:
+        # If whale sold ITM puts, maybe risky. Look for next best OTM.
+        otm_puts = f[(f["Order Type"]=="Puts Sold") & (f["Strike (Actual)"] < current_price)]
+        if not otm_puts.empty:
+            whale_trade = otm_puts.iloc[0]
+            whale_strike = whale_trade["Strike (Actual)"]
+            whale_exp = whale_trade["Expiry_DT"]
+    
+    return {
+        "Strike": whale_strike,
+        "Expiry": whale_exp.strftime("%d %b"),
+        "Dollars": whale_dollars,
+        "Type": whale_type
+    }
+
+def analyze_trade_setup(ticker, t_df, global_df):
+    score = 0
+    reasons = []
+    suggestions = {'Buy Calls': None, 'Sell Puts': None, 'Buy Commons': None}
+    
+    if t_df is None or t_df.empty:
+        return 0, ["No data"], suggestions
+
+    last = t_df.iloc[-1]
+    close = last.get('CLOSE', 0) if 'CLOSE' in last else last.get('Close', 0)
+    ema8 = last.get('EMA_8', 0)
+    ema21 = last.get('EMA_21', 0)
+    sma200 = last.get('SMA_200', 0)
+    rsi = last.get('RSI_14', 50)
+    
+    # --- SCORING ---
+    if close > ema8 and close > ema21:
+        score += 2
+        reasons.append("Strong Trend (Price > EMA8 & EMA21)")
+    elif close > ema21:
+        score += 1
+        reasons.append("Moderate Trend (Price > EMA21)")
+        
+    if close > sma200:
+        score += 2
+        reasons.append("Long-term Bullish (> SMA200)")
+        
+    if 45 < rsi < 65:
+        score += 2
+        reasons.append(f"Healthy Momentum (RSI {rsi:.0f})")
+    elif rsi >= 70:
+        score -= 1
+        reasons.append("Overbought (RSI > 70)")
+    
+    # --- STRATEGY GENERATION ---
+    
+    # 1. Calculate Optimal Duration based on RSI History
+    # Note: t_df might be just a single row if fetched via GDrive, or full history via Yahoo
+    # We need history for backtest. If t_df is small, we skip backtest.
+    opt_days, opt_reason = 30, "Standard 30d"
+    if len(t_df) > 100:
+         opt_days, opt_reason = get_optimal_rsi_duration(t_df, rsi)
+    
+    target_date = date.today() + timedelta(days=opt_days)
+    target_date_str = target_date.strftime("%d %b")
+    
+    # 2. Find Whale Confluence
+    whale_data = find_whale_confluence(ticker, global_df, close, "Bullish")
+    
+    # 3. Formulate "Sell Puts" Logic
+    sp_strike = math.floor(ema21) # Default: Technical Support
+    sp_reason = "EMA21 Support"
+    sp_exp = target_date_str
+    
+    if whale_data:
+        # If whale sold puts, check if strike is reasonable (not too ITM)
+        if whale_data["Type"] == "Puts Sold" and whale_data["Strike"] < close:
+            sp_strike = whale_data["Strike"]
+            sp_reason = f"Whale Tailing (${whale_data['Dollars']/1e6:.1f}M sold)"
+            sp_exp = whale_data["Expiry"] # Match whale expiry
+        # If whale bought calls, use technical support but align expiry
+        elif whale_data["Type"] == "Calls Bought":
+             sp_exp = whale_data["Expiry"]
+             sp_reason = f"EMA21 (Align with Call Whale Exp)"
+    
+    suggestions['Sell Puts'] = f"Strike ${sp_strike} ({sp_reason}), Exp ~{sp_exp}"
+
+    # 4. Formulate "Buy Calls" Logic
+    bc_strike = math.ceil(close)
+    bc_reason = "ATM Momentum"
+    bc_exp = target_date_str
+    
+    if whale_data and whale_data["Type"] == "Calls Bought":
+        bc_strike = whale_data["Strike"]
+        bc_exp = whale_data["Expiry"]
+        bc_reason = f"Tailing Call Whale (${whale_data['Dollars']/1e6:.1f}M)"
+        
+    if close > ema8:
+        suggestions['Buy Calls'] = f"Strike ${bc_strike} ({bc_reason}), Exp ~{bc_exp}"
+        
+    suggestions['Buy Commons'] = f"Entry: ${close:.2f}. Stop Loss: ${ema21:.2f}"
+    
+    # Add backtest reason to reasons list
+    if "RSI Backtest" in opt_reason:
+        reasons.append(f"Hist. Optimal Hold: {opt_days} Days")
+        
+    if whale_data:
+        reasons.append(f"Whale detected: {whale_data['Type']} @ ${whale_data['Strike']}")
+    
+    return score, reasons, suggestions
 
 def prepare_data(df):
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
@@ -906,8 +1064,11 @@ def run_rankings_app(df):
         if top_bulls.empty:
             st.info("No Bullish candidates found to analyze.")
         else:
-            st.caption(f"ℹ️ Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for technical confluence...")
-            st.caption("⚠️ Note: This methodology is a work in progress and should not be relied upon right now.")
+            st.caption(f"ℹ️ Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for confluence...")
+            st.caption("ℹ️ Strategy: Combines Whale Levels (Global DB), Technicals (EMA), and Historical RSI Backtests to find optimal expirations.")
+            
+            # --- MODIFICATION: RED BOLD WARNING ---
+            st.markdown("<span style='color:red; font-weight:bold'>⚠️ Note: This methodology is a work in progress and should not be relied upon right now.</span>", unsafe_allow_html=True)
             
             ticker_map = load_ticker_map()
             candidates = []
@@ -922,8 +1083,14 @@ def run_rankings_app(df):
                 prog_bar.progress((i+1)/len(bull_list), text=f"Checking {t}...")
                 t_df = get_ticker_technicals(t, ticker_map)
                 
+                # FALLBACK: If GDrive data missing, fetch from Yahoo for the backtest
+                if t_df is None or t_df.empty:
+                    t_df = fetch_yahoo_data(t)
+
                 if t_df is not None:
                     sm_score = top_bulls[top_bulls["Symbol"]==t]["Score"].iloc[0]
+                    
+                    # PASS GLOBAL DF FOR WHALE SCANNING
                     tech_score, reasons, suggs = analyze_trade_setup(t, t_df, df)
                     
                     # UPDATED FORMULA: (SM Score / 25) + Tech Score
@@ -933,7 +1100,7 @@ def run_rankings_app(df):
                     candidates.append({
                         "Ticker": t,
                         "Score": final_conviction,
-                        "Price": t_df.iloc[-1].get('CLOSE'),
+                        "Price": t_df.iloc[-1].get('CLOSE') or t_df.iloc[-1].get('Close'),
                         "Reasons": reasons,
                         "Suggestions": suggs
                     })
@@ -1480,8 +1647,8 @@ def run_rsi_scanner_app():
         }
         
         .rsi-p-table thead tr th { 
-            text-align: left; 
-            padding: 12px 8px; /* More padding */
+            text-align: center; /* MODIFIED: Default center */
+            padding: 12px 8px; 
             border-bottom: 2px solid #ddd; 
             background-color: #f9f9f9; 
             color: #31333f; 
@@ -1489,10 +1656,14 @@ def run_rsi_scanner_app():
         }
         
         .rsi-p-table tbody tr td { 
-            padding: 10px 8px; /* More padding */
+            text-align: center; /* MODIFIED: Default center */
+            padding: 10px 8px; 
             border-bottom: 1px solid #eee; 
             font-weight: 400; 
         }
+        
+        /* Specific overrides for alignment */
+        .align-left { text-align: left !important; }
         
         .ev-positive, .cell-green { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
         .ev-negative, .cell-red { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
@@ -1834,7 +2005,8 @@ def run_rsi_scanner_app():
                             val_str = f"{ret*100:+.1f}%<br><span style='font-size:11px; color: #555'>(${price:,.2f}, n={n})</span>"
                             return f'<td class="{cls}">{val_str}</td>'
 
-                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>RSI Δ</th><th>Signal<br>Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        # --- MODIFICATION: ADDED ALIGN-LEFT CLASS TO TICKER, ALL OTHERS CENTER ---
+                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th class="align-left">Ticker</th><th>Date</th><th>RSI Δ</th><th>Signal<br>Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                         
                         for r in res_pct_df.itertuples():
                             is_latest = (r.Date_Obj == max_date_in_set)
@@ -1847,7 +2019,7 @@ def run_rsi_scanner_app():
                             else:
                                 delta_str = f'<span style="color: #c5221f;">{r.Threshold:.0f} ↘ {r.RSI:.0f}</span>'
                                 
-                            row_html = f'<tr><td><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td style="white-space:nowrap; text-align:center;">{delta_str}</td><td style="text-align:right;">${r.Signal_Price:,.2f}</td>{ev30_html}{ev90_html}</tr>'
+                            row_html = f'<tr><td class="align-left"><b>{r.Ticker}</b></td><td{date_cls}>{r.Date}</td><td style="white-space:nowrap; text-align:center;">{delta_str}</td><td style="text-align:center;">${r.Signal_Price:,.2f}</td>{ev30_html}{ev90_html}</tr>'
                             html_rows.append(row_html)
                         
                         html_rows.append("</tbody></table></div>")
