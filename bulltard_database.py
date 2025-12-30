@@ -364,7 +364,7 @@ def style_tags(tag_str):
     tags = tag_str.split(", ")
     colors = {f"EMA{EMA8_PERIOD}": "#4a90e2", f"EMA{EMA21_PERIOD}": "#9b59b6", "VOL_HIGH": "#e67e22", "VOL_GROW": "#27ae60"}
     html_parts = []
-    for i, t in enumerate(tags):
+    for t in tags:
         color = colors.get(t, "#7f8c8d")
         html_parts.append(f'<span class="tag-bubble" style="background-color: {color};">{t}</span>')
     return "".join(html_parts)
@@ -888,7 +888,6 @@ def run_rankings_app(df):
             st.caption(f"ℹ️ Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for technical confluence...")
             st.caption("⚠️ Note: This methodology is a work in progress and should not be relied upon right now.")
             
-            # REMOVED BUTTON FOR AUTO-LOAD
             ticker_map = load_ticker_map()
             candidates = []
             
@@ -1391,6 +1390,7 @@ def run_rsi_scanner_app():
         
         .rsi-table { 
             width: 100%; /* Changed back to 100% to fill container */
+            min-width: 1000px; /* Restored to prevent squishing on mobile */
             border-collapse: collapse; 
             table-layout: fixed; 
             margin-bottom: 0; 
@@ -1421,7 +1421,7 @@ def run_rsi_scanner_app():
         .ev-positive, .cell-green { background-color: #e6f4ea !important; color: #1e7e34; font-weight: 500; }
         .ev-negative, .cell-red { background-color: #fce8e6 !important; color: #c5221f; font-weight: 500; }
         .ev-neutral { color: #5f6368; }
-        .latest-date { background-color: rgba(255, 244, 229, 0.7) !important; font-weight: 700; color: #e67e22; }
+        .latest-date { background-color: rgba(255, 244, 229, 0.7) !important; font-weight: 700 !important; color: #e67e22; }
         
         .tag-bubble { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; margin: 2px 4px 2px 0; color: white; white-space: nowrap; }
         .footer-header { color: #31333f; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 5px; font-weight: bold; }
