@@ -449,7 +449,7 @@ def prepare_data(df):
         df_w = df[[w_close, w_vol, w_high, w_low, w_rsi, w_ema8, w_ema21]].copy()
         df_w.rename(columns={w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low', w_rsi: 'RSI', w_ema8: 'EMA8', w_ema21: 'EMA21'}, inplace=True)
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
-        df_w['ChartDate'] = df_w.index - pd.Timedelta(days=4)
+        df_w['ChartDate'] = df_w.index - pd.to_timedelta(df_w.index.dayofweek, unit='D')
         df_w = df_w.dropna(subset=['Price', 'RSI'])
     else: 
         df_w = None
@@ -1604,7 +1604,11 @@ def run_rsi_scanner_app():
                     if date_col_raw:
                         max_dt_obj = pd.to_datetime(master[date_col_raw]).max()
                         target_highlight_daily = max_dt_obj.strftime('%Y-%m-%d')
-                        target_highlight_weekly = (max_dt_obj - timedelta(days=max_dt_obj.weekday())).strftime('%Y-%m-%d')
+                        
+                        # UPDATED WEEKLY HIGHLIGHT LOGIC:
+                        # If current day is Mon-Thu (weekday < 4), subtract extra week to target previous week
+                        days_to_subtract = max_dt_obj.weekday() + (7 if max_dt_obj.weekday() < 4 else 0)
+                        target_highlight_weekly = (max_dt_obj - timedelta(days=days_to_subtract)).strftime('%Y-%m-%d')
                     
                     all_tickers = sorted(master[t_col].unique())
                     with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
@@ -1640,7 +1644,7 @@ def run_rsi_scanner_app():
                                 tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                 
                                 if not tbl_df.empty:
-                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="width:7%">Ticker</th><th style="width:25%">Tags</th><th style="width:16%">{date_header}</th><th style="width:8%">RSI Δ</th><th style="width:16%">Price Δ</th><th style="width:8%">Last Close</th><th style="width:10%">EV 30p</th><th style="width:10%">EV 90p</th></tr></thead><tbody>']
+                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="width:6%">Ticker</th><th style="width:18%">Tags</th><th style="width:12%">{date_header}</th><th style="width:8%">RSI Δ</th><th style="width:12%">Price Δ</th><th style="width:8%">Last Close</th><th style="width:9%">EV 30p</th><th style="width:9%">EV 90p</th></tr></thead><tbody>']
                                     
                                     for row in tbl_df.itertuples():
                                         is_latest = (row.Signal_Date_ISO == target_highlight)
