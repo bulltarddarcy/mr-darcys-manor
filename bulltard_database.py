@@ -806,10 +806,10 @@ def run_database_app(df):
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
         db_ticker = st.text_input("Ticker (blank=all)", value=st.session_state.saved_db_ticker, key="db_ticker_input", on_change=save_db_state, args=("db_ticker_input", "saved_db_ticker")).strip().upper()
-    with c2: start_date = st.date_input("Trade Start Date", value=st.session_state.saved_db_start, key="db_start", on_change=save_db_state, args=("db_start", "saved_db_start"))
-    with c3: end_date = st.date_input("Trade End Date", value=st.session_state.saved_db_end, key="db_end", on_change=save_db_state, args=("db_end", "saved_db_end"))
+    with c2: start_date = st.date_input("Trade Start Date", value=st.session_state.saved_db_start, key="db_start", on_change=save_db_state, args=("db_start", "saved_db_start"), format="MMM DD, YYYY")
+    with c3: end_date = st.date_input("Trade End Date", value=st.session_state.saved_db_end, key="db_end", on_change=save_db_state, args=("db_end", "saved_db_end"), format="MMM DD, YYYY")
     with c4:
-        db_exp_end = st.date_input("Expiration Range (end)", value=st.session_state.saved_db_exp, key="db_exp", on_change=save_db_state, args=("db_exp", "saved_db_exp"))
+        db_exp_end = st.date_input("Expiration Range (end)", value=st.session_state.saved_db_exp, key="db_exp", on_change=save_db_state, args=("db_exp", "saved_db_exp"), format="MMM DD, YYYY")
     
     ot1, ot2, ot3, ot_pad = st.columns([1.5, 1.5, 1.5, 5.5])
     with ot1: inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_db_inc_cb, key="db_inc_cb", on_change=save_db_state, args=("db_inc_cb", "saved_db_inc_cb"))
@@ -846,7 +846,7 @@ def run_database_app(df):
         
     st.subheader("Non-Expired Trades")
     st.caption("⚠️ User should check OI to confirm trades are still open")
-    st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=False, hide_index=True, height=get_table_height(f_display, max_rows=30))
+    st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=True, hide_index=True, height=get_table_height(f_display, max_rows=30))
     # Padding at the bottom
     st.markdown("<br><br><br>", unsafe_allow_html=True)
 
@@ -982,9 +982,13 @@ def run_rankings_app(df):
 
     mc_thresh = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mkt_cap_rank, 1e10)
 
-    top_bulls, top_bears, valid_data = calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
+    # Pre-init to empty to avoid reference errors if flow is unusual
+    top_bulls, top_bears, valid_data = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     with tab_rank:
+        # Move Calculation HERE to allow Bulltard to load independently
+        top_bulls, top_bears, valid_data = calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
+        
         if valid_data.empty:
             st.warning("Not enough data for Smart Money scores.")
         else:
@@ -1008,6 +1012,10 @@ def run_rankings_app(df):
                     st.dataframe(top_bears[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=get_table_height(top_bears, max_rows=100))
 
     with tab_ideas:
+        # Check if we need to calc again (mostly cached so fine)
+        if top_bulls.empty:
+             top_bulls, top_bears, valid_data = calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
+
         if top_bulls.empty:
             st.info("No Bullish candidates found to analyze.")
         else:
@@ -1081,11 +1089,9 @@ def run_rankings_app(df):
         scores_df["Last Trade"] = last_trade_series.dt.strftime("%d %b %y")
         
         res = scores_df.reset_index()
-        if "batch_caps" in locals():
-            res["Market Cap"] = res["Symbol"].map(batch_caps)
-        else:
-            unique_ts = res["Symbol"].unique().tolist()
-            res["Market Cap"] = res["Symbol"].map(fetch_market_caps_batch(unique_ts))
+        # Fallback logic for market caps if calculate_smart_money_score wasn't run
+        unique_ts = res["Symbol"].unique().tolist()
+        res["Market Cap"] = res["Symbol"].map(fetch_market_caps_batch(unique_ts))
             
         res = res[res["Market Cap"] >= mc_thresh]
         
@@ -1140,30 +1146,46 @@ def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
     exp_range_default = (date.today() + timedelta(days=365))
     
+    # Persistence
+    if 'saved_sz_ticker' not in st.session_state: st.session_state.saved_sz_ticker = "AMZN"
+    if 'saved_sz_start' not in st.session_state: st.session_state.saved_sz_start = None
+    if 'saved_sz_end' not in st.session_state: st.session_state.saved_sz_end = None
+    if 'saved_sz_exp' not in st.session_state: st.session_state.saved_sz_exp = exp_range_default
+    if 'saved_sz_view' not in st.session_state: st.session_state.saved_sz_view = "Price Zones"
+    if 'saved_sz_width_mode' not in st.session_state: st.session_state.saved_sz_width_mode = "Auto"
+    if 'saved_sz_fixed' not in st.session_state: st.session_state.saved_sz_fixed = 10
+    if 'saved_sz_inc_cb' not in st.session_state: st.session_state.saved_sz_inc_cb = True
+    if 'saved_sz_inc_ps' not in st.session_state: st.session_state.saved_sz_inc_ps = True
+    if 'saved_sz_inc_pb' not in st.session_state: st.session_state.saved_sz_inc_pb = True
+
+    def save_sz_state(key, saved_key):
+        st.session_state[saved_key] = st.session_state[key]
+    
     col_settings, col_visuals = st.columns([1, 2.5], gap="large")
     
     with col_settings:
-        ticker = st.text_input("Ticker", value="AMZN", key="sz_ticker").strip().upper()
-        td_start = st.date_input("Trade Date (start)", value=None, key="sz_start")
-        td_end = st.date_input("Trade Date (end)", value=None, key="sz_end")
-        exp_end = st.date_input("Exp. Range (end)", value=exp_range_default, key="sz_exp")
+        ticker = st.text_input("Ticker", value=st.session_state.saved_sz_ticker, key="sz_ticker", on_change=save_sz_state, args=("sz_ticker", "saved_sz_ticker")).strip().upper()
+        td_start = st.date_input("Trade Date (start)", value=st.session_state.saved_sz_start, key="sz_start", on_change=save_sz_state, args=("sz_start", "saved_sz_start"), format="MMM DD, YYYY")
+        td_end = st.date_input("Trade Date (end)", value=st.session_state.saved_sz_end, key="sz_end", on_change=save_sz_state, args=("sz_end", "saved_sz_end"), format="MMM DD, YYYY")
+        exp_end = st.date_input("Exp. Range (end)", value=st.session_state.saved_sz_exp, key="sz_exp", on_change=save_sz_state, args=("sz_exp", "saved_sz_exp"), format="MMM DD, YYYY")
         
         c_sub1, c_sub2 = st.columns(2)
         with c_sub1:
             st.markdown("**View Mode**")
-            view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], label_visibility="collapsed")
+            # For radios, we need to map the session state to index if dynamic, but fixed strings are okay
+            view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], index=0 if st.session_state.saved_sz_view == "Price Zones" else 1, label_visibility="collapsed", key="sz_view", on_change=save_sz_state, args=("sz_view", "saved_sz_view"))
             
             st.markdown("**Zone Width**")
-            width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], label_visibility="collapsed")
+            width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], index=0 if st.session_state.saved_sz_width_mode == "Auto" else 1, label_visibility="collapsed", key="sz_width_mode", on_change=save_sz_state, args=("sz_width_mode", "saved_sz_width_mode"))
             if width_mode == "Fixed": 
-                fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=10)
+                fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=st.session_state.saved_sz_fixed, key="sz_fixed", on_change=save_sz_state, args=("sz_fixed", "saved_sz_fixed"))
             else: fixed_size_choice = 10
         
         with c_sub2:
             st.markdown("**Include**")
-            inc_cb = st.checkbox("Calls Bought", value=True)
-            inc_ps = st.checkbox("Puts Sold", value=True)
-            inc_pb = st.checkbox("Puts Bought", value=True)
+            inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_sz_inc_cb, key="sz_inc_cb", on_change=save_sz_state, args=("sz_inc_cb", "saved_sz_inc_cb"))
+            inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_sz_inc_ps, key="sz_inc_ps", on_change=save_sz_state, args=("sz_inc_ps", "saved_sz_inc_ps"))
+            inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_sz_inc_pb, key="sz_inc_pb", on_change=save_sz_state, args=("sz_inc_pb", "saved_sz_inc_pb"))
             
         hide_empty = True
         show_table = True
@@ -1330,7 +1352,7 @@ def run_strike_zones_app(df):
                 
                 st.markdown("".join(html_out), unsafe_allow_html=True)
             
-            st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them in the Data Tables box below.")
+            st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them below.")
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
@@ -1365,9 +1387,9 @@ def run_pivot_tables_app(df):
         st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>🔍 Filters</h4>", unsafe_allow_html=True)
         fc1, fc2, fc3 = st.columns(3)
         with fc1: 
-            td_start = st.date_input("Trade Start Date", value=st.session_state.saved_pv_start, key="pv_start", on_change=save_pv_state, args=("pv_start", "saved_pv_start"))
+            td_start = st.date_input("Trade Start Date", value=st.session_state.saved_pv_start, key="pv_start", on_change=save_pv_state, args=("pv_start", "saved_pv_start"), format="MMM DD, YYYY")
         with fc2: 
-            td_end = st.date_input("Trade End Date", value=st.session_state.saved_pv_end, key="pv_end", on_change=save_pv_state, args=("pv_end", "saved_pv_end"))
+            td_end = st.date_input("Trade End Date", value=st.session_state.saved_pv_end, key="pv_end", on_change=save_pv_state, args=("pv_end", "saved_pv_end"), format="MMM DD, YYYY")
         with fc3: 
             ticker_filter = st.text_input("Ticker (blank=all)", value=st.session_state.saved_pv_ticker, key="pv_ticker", on_change=save_pv_state, args=("pv_ticker", "saved_pv_ticker")).strip().upper()
         
@@ -1398,7 +1420,7 @@ def run_pivot_tables_app(df):
         cc1, cc2, cc3 = st.columns(3)
         with cc1: c_strike = st.number_input("Strike Price", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="calc_strike")
         with cc2: c_premium = st.number_input("Premium", min_value=0.00, value=2.50, step=0.05, format="%.2f", key="calc_premium")
-        with cc3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry")
+        with cc3: c_expiry = st.date_input("Expiration", value=date.today() + timedelta(days=30), key="calc_expiry", format="MMM DD, YYYY")
         
         dte = (c_expiry - date.today()).days
         coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
@@ -1769,7 +1791,7 @@ def run_rsi_scanner_app():
                                         style_div_df(tbl_df),
                                         column_config={
                                             "Ticker": st.column_config.TextColumn("Ticker"),
-                                            "Tags": st.column_config.ListColumn("Tags"),
+                                            "Tags": st.column_config.ListColumn("Tags", width="medium"), # WIDER TO PREVENT OVERLAP
                                             "Date_Display": st.column_config.TextColumn(date_header),
                                             "RSI_Display": st.column_config.TextColumn("RSI Δ"),
                                             "Price_Display": st.column_config.TextColumn(price_header),
