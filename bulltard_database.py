@@ -700,6 +700,9 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods
     
     scan_window = df.iloc[-(periods_to_scan+1):]
     
+    # Capture latest close for the ticker
+    latest_close = df['Price'].iloc[-1] 
+    
     for i in range(1, len(scan_window)):
         prev = scan_window.iloc[i-1]
         curr = scan_window.iloc[i]
@@ -738,6 +741,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods
                     'Date_Obj': curr.name.date(),
                     'RSI_Display': rsi_disp,
                     'Signal_Price': f"${curr['Price']:,.2f}",
+                    'Last_Close': f"${latest_close:,.2f}", 
                     'Signal_Type': s_type,
                     'EV30_Pct': ev30['return'] * 100 if valid_30 else None, # Multiply by 100 for correct % display
                     'EV30_Info': fmt_ev_details(ev30 if valid_30 else None),
@@ -962,8 +966,8 @@ def run_rankings_app(df):
     with c2: rank_end = st.date_input("Trade End Date", value=st.session_state.saved_rank_end, key="rank_end", on_change=save_rank_state, args=("rank_end", "saved_rank_end"))
     with c3: limit = st.number_input("Limit", value=st.session_state.saved_rank_limit, min_value=1, max_value=200, key="rank_limit", on_change=save_rank_state, args=("rank_limit", "saved_rank_limit"))
     with c4: 
-        min_mkt_cap_rank = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="rank_mc")
-        filter_ema = st.checkbox("Hide < 8 EMA", value=False, key="rank_ema")
+        min_mkt_cap_rank = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
+        filter_ema = st.checkbox("Hide < 8 EMA", value=False, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
         
     f = df.copy()
     if rank_start: f = f[f["Trade Date"].dt.date >= rank_start]
@@ -1497,10 +1501,11 @@ def run_pivot_tables_app(df):
                 valid_symbols = {s for s in valid_symbols if get_market_cap(s) >= float(min_mkt_cap)}
             
             if ema_filter == "Yes":
+                # Optimization: Batch fetch instead of sequential calls
                 batch_results = fetch_technicals_batch(list(valid_symbols))
                 valid_symbols = {
                     s for s in valid_symbols 
-                    if batch_results.get(s, (None, None))[2] is None or 
+                    if batch_results.get(s, (None, None))[2] is None or # Retain original behavior (fail open)
                     (batch_results[s][0] is not None and batch_results[s][2] is not None and batch_results[s][0] > batch_results[s][2])
                 }
             
@@ -1873,7 +1878,7 @@ def run_rsi_scanner_app():
                         elif show_filter == "Leaving Low":
                             res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
                             
-                        st.subheader(f"Found {len(res_pct_df)} Opportunities")
+                        # st.subheader(f"Found {len(res_pct_df)} Opportunities") <--- REMOVED HEADER
                         
                         def style_pct_df(df_in):
                             def highlight_row(row):
@@ -1903,6 +1908,7 @@ def run_rsi_scanner_app():
                                 "Date": st.column_config.TextColumn("Date"),
                                 "RSI_Display": st.column_config.TextColumn("RSI Δ"),
                                 "Signal_Price": st.column_config.TextColumn("Signal Close"),
+                                "Last_Close": st.column_config.TextColumn("Last Close"), # <--- ADDED LAST CLOSE
                                 "EV30_Pct": st.column_config.NumberColumn("EV 30%", format="%.1f%%"),
                                 "EV30_Info": st.column_config.TextColumn("EV 30 Info"),
                                 "EV90_Pct": st.column_config.NumberColumn("EV 90%", format="%.1f%%"),
@@ -1911,7 +1917,8 @@ def run_rsi_scanner_app():
                                 "Signal_Type": None, "Threshold": None, "EV30_Obj": None, "EV90_Obj": None, "Date_Obj": None, "RSI": None
                             },
                             hide_index=True,
-                            use_container_width=True
+                            use_container_width=True,
+                            height=get_table_height(res_pct_df, max_rows=50) # <--- INCREASED HEIGHT
                         )
 
                     else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
