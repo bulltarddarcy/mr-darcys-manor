@@ -1227,8 +1227,8 @@ def run_strike_zones_app(df):
             "Include": st.column_config.CheckboxColumn("Include", default=True),
             "Trade Date": st.column_config.DateColumn("Trade Date", format="DD MMM YY"),
             "Expiry_DT": st.column_config.DateColumn("Expiry", format="DD MMM YY"),
-            "Dollars": st.column_config.NumberColumn("Dollars", format="%.0f"),
-            "Contracts": st.column_config.NumberColumn("Qty", format="%.0f"),
+            "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
+            "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
             order_type_col: st.column_config.TextColumn("Order Type"),
             "Symbol": st.column_config.TextColumn("Symbol"),
             "Strike": st.column_config.TextColumn("Strike"),
@@ -1548,7 +1548,7 @@ def run_pivot_tables_app(df):
         st.dataframe(tbl_rr.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl_rr, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
     else: st.caption("No matched RR pairs found.")
 
-def run_rsi_scanner_app():
+def run_rsi_scanner_app(df_global):
     st.title("📈 RSI Scanner")
     
     st.markdown("""
@@ -1720,8 +1720,10 @@ def run_rsi_scanner_app():
             with f_col3:
                 st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
                 st.markdown(f"""
-                * **EMA Trends**: Checks if Price is respecting EMA{EMA8_PERIOD} (Momentum) or EMA{EMA21_PERIOD} (Trend).
-                * **Volume**: **VOL_HIGH** (>150% SMA) or **VOL_GROW** (P2 Vol > P1 Vol).
+                * **EMA{EMA8_PERIOD}**: Bullish (Price > EMA8) or Bearish (Price < EMA8).
+                * **EMA{EMA21_PERIOD}**: Bullish (Price > EMA21) or Bearish (Price < EMA21).
+                * **VOL_HIGH**: Signal candle volume is > 150% of the 30-day average.
+                * **VOL_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).
                 """)
         
         if data_option_div:
@@ -1855,10 +1857,18 @@ def run_rsi_scanner_app():
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_pct): cols[i % 6].write(ticker)
 
-                    c_p1, c_p2, c_p3 = st.columns(3)
+                    c_p1, c_p2, c_p3, c_p4 = st.columns(4)
                     with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1, key="rsi_pct_low")
                     with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1, key="rsi_pct_high")
-                    with c_p3: show_filter = st.selectbox("Show", ["Everything", "Leaving High", "Leaving Low"], index=0, key="rsi_pct_show")
+                    with c_p3: show_filter = st.selectbox("Actions to Show", ["Everything", "Leaving High", "Leaving Low"], index=0, key="rsi_pct_show")
+                    
+                    if not df_global.empty and "Trade Date" in df_global.columns:
+                        ref_date = df_global["Trade Date"].max().date()
+                    else:
+                        ref_date = date.today()
+                    default_start = ref_date - timedelta(days=14)
+                    
+                    with c_p4: filter_date = st.date_input("Latest Date", value=default_start, key="rsi_pct_date")
 
                     raw_results_pct = []
                     progress_bar = st.progress(0, text="Scanning Percentiles...")
@@ -1882,7 +1892,8 @@ def run_rsi_scanner_app():
                         elif show_filter == "Leaving Low":
                             res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
                             
-                        # st.subheader(f"Found {len(res_pct_df)} Opportunities") <--- REMOVED HEADER
+                        if filter_date:
+                             res_pct_df = res_pct_df[res_pct_df['Date_Obj'] >= filter_date]
                         
                         def style_pct_df(df_in):
                             def highlight_row(row):
@@ -2042,7 +2053,7 @@ try:
         st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
         st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
         st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
-        st.Page(run_rsi_scanner_app, title="RSI Scanner", icon="📈", url_path="rsi_scanner"), 
+        st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="📈", url_path="rsi_scanner"), 
         st.Page(lambda: run_trade_ideas_app(df_global), title="Trade Ideas", icon="💡", url_path="trade_ideas"),
     ])
 
