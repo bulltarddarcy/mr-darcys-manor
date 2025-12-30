@@ -686,21 +686,30 @@ def run_database_app(df):
     st.title("📂 Database")
     max_data_date = get_max_trade_date(df)
     
+    # Persistence
+    if 'saved_db_ticker' not in st.session_state: st.session_state.saved_db_ticker = ""
+    if 'saved_db_start' not in st.session_state: st.session_state.saved_db_start = max_data_date
+    if 'saved_db_end' not in st.session_state: st.session_state.saved_db_end = max_data_date
+    if 'saved_db_exp' not in st.session_state: st.session_state.saved_db_exp = (date.today() + timedelta(days=365))
+    if 'saved_db_inc_cb' not in st.session_state: st.session_state.saved_db_inc_cb = True
+    if 'saved_db_inc_ps' not in st.session_state: st.session_state.saved_db_inc_ps = True
+    if 'saved_db_inc_pb' not in st.session_state: st.session_state.saved_db_inc_pb = True
+
+    def save_db_state(key, saved_key):
+        st.session_state[saved_key] = st.session_state[key]
+    
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
-        default_ticker = st.session_state.get("db_ticker", "")
-        db_ticker = st.text_input("Ticker (blank=all)", value=default_ticker.upper(), key="db_ticker_input").strip().upper()
-        st.session_state["db_ticker"] = db_ticker
-    with c2: start_date = st.date_input("Trade Start Date", value=max_data_date, key="db_start")
-    with c3: end_date = st.date_input("Trade End Date", value=max_data_date, key="db_end")
+        db_ticker = st.text_input("Ticker (blank=all)", value=st.session_state.saved_db_ticker, key="db_ticker_input", on_change=save_db_state, args=("db_ticker_input", "saved_db_ticker")).strip().upper()
+    with c2: start_date = st.date_input("Trade Start Date", value=st.session_state.saved_db_start, key="db_start", on_change=save_db_state, args=("db_start", "saved_db_start"))
+    with c3: end_date = st.date_input("Trade End Date", value=st.session_state.saved_db_end, key="db_end", on_change=save_db_state, args=("db_end", "saved_db_end"))
     with c4:
-        exp_range_default = (date.today() + timedelta(days=365))
-        db_exp_end = st.date_input("Expiration Range (end)", value=exp_range_default, key="db_exp")
+        db_exp_end = st.date_input("Expiration Range (end)", value=st.session_state.saved_db_exp, key="db_exp", on_change=save_db_state, args=("db_exp", "saved_db_exp"))
     
     ot1, ot2, ot3, ot_pad = st.columns([1.5, 1.5, 1.5, 5.5])
-    with ot1: inc_cb = st.checkbox("Calls Bought", value=True, key="db_inc_cb")
-    with ot2: inc_ps = st.checkbox("Puts Sold", value=True, key="db_inc_ps")
-    with ot3: inc_pb = st.checkbox("Puts Bought", value=True, key="db_inc_pb")
+    with ot1: inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_db_inc_cb, key="db_inc_cb", on_change=save_db_state, args=("db_inc_cb", "saved_db_inc_cb"))
+    with ot2: inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_db_inc_ps, key="db_inc_ps", on_change=save_db_state, args=("db_inc_ps", "saved_db_inc_ps"))
+    with ot3: inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_db_inc_pb, key="db_inc_pb", on_change=save_db_state, args=("db_inc_pb", "saved_db_inc_pb"))
     
     f = df.copy()
     if db_ticker: f = f[f["Symbol"].astype(str).str.upper().eq(db_ticker)]
@@ -1233,6 +1242,17 @@ def run_pivot_tables_app(df):
             
     col_filters, col_calculator = st.columns([1, 1], gap="medium")
     
+    # --- Persistence Logic ---
+    if 'saved_pv_start' not in st.session_state: st.session_state.saved_pv_start = max_data_date
+    if 'saved_pv_end' not in st.session_state: st.session_state.saved_pv_end = max_data_date
+    if 'saved_pv_ticker' not in st.session_state: st.session_state.saved_pv_ticker = ""
+    if 'saved_pv_notional' not in st.session_state: st.session_state.saved_pv_notional = "0M"
+    if 'saved_pv_mkt_cap' not in st.session_state: st.session_state.saved_pv_mkt_cap = "0B"
+    if 'saved_pv_ema' not in st.session_state: st.session_state.saved_pv_ema = "All"
+
+    def save_pv_state(key, saved_key):
+        st.session_state[saved_key] = st.session_state[key]
+
     st.markdown("""
         <style>
             .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
@@ -1249,14 +1269,33 @@ def run_pivot_tables_app(df):
     with col_filters:
         st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>🔍 Filters</h4>", unsafe_allow_html=True)
         fc1, fc2, fc3 = st.columns(3)
-        with fc1: td_start = st.date_input("Trade Start Date", value=max_data_date, key="pv_start")
-        with fc2: td_end = st.date_input("Trade End Date", value=max_data_date, key="pv_end")
-        with fc3: ticker_filter = st.text_input("Ticker (blank=all)", value="", key="pv_ticker").strip().upper()
+        with fc1: 
+            td_start = st.date_input("Trade Start Date", value=st.session_state.saved_pv_start, key="pv_start", on_change=save_pv_state, args=("pv_start", "saved_pv_start"))
+        with fc2: 
+            td_end = st.date_input("Trade End Date", value=st.session_state.saved_pv_end, key="pv_end", on_change=save_pv_state, args=("pv_end", "saved_pv_end"))
+        with fc3: 
+            ticker_filter = st.text_input("Ticker (blank=all)", value=st.session_state.saved_pv_ticker, key="pv_ticker", on_change=save_pv_state, args=("pv_ticker", "saved_pv_ticker")).strip().upper()
         
         fc4, fc5, fc6 = st.columns(3)
-        with fc4: min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[st.selectbox("Min Dollars", options=["0M", "5M", "10M", "50M", "100M"], index=0, key="pv_notional")]
-        with fc5: min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[st.selectbox("Mkt Cap Min", options=["0B", "10B", "50B", "100B", "200B", "500B", "1T"], index=0, key="pv_mkt_cap")]
-        with fc6: ema_filter = st.selectbox("Over 21 Day EMA", options=["All", "Yes"], index=0, key="pv_ema_filter")
+        with fc4: 
+            opts_not = ["0M", "5M", "10M", "50M", "100M"]
+            curr_not = st.session_state.saved_pv_notional
+            idx_not = opts_not.index(curr_not) if curr_not in opts_not else 0
+            sel_not = st.selectbox("Min Dollars", options=opts_not, index=idx_not, key="pv_notional", on_change=save_pv_state, args=("pv_notional", "saved_pv_notional"))
+            min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[sel_not]
+            
+        with fc5: 
+            opts_mc = ["0B", "10B", "50B", "100B", "200B", "500B", "1T"]
+            curr_mc = st.session_state.saved_pv_mkt_cap
+            idx_mc = opts_mc.index(curr_mc) if curr_mc in opts_mc else 0
+            sel_mc = st.selectbox("Mkt Cap Min", options=opts_mc, index=idx_mc, key="pv_mkt_cap", on_change=save_pv_state, args=("pv_mkt_cap", "saved_pv_mkt_cap"))
+            min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[sel_mc]
+            
+        with fc6: 
+            opts_ema = ["All", "Yes"]
+            curr_ema = st.session_state.saved_pv_ema
+            idx_ema = opts_ema.index(curr_ema) if curr_ema in opts_ema else 0
+            ema_filter = st.selectbox("Over 21 Day EMA", options=opts_ema, index=idx_ema, key="pv_ema_filter", on_change=save_pv_state, args=("pv_ema_filter", "saved_pv_ema"))
 
     with col_calculator:
         st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
@@ -1449,6 +1488,11 @@ def run_rsi_scanner_app():
         
         .tag-bubble { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; margin: 2px 4px 2px 0; color: white; white-space: nowrap; }
         .footer-header { color: #31333f; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 5px; font-weight: bold; }
+        
+        /* BACKTESTER BOLD HEADERS */
+        [data-testid="stDataFrame"] th {
+            font-weight: 900 !important;
+        }
         </style>
         """, unsafe_allow_html=True)
     
@@ -1738,9 +1782,10 @@ def run_rsi_scanner_app():
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_pct): cols[i % 6].write(ticker)
 
-                    c_p1, c_p2, c_buf = st.columns([1, 1, 4])
+                    c_p1, c_p2, c_p3, c_buf = st.columns([1, 1, 1, 3])
                     with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1)
                     with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1)
+                    with c_p3: show_filter = st.selectbox("Show", ["Everything", "Leaving High", "Leaving Low"], index=0)
 
                     raw_results_pct = []
                     progress_bar = st.progress(0, text="Scanning Percentiles...")
@@ -1758,6 +1803,12 @@ def run_rsi_scanner_app():
 
                     if raw_results_pct:
                         res_pct_df = pd.DataFrame(raw_results_pct).sort_values(by='Date_Obj', ascending=False)
+                        
+                        if show_filter == "Leaving High":
+                            res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bearish']
+                        elif show_filter == "Leaving Low":
+                            res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
+                            
                         st.subheader(f"Found {len(res_pct_df)} Opportunities")
                         
                         def get_ev_cell_html(ev_obj, signal_type):
@@ -1770,7 +1821,7 @@ def run_rsi_scanner_app():
                             val_str = f"{ret*100:+.1f}%<br><span style='font-size:11px; color: #555'>(${price:,.2f}, n={n})</span>"
                             return f'<td class="{cls}">{val_str}</td>'
 
-                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th style="width:1%; white-space:nowrap;">Ticker</th><th style="width:1%; white-space:nowrap;">Date</th><th style="width:1%; white-space:nowrap;">RSI Δ</th><th style="width:1%; white-space:nowrap;">Signal<br>Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>RSI Δ</th><th>Signal<br>Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                         
                         for r in res_pct_df.itertuples():
                             is_latest = (r.Date_Obj == max_date_in_set)
@@ -1887,6 +1938,11 @@ st.markdown("""<style>
 .badge{background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius:18px; padding:6px 10px; font-weight:700}
 .price-badge-header{background: rgba(102, 183, 255, 0.1); border: 1px solid #66b7ff; border-radius:18px; padding:6px 10px; font-weight:800}
 .light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
+
+/* BACKTESTER BOLD HEADERS */
+[data-testid="stDataFrame"] th {
+    font-weight: 900 !important;
+}
 </style>""", unsafe_allow_html=True)
 
 try:
