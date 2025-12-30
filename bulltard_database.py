@@ -1813,7 +1813,8 @@ def run_rsi_scanner_app():
                                             "Signal_Date_ISO": None, "Type": None, "Timeframe": None, "ev30_raw": None, "ev90_raw": None
                                         },
                                         hide_index=True,
-                                        use_container_width=True
+                                        use_container_width=True,
+                                        height=get_table_height(tbl_df, max_rows=50) # <--- INCREASED HEIGHT
                                     )
                                 else: st.info("No signals.")
                     else: st.warning("No Divergence signals found.")
