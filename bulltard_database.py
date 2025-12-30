@@ -364,10 +364,13 @@ def get_optimal_rsi_duration(history_df, current_rsi, tolerance=2.0):
     if history_df is None or len(history_df) < 100:
         return 30, "Default (No Hist)"
 
+    # --- FIX: DETECT CLOSE COLUMN NAME DYNAMICALLY (Uppercased vs Title) ---
+    close_col = "CLOSE" if "CLOSE" in history_df.columns else "Close"
+    
     # Ensure RSI column exists
     if "RSI_14" not in history_df.columns and "RSI" not in history_df.columns:
          # Calculate quickly if missing
-         delta = history_df["Close"].diff()
+         delta = history_df[close_col].diff()
          gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
          loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
          rs = gain / loss
@@ -377,7 +380,7 @@ def get_optimal_rsi_duration(history_df, current_rsi, tolerance=2.0):
     
     # Filter historical instances
     rsi_vals = history_df[rsi_col].values
-    close_vals = history_df["Close"].values
+    close_vals = history_df[close_col].values
     
     min_rsi = current_rsi - tolerance
     max_rsi = current_rsi + tolerance
@@ -414,9 +417,10 @@ def get_optimal_rsi_duration(history_df, current_rsi, tolerance=2.0):
             
     return best_p, f"RSI Backtest (Optimal {best_p}d)"
 
-def find_whale_confluence(ticker, global_df, current_price, trade_type="Bullish"):
+def find_whale_confluence(ticker, global_df, current_price, order_type_filter=None):
     """
     Scans the database for the largest relevant active trades to find a 'Whale Strike'.
+    Allows searching for specific Order Types (e.g. 'Puts Sold') to enable dual-strategy suggestions.
     """
     if global_df.empty: return None
 
@@ -429,13 +433,12 @@ def find_whale_confluence(ticker, global_df, current_price, trade_type="Bullish"
     
     if f.empty: return None
 
-    # Filter for bullish/bearish flows
-    if trade_type == "Bullish":
-        # Look for Puts Sold or Calls Bought
-        f = f[f["Order Type"].isin(["Puts Sold", "Calls Bought"])]
+    # Filter for specific flows
+    if order_type_filter:
+        f = f[f["Order Type"] == order_type_filter]
     else:
-        # Look for Puts Bought (or Calls Sold if we tracked them, but mainly Puts Bought)
-        f = f[f["Order Type"] == "Puts Bought"]
+        # Default fallback: any bullish flow
+        f = f[f["Order Type"].isin(["Puts Sold", "Calls Bought"])]
         
     if f.empty: return None
     
@@ -450,7 +453,7 @@ def find_whale_confluence(ticker, global_df, current_price, trade_type="Bullish"
     whale_type = whale_trade["Order Type"]
     
     # Sanity check: Don't suggest a sold put ITM unless it's deep value
-    if trade_type == "Bullish" and "Puts" in whale_type and whale_strike > current_price:
+    if whale_type == "Puts Sold" and whale_strike > current_price:
         # If whale sold ITM puts, maybe risky. Look for next best OTM.
         otm_puts = f[(f["Order Type"]=="Puts Sold") & (f["Strike (Actual)"] < current_price)]
         if not otm_puts.empty:
@@ -502,8 +505,6 @@ def analyze_trade_setup(ticker, t_df, global_df):
     # --- STRATEGY GENERATION ---
     
     # 1. Calculate Optimal Duration based on RSI History
-    # Note: t_df might be just a single row if fetched via GDrive, or full history via Yahoo
-    # We need history for backtest. If t_df is small, we skip backtest.
     opt_days, opt_reason = 30, "Standard 30d"
     if len(t_df) > 100:
          opt_days, opt_reason = get_optimal_rsi_duration(t_df, rsi)
@@ -511,24 +512,23 @@ def analyze_trade_setup(ticker, t_df, global_df):
     target_date = date.today() + timedelta(days=opt_days)
     target_date_str = target_date.strftime("%d %b")
     
-    # 2. Find Whale Confluence
-    whale_data = find_whale_confluence(ticker, global_df, close, "Bullish")
+    # 2. Find Whale Confluence (Check BOTH sides)
+    put_whale = find_whale_confluence(ticker, global_df, close, "Puts Sold")
+    call_whale = find_whale_confluence(ticker, global_df, close, "Calls Bought")
     
     # 3. Formulate "Sell Puts" Logic
     sp_strike = math.floor(ema21) # Default: Technical Support
     sp_reason = "EMA21 Support"
     sp_exp = target_date_str
     
-    if whale_data:
-        # If whale sold puts, check if strike is reasonable (not too ITM)
-        if whale_data["Type"] == "Puts Sold" and whale_data["Strike"] < close:
-            sp_strike = whale_data["Strike"]
-            sp_reason = f"Whale Tailing (${whale_data['Dollars']/1e6:.1f}M sold)"
-            sp_exp = whale_data["Expiry"] # Match whale expiry
-        # If whale bought calls, use technical support but align expiry
-        elif whale_data["Type"] == "Calls Bought":
-             sp_exp = whale_data["Expiry"]
-             sp_reason = f"EMA21 (Align with Call Whale Exp)"
+    if put_whale and put_whale["Strike"] < close:
+        sp_strike = put_whale["Strike"]
+        sp_reason = f"Whale Tailing (${put_whale['Dollars']/1e6:.1f}M sold)"
+        sp_exp = put_whale["Expiry"] # Match whale expiry
+    elif call_whale:
+         # If no put whale but there is a call whale, align expiry with call whale
+         sp_exp = call_whale["Expiry"]
+         sp_reason = f"EMA21 (Align with Call Whale Exp)"
     
     suggestions['Sell Puts'] = f"Strike ${sp_strike} ({sp_reason}), Exp ~{sp_exp}"
 
@@ -537,12 +537,13 @@ def analyze_trade_setup(ticker, t_df, global_df):
     bc_reason = "ATM Momentum"
     bc_exp = target_date_str
     
-    if whale_data and whale_data["Type"] == "Calls Bought":
-        bc_strike = whale_data["Strike"]
-        bc_exp = whale_data["Expiry"]
-        bc_reason = f"Tailing Call Whale (${whale_data['Dollars']/1e6:.1f}M)"
+    if call_whale:
+        bc_strike = call_whale["Strike"]
+        bc_exp = call_whale["Expiry"]
+        bc_reason = f"Tailing Call Whale (${call_whale['Dollars']/1e6:.1f}M)"
         
-    if close > ema8:
+    if close > ema8 or call_whale:
+        # Suggest calls if technically bullish OR if a whale is forcing it
         suggestions['Buy Calls'] = f"Strike ${bc_strike} ({bc_reason}), Exp ~{bc_exp}"
         
     suggestions['Buy Commons'] = f"Entry: ${close:.2f}. Stop Loss: ${ema21:.2f}"
@@ -551,8 +552,10 @@ def analyze_trade_setup(ticker, t_df, global_df):
     if "RSI Backtest" in opt_reason:
         reasons.append(f"Hist. Optimal Hold: {opt_days} Days")
         
-    if whale_data:
-        reasons.append(f"Whale detected: {whale_data['Type']} @ ${whale_data['Strike']}")
+    if put_whale:
+        reasons.append(f"Whale: Sold Puts @ ${put_whale['Strike']}")
+    if call_whale:
+        reasons.append(f"Whale: Bought Calls @ ${call_whale['Strike']}")
     
     return score, reasons, suggestions
 
@@ -1067,8 +1070,8 @@ def run_rankings_app(df):
             st.caption(f"ℹ️ Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for confluence...")
             st.caption("ℹ️ Strategy: Combines Whale Levels (Global DB), Technicals (EMA), and Historical RSI Backtests to find optimal expirations.")
             
-            # --- MODIFICATION: RED BOLD WARNING ---
-            st.markdown("<span style='color:red; font-weight:bold'>⚠️ Note: This methodology is a work in progress and should not be relied upon right now.</span>", unsafe_allow_html=True)
+            # --- MODIFICATION: RED WARNING (UNBOLDED) ---
+            st.markdown("<span style='color:red;'>⚠️ Note: This methodology is a work in progress and should not be relied upon right now.</span>", unsafe_allow_html=True)
             
             ticker_map = load_ticker_map()
             candidates = []
@@ -1115,10 +1118,13 @@ def run_rankings_app(df):
                         st.markdown(f"### #{i+1} {cand['Ticker']}")
                         st.metric("Conviction", f"{cand['Score']:.1f}/10", f"${cand['Price']:.2f}")
                         st.markdown("**Strategy:**")
+                        
+                        # --- MODIFICATION: SHOW BOTH IF AVAILABLE ---
                         if cand['Suggestions']['Sell Puts']:
                             st.success(f"🛡️ **Sell Put:** {cand['Suggestions']['Sell Puts']}")
-                        elif cand['Suggestions']['Buy Calls']:
+                        if cand['Suggestions']['Buy Calls']:
                             st.info(f"🟢 **Buy Call:** {cand['Suggestions']['Buy Calls']}")
+                            
                         st.markdown("---")
                         for r in cand['Reasons']:
                             st.caption(f"• {r}")
