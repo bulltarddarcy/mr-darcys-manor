@@ -734,6 +734,106 @@ def run_database_app(df):
     st.caption("⚠️ User should check OI to confirm trades are still open")
     st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=False, hide_index=True, height=get_table_height(f_display, max_rows=30))
 
+@st.cache_data(ttl=600, show_spinner="Crunching Smart Money Data...")
+def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit):
+    # This logic matches run_rankings_app but is isolated for pre-calculation
+    f = df.copy()
+    if start_d: f = f[f["Trade Date"].dt.date >= start_d]
+    if end_d: f = f[f["Trade Date"].dt.date <= end_d]
+    
+    if f.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
+    f_filtered = f[f[order_type_col].isin(target_types)].copy()
+    
+    if f_filtered.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    f_filtered["Signed_Dollars"] = np.where(
+        f_filtered[order_type_col].isin(["Calls Bought", "Puts Sold"]), 
+        f_filtered["Dollars"], -f_filtered["Dollars"]
+    )
+    
+    smart_stats = f_filtered.groupby("Symbol").agg(
+        Signed_Dollars=("Signed_Dollars", "sum"),
+        Trade_Count=("Symbol", "count"),
+        Last_Trade=("Trade Date", "max")
+    ).reset_index()
+    
+    smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
+    
+    unique_tickers = smart_stats["Symbol"].unique().tolist()
+    batch_caps = fetch_market_caps_batch(unique_tickers)
+    smart_stats["Market Cap"] = smart_stats["Symbol"].map(batch_caps)
+    
+    valid_data = smart_stats[smart_stats["Market Cap"] >= mc_thresh].copy()
+    
+    unique_dates = sorted(f_filtered["Trade Date"].unique())
+    recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
+    f_momentum = f_filtered[f_filtered["Trade Date"].isin(recent_dates)]
+    mom_stats = f_momentum.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
+    mom_stats.rename(columns={"Signed_Dollars": "Momentum ($)"}, inplace=True)
+    
+    valid_data = valid_data.merge(mom_stats, on="Symbol", how="left").fillna(0)
+    
+    top_bulls = pd.DataFrame()
+    top_bears = pd.DataFrame()
+
+    if not valid_data.empty:
+        valid_data["Impact"] = valid_data["Net Sentiment ($)"] / valid_data["Market Cap"]
+        
+        def normalize(series):
+            mn, mx = series.min(), series.max()
+            return (series - mn) / (mx - mn) if (mx != mn) else 0
+
+        # Base Scores
+        b_flow_norm = normalize(valid_data["Net Sentiment ($)"].clip(lower=0))
+        b_imp_norm = normalize(valid_data["Impact"].clip(lower=0))
+        b_mom_norm = normalize(valid_data["Momentum ($)"].clip(lower=0))
+        valid_data["Base_Score_Bull"] = (0.35 * b_flow_norm) + (0.30 * b_imp_norm) + (0.35 * b_mom_norm)
+        
+        br_flow_norm = normalize(-valid_data["Net Sentiment ($)"].clip(upper=0))
+        br_imp_norm = normalize(-valid_data["Impact"].clip(upper=0))
+        br_mom_norm = normalize(-valid_data["Momentum ($)"].clip(upper=0))
+        valid_data["Base_Score_Bear"] = (0.35 * br_flow_norm) + (0.30 * br_imp_norm) + (0.35 * br_mom_norm)
+        
+        valid_data["Last Trade"] = valid_data["Last_Trade"].dt.strftime("%d %b")
+        
+        candidates_bull = valid_data.sort_values(by="Base_Score_Bull", ascending=False).head(limit * 3).copy()
+        candidates_bear = valid_data.sort_values(by="Base_Score_Bear", ascending=False).head(limit * 3).copy()
+        
+        all_tickers_to_fetch = set(candidates_bull["Symbol"]).union(set(candidates_bear["Symbol"]))
+        batch_techs = fetch_technicals_batch(list(all_tickers_to_fetch)) if filter_ema else {}
+
+        def check_ema_filter_fast(ticker, mode="Bull"):
+            if not filter_ema: return True, "—"
+            s, e8, _, _, _ = batch_techs.get(ticker, (None, None, None, None, None))
+            if not s or not e8: return False, "—"
+            if mode == "Bull":
+                return (s > e8), ("✅ >EMA8" if s > e8 else "⚠️ <EMA8")
+            else:
+                return (s < e8), ("✅ <EMA8" if s < e8 else "⚠️ >EMA8")
+        
+        bull_results = []
+        for idx, row in candidates_bull.iterrows():
+            passes, trend_s = check_ema_filter_fast(row["Symbol"], "Bull")
+            if passes:
+                row["Score"] = row["Base_Score_Bull"] * 100
+                row["Trend"] = trend_s
+                bull_results.append(row)
+        top_bulls = pd.DataFrame(bull_results).head(limit)
+        
+        bear_results = []
+        for idx, row in candidates_bear.iterrows():
+            passes, trend_s = check_ema_filter_fast(row["Symbol"], "Bear")
+            if passes:
+                row["Score"] = row["Base_Score_Bear"] * 100
+                row["Trend"] = trend_s
+                bear_results.append(row)
+        top_bears = pd.DataFrame(bear_results).head(limit)
+        
+    return top_bulls, top_bears, valid_data
+
 def run_rankings_app(df):
     st.title("🏆 Rankings")
     max_data_date = get_max_trade_date(df)
@@ -765,98 +865,10 @@ def run_rankings_app(df):
 
     tab_rank, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money", "💡 Top 3", "🤡 Bulltard"])
 
-    top_bulls = pd.DataFrame()
-    top_bears = pd.DataFrame()
     mc_thresh = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mkt_cap_rank, 1e10)
 
-    with st.spinner("Crunching data..."):
-        f_filtered["Signed_Dollars"] = np.where(
-            f_filtered[order_type_col].isin(["Calls Bought", "Puts Sold"]), 
-            f_filtered["Dollars"], -f_filtered["Dollars"]
-        )
-        
-        smart_stats = f_filtered.groupby("Symbol").agg(
-            Signed_Dollars=("Signed_Dollars", "sum"),
-            Trade_Count=("Symbol", "count"),
-            Last_Trade=("Trade Date", "max")
-        ).reset_index()
-        
-        smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
-        
-        # --- OPTIMIZATION: BATCH MARKET CAP FETCHING ---
-        unique_tickers = smart_stats["Symbol"].unique().tolist()
-        batch_caps = fetch_market_caps_batch(unique_tickers)
-        smart_stats["Market Cap"] = smart_stats["Symbol"].map(batch_caps)
-        
-        valid_data = smart_stats[smart_stats["Market Cap"] >= mc_thresh].copy()
-        
-        # Add Momentum context
-        unique_dates = sorted(f_filtered["Trade Date"].unique())
-        recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
-        f_momentum = f_filtered[f_filtered["Trade Date"].isin(recent_dates)]
-        mom_stats = f_momentum.groupby("Symbol")["Signed_Dollars"].sum().reset_index()
-        mom_stats.rename(columns={"Signed_Dollars": "Momentum ($)"}, inplace=True)
-        
-        valid_data = valid_data.merge(mom_stats, on="Symbol", how="left").fillna(0)
-        
-        if not valid_data.empty:
-            valid_data["Impact"] = valid_data["Net Sentiment ($)"] / valid_data["Market Cap"]
-            
-            def normalize(series):
-                mn, mx = series.min(), series.max()
-                return (series - mn) / (mx - mn) if (mx != mn) else 0
-
-            # Base Scores
-            b_flow_norm = normalize(valid_data["Net Sentiment ($)"].clip(lower=0))
-            b_imp_norm = normalize(valid_data["Impact"].clip(lower=0))
-            b_mom_norm = normalize(valid_data["Momentum ($)"].clip(lower=0))
-            valid_data["Base_Score_Bull"] = (0.35 * b_flow_norm) + (0.30 * b_imp_norm) + (0.35 * b_mom_norm)
-            
-            br_flow_norm = normalize(-valid_data["Net Sentiment ($)"].clip(upper=0))
-            br_imp_norm = normalize(-valid_data["Impact"].clip(upper=0))
-            br_mom_norm = normalize(-valid_data["Momentum ($)"].clip(upper=0))
-            valid_data["Base_Score_Bear"] = (0.35 * br_flow_norm) + (0.30 * br_imp_norm) + (0.35 * br_mom_norm)
-            
-            valid_data["Last Trade"] = valid_data["Last_Trade"].dt.strftime("%d %b")
-            
-            # --- OPTIMIZATION: BATCH FETCHING FOR EMA FILTERS ---
-            # Pre-filter lists (3x limit)
-            candidates_bull = valid_data.sort_values(by="Base_Score_Bull", ascending=False).head(limit * 3).copy()
-            candidates_bear = valid_data.sort_values(by="Base_Score_Bear", ascending=False).head(limit * 3).copy()
-            
-            all_tickers_to_fetch = set(candidates_bull["Symbol"]).union(set(candidates_bear["Symbol"]))
-            
-            # Fetch all needed technicals in parallel
-            batch_techs = fetch_technicals_batch(list(all_tickers_to_fetch)) if filter_ema else {}
-
-            def check_ema_filter_fast(ticker, mode="Bull"):
-                if not filter_ema: return True, "—"
-                s, e8, _, _, _ = batch_techs.get(ticker, (None, None, None, None, None))
-                if not s or not e8: return False, "—"
-                if mode == "Bull":
-                    return (s > e8), ("✅ >EMA8" if s > e8 else "⚠️ <EMA8")
-                else:
-                    return (s < e8), ("✅ <EMA8" if s < e8 else "⚠️ >EMA8")
-            
-            # Filter Bulls
-            bull_results = []
-            for idx, row in candidates_bull.iterrows():
-                passes, trend_s = check_ema_filter_fast(row["Symbol"], "Bull")
-                if passes:
-                    row["Score"] = row["Base_Score_Bull"] * 100
-                    row["Trend"] = trend_s
-                    bull_results.append(row)
-            top_bulls = pd.DataFrame(bull_results).head(limit)
-            
-            # Filter Bears
-            bear_results = []
-            for idx, row in candidates_bear.iterrows():
-                passes, trend_s = check_ema_filter_fast(row["Symbol"], "Bear")
-                if passes:
-                    row["Score"] = row["Base_Score_Bear"] * 100
-                    row["Trend"] = trend_s
-                    bear_results.append(row)
-            top_bears = pd.DataFrame(bear_results).head(limit)
+    # Use cached function instead of inline logic
+    top_bulls, top_bears, valid_data = calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
 
     with tab_rank:
         if valid_data.empty:
@@ -905,7 +917,9 @@ def run_rankings_app(df):
                     sm_score = top_bulls[top_bulls["Symbol"]==t]["Score"].iloc[0]
                     tech_score, reasons, suggs = analyze_trade_setup(t, t_df, df)
                     
-                    final_conviction = (sm_score * 0.06) + (tech_score * 4) 
+                    # UPDATED FORMULA: (SM Score / 25) + Tech Score
+                    # Max SM (100) -> 4 pts. Max Tech (6) -> 6 pts. Total 10.
+                    final_conviction = (sm_score / 25.0) + tech_score 
                     
                     candidates.append({
                         "Ticker": t,
@@ -1483,7 +1497,7 @@ def run_rsi_scanner_app():
                         current_row = df.iloc[-1]
                         current_rsi = current_row[rsi_col]
                         
-                        rsi_metric_container.markdown(f"""<div style="margin-top: 10px; font-size: 0.9rem; color: #666;">Current RSI</div><div style="font-size: 1.5rem; font-weight: 600;">{current_rsi:.2f}</div>""", unsafe_allow_html=True)
+                        rsi_metric_container.markdown(f"""<div style="margin-top: 10px; font-size: 0.9rem; color: #666;">Current RSI</div><div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 15px;">{current_rsi:.2f}</div>""", unsafe_allow_html=True)
                         
                         rsi_min = current_rsi - rsi_tol
                         rsi_max = current_rsi + rsi_tol
@@ -1649,7 +1663,7 @@ def run_rsi_scanner_app():
                                 
                                 if not tbl_df.empty:
                                     # Removed fixed widths to allow content to dictate width (tighter fit)
-                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="width:5%">Ticker</th><th style="width:20%">Tags</th><th style="width:15%">{date_header}</th><th style="width:10%">RSI Δ</th><th style="width:15%">{price_header}</th><th style="width:10%">Last Close</th><th style="width:12%">EV 30p</th><th style="width:13%">EV 90p</th></tr></thead><tbody>']
+                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="width:5%; white-space:nowrap;">Ticker</th><th style="width:20%">Tags</th><th style="width:15%">{date_header}</th><th style="width:10%">RSI Δ</th><th style="width:15%">{price_header}</th><th style="width:10%">Last Close</th><th style="width:12%">EV 30p</th><th style="width:13%">EV 90p</th></tr></thead><tbody>']
                                     
                                     for row in tbl_df.itertuples():
                                         is_latest = (row.Signal_Date_ISO == target_highlight)
@@ -1657,7 +1671,7 @@ def run_rsi_scanner_app():
                                         
                                         row_html = [
                                             '<tr>',
-                                            f'<td style="text-align:left"><b>{row.Ticker}</b></td>',
+                                            f'<td style="text-align:left; white-space:nowrap;"><b>{row.Ticker}</b></td>',
                                             f'<td style="text-align:left; white-space: normal;">{style_tags(row.Tags)}</td>',
                                             f'<td style="text-align:center"{date_cls}>{row.Date_Display}</td>', 
                                             f'<td style="text-align:center">{row.RSI_Display}</td>',
@@ -1869,6 +1883,13 @@ try:
     sheet_url = st.secrets["GSHEET_URL"]
     df_global = load_and_clean_data(sheet_url)
     last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
+
+    # --- WARM UP CACHE FOR RANKINGS ---
+    # This ensures the calculation happens on page load, not just when tab is clicked
+    # Using default values: last 14 days, 10B+ cap, no EMA filter, top 20
+    warmup_end = get_max_trade_date(df_global)
+    warmup_start = warmup_end - timedelta(days=14)
+    calculate_smart_money_score(df_global, warmup_start, warmup_end, 1e10, False, 20)
 
     pg = st.navigation([
         st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
