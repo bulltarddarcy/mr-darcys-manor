@@ -14,7 +14,8 @@ from io import StringIO
 import altair as alt
 import google.generativeai as genai
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from scipy.signal import argrelextrema 
+# --- RESTORED SCIPY IMPORT ---
+from scipy.signal import argrelextrema
 
 # --- 0. PAGE CONFIGURATION (MUST BE FIRST) ---
 st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
@@ -293,7 +294,7 @@ def fetch_and_prepare_ai_context(url, name, limit=90):
         return f"\n[Error loading {name}: {e}]"
     return ""
 
-# --- NEW BACKTESTER LOGIC ---
+# --- BACKTESTER LOGIC ---
 
 def backtest_signal_performance(signal_indices, price_array, holding_periods=[10, 30, 60, 90, 180]):
     """
@@ -354,13 +355,13 @@ def backtest_signal_performance(signal_indices, price_array, holding_periods=[10
 
 def find_historical_divergences(df_tf, s_type='Bullish'):
     """
-    Fast scan for ALL historical divergences using numpy/scipy.
+    Fast scan for ALL historical divergences using SCIPY.
     Returns indices of the divergence signals (the P2 candle).
     """
     price_vals = df_tf['Low'].values if s_type == 'Bullish' else df_tf['High'].values
     rsi_vals = df_tf['RSI'].values
     
-    # 1. Find Local Extrema (Pivots)
+    # 1. Find Local Extrema (Pivots) using Scipy argrelextrema
     order = 5 # Window for local min/max
     if s_type == 'Bullish':
         pivot_idxs = argrelextrema(price_vals, np.less, order=order)[0]
@@ -485,6 +486,10 @@ def find_divergences(df_tf, ticker, timeframe):
                     price_p1 = low_vals[idx_p1_abs] if s_type=='Bullish' else high_vals[idx_p1_abs]
                     price_p2 = p2_low if s_type=='Bullish' else p2_high
                     price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
+
+                    def fmt_ev_details(ev_data):
+                        if not ev_data: return ""
+                        return f"${ev_data['price']:,.2f} (n={ev_data['n']})"
 
                     divergences.append({
                         'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 
