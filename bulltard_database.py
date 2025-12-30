@@ -1403,15 +1403,25 @@ def run_rsi_scanner_app():
         }
         
         .rsi-table { 
-            width: 100%; /* Changed back to 100% to fill container */
-            min-width: 1000px; /* Restored to prevent squishing on mobile */
+            width: auto; /* Allow natural width */
             border-collapse: collapse; 
-            table-layout: fixed; 
             margin-bottom: 0; 
         }
         
-        .rsi-table thead tr th { background-color: #f0f2f6 !important; color: #31333f !important; padding: 12px !important; border-bottom: 2px solid #dee2e6; }
-        .rsi-table tbody tr td { padding: 10px !important; border-bottom: 1px solid #eee; word-wrap: break-word; font-size: 14px; vertical-align: middle !important; white-space: nowrap; height: 50px; }
+        .rsi-table thead tr th { 
+            background-color: #f0f2f6 !important; 
+            color: #31333f !important; 
+            padding: 10px 15px !important; /* Added padding */
+            border-bottom: 2px solid #dee2e6; 
+            white-space: nowrap; /* Keep headers on one line */
+        }
+        
+        .rsi-table tbody tr td { 
+            padding: 8px 15px !important; /* Added padding to cells */
+            border-bottom: 1px solid #eee; 
+            font-size: 14px; 
+            vertical-align: middle !important; 
+        }
         
         .rsi-p-table-wrapper {
             overflow-x: auto;
@@ -1663,7 +1673,7 @@ def run_rsi_scanner_app():
                                 
                                 if not tbl_df.empty:
                                     # Removed fixed widths to allow content to dictate width (tighter fit)
-                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="width:5%; white-space:nowrap;">Ticker</th><th style="width:20%">Tags</th><th style="width:15%">{date_header}</th><th style="width:10%">RSI Δ</th><th style="width:15%">{price_header}</th><th style="width:10%">Last Close</th><th style="width:12%">EV 30p</th><th style="width:13%">EV 90p</th></tr></thead><tbody>']
+                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="white-space:nowrap;">Ticker</th><th>Tags</th><th>{date_header}</th><th>RSI Δ</th><th>{price_header}</th><th>Last Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                                     
                                     for row in tbl_df.itertuples():
                                         is_latest = (row.Signal_Date_ISO == target_highlight)
@@ -1883,13 +1893,6 @@ try:
     sheet_url = st.secrets["GSHEET_URL"]
     df_global = load_and_clean_data(sheet_url)
     last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
-
-    # --- WARM UP CACHE FOR RANKINGS ---
-    # This ensures the calculation happens on page load, not just when tab is clicked
-    # Using default values: last 14 days, 10B+ cap, no EMA filter, top 20
-    warmup_end = get_max_trade_date(df_global)
-    warmup_start = warmup_end - timedelta(days=14)
-    calculate_smart_money_score(df_global, warmup_start, warmup_end, 1e10, False, 20)
 
     pg = st.navigation([
         st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
