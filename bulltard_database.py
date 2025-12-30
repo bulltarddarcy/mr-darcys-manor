@@ -1632,7 +1632,7 @@ def run_rsi_scanner_app():
                                         row_html = [
                                             '<tr>',
                                             f'<td style="text-align:left"><b>{row.Ticker}</b></td>',
-                                            f'<td style="text-align:left">{style_tags(row.Tags)}</td>',
+                                            f'<td style="text-align:left; white-space: normal;">{style_tags(row.Tags)}</td>',
                                             f'<td style="text-align:center">{row._5}</td>', 
                                             f'<td style="text-align:center"{date_cls}>{row._6}</td>', 
                                             f'<td style="text-align:center">{row.RSI}</td>',
