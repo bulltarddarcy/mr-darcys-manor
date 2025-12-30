@@ -735,14 +735,13 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, periods
                 
                 rsi_disp = f"{thresh_val:.0f} ↗ {curr['RSI']:.0f}" if s_type == 'Bullish' else f"{thresh_val:.0f} ↘ {curr['RSI']:.0f}"
                 
-                # --- NEW: Action logic ---
                 action_str = "Leaving Low" if s_type == 'Bullish' else "Leaving High"
 
                 signals.append({
                     'Ticker': ticker,
                     'Date': curr.name.strftime('%b %d'),
                     'Date_Obj': curr.name.date(),
-                    'Action': action_str, # <--- NEW
+                    'Action': action_str,
                     'RSI_Display': rsi_disp,
                     'Signal_Price': f"${curr['Price']:,.2f}",
                     'Last_Close': f"${latest_close:,.2f}", 
@@ -1801,7 +1800,7 @@ def run_rsi_scanner_app():
                                         style_div_df(tbl_df),
                                         column_config={
                                             "Ticker": st.column_config.TextColumn("Ticker"),
-                                            "Tags": st.column_config.ListColumn("Tags", width="medium"), # ListColumn for Bubbles
+                                            "Tags": st.column_config.ListColumn("Tags", width="large"), 
                                             "Date_Display": st.column_config.TextColumn(date_header),
                                             "RSI_Display": st.column_config.TextColumn("RSI Δ"),
                                             "Price_Display": st.column_config.TextColumn(price_header),
