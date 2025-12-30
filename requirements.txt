@@ -2,6 +2,9 @@ streamlit
 pandas
 numpy
 yfinance
+streamlit-authenticator
+PyYAML
 requests
 plotly
 tqdm
+google-generativeai
