@@ -364,9 +364,12 @@ def style_tags(tag_str):
     tags = tag_str.split(", ")
     colors = {f"EMA{EMA8_PERIOD}": "#4a90e2", f"EMA{EMA21_PERIOD}": "#9b59b6", "VOL_HIGH": "#e67e22", "VOL_GROW": "#27ae60"}
     html_parts = []
-    for t in tags:
+    for i, t in enumerate(tags):
         color = colors.get(t, "#7f8c8d")
         html_parts.append(f'<span class="tag-bubble" style="background-color: {color};">{t}</span>')
+        # Wrap after every 2 tags
+        if (i + 1) % 2 == 0 and (i + 1) < len(tags):
+            html_parts.append("<br>")
     return "".join(html_parts)
 
 def calculate_ev_data_numpy(rsi_array, price_array, target_rsi, periods, current_price):
@@ -1390,8 +1393,9 @@ def run_rsi_scanner_app():
         }
         
         .rsi-table { 
-            width: 100%; 
-            min-width: 1000px; /* Forces scroll on small screens instead of squishing */
+            width: auto; 
+            max-width: 100%;
+            min-width: 600px; 
             border-collapse: collapse; 
             table-layout: fixed; 
             margin-bottom: 0; 
@@ -1746,7 +1750,7 @@ def run_rsi_scanner_app():
                             val_str = f"{ret*100:+.1f}%<br><span style='font-size:11px; color: #555'>(${price:,.2f}, n={n})</span>"
                             return f'<td class="{cls}">{val_str}</td>'
 
-                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th>Ticker</th><th>Date</th><th>RSI Δ</th><th>Signal Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
+                        html_rows = ['<div class="rsi-p-table-wrapper"><table class="rsi-p-table"><thead><tr><th style="width:1%; white-space:nowrap;">Ticker</th><th style="width:1%; white-space:nowrap;">Date</th><th style="width:1%; white-space:nowrap;">RSI Δ</th><th style="width:1%; white-space:nowrap;">Signal Close</th><th>EV 30p</th><th>EV 90p</th></tr></thead><tbody>']
                         
                         for r in res_pct_df.itertuples():
                             is_latest = (r.Date_Obj == max_date_in_set)
