@@ -1720,8 +1720,10 @@ def run_rsi_scanner_app():
             with f_col3:
                 st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
                 st.markdown(f"""
-                * **EMA Trends**: Checks if Price is respecting EMA{EMA8_PERIOD} (Momentum) or EMA{EMA21_PERIOD} (Trend).
-                * **Volume**: **VOL_HIGH** (>150% SMA) or **VOL_GROW** (P2 Vol > P1 Vol).
+                * **EMA{EMA8_PERIOD}**: Bullish (Price > EMA8) or Bearish (Price < EMA8).
+                * **EMA{EMA21_PERIOD}**: Bullish (Price > EMA21) or Bearish (Price < EMA21).
+                * **VOL_HIGH**: Signal candle volume is > 150% of the 30-day average.
+                * **VOL_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).
                 """)
         
         if data_option_div:
@@ -1800,7 +1802,7 @@ def run_rsi_scanner_app():
                                         style_div_df(tbl_df),
                                         column_config={
                                             "Ticker": st.column_config.TextColumn("Ticker"),
-                                            "Tags": st.column_config.ListColumn("Tags", width="large"), 
+                                            "Tags": st.column_config.ListColumn("Tags", width="large"), # ListColumn for Bubbles
                                             "Date_Display": st.column_config.TextColumn(date_header),
                                             "RSI_Display": st.column_config.TextColumn("RSI Δ"),
                                             "Price_Display": st.column_config.TextColumn(price_header),
