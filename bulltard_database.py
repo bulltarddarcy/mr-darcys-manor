@@ -483,11 +483,11 @@ def find_divergences(df_tf, ticker, timeframe):
     
     latest_p = df_tf.iloc[-1]
     
-    def get_date_str(idx): 
+    def get_date_str(idx, fmt='%Y-%m-%d'): 
         ts = df_tf.index[idx]
         if timeframe.lower() == 'weekly': 
-             return df_tf.iloc[idx]['ChartDate'].strftime('%Y-%m-%d')
-        return ts.strftime('%Y-%m-%d')
+             return df_tf.iloc[idx]['ChartDate'].strftime(fmt)
+        return ts.strftime(fmt)
     
     start_idx = max(DIVERGENCE_LOOKBACK, n_rows - SIGNAL_LOOKBACK_PERIOD)
     
@@ -559,13 +559,29 @@ def find_divergences(df_tf, ticker, timeframe):
                     if is_vol_high: tags.append("VOL_HIGH")
                     if p2_vol > vol_vals[idx_p1_abs]: tags.append("VOL_GROW")
                     
+                    # Formatting for new columns
+                    sig_date_iso = get_date_str(i, '%Y-%m-%d')
+                    p1_date_fmt = get_date_str(idx_p1_abs, '%b %d')
+                    sig_date_fmt = get_date_str(i, '%b %d')
+                    date_display = f"{p1_date_fmt} → {sig_date_fmt}"
+                    
+                    rsi_p1 = rsi_vals[idx_p1_abs]
+                    rsi_p2 = p2_rsi
+                    rsi_arrow = "↗" if rsi_p2 > rsi_p1 else "↘"
+                    rsi_display = f"{int(round(rsi_p1))} {rsi_arrow} {int(round(rsi_p2))}"
+                    
+                    price_p1 = low_vals[idx_p1_abs] if s_type=='Bullish' else high_vals[idx_p1_abs]
+                    price_p2 = p2_low if s_type=='Bullish' else p2_high
+                    price_arrow = "↗" if price_p2 > price_p1 else "↘"
+                    price_display = f"${price_p1:,.2f} {price_arrow} ${price_p2:,.2f}"
+
                     divergences.append({
                         'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 'Tags': ", ".join(tags),
-                        'P1 Date': get_date_str(idx_p1_abs), 'Signal Date': get_date_str(i),
-                        'RSI': f"{int(round(rsi_vals[idx_p1_abs]))} → {int(round(p2_rsi))}",
-                        'P1 Price': f"${(low_vals[idx_p1_abs] if s_type=='Bullish' else high_vals[idx_p1_abs]):,.2f}", 
-                        'P2 Price': f"${(p2_low if s_type=='Bullish' else p2_high):,.2f}", 
-                        'Last Close': f"${latest_p['Price']:,.2f}", 
+                        'Signal_Date_ISO': sig_date_iso, # For sorting/highlighting
+                        'Date_Display': date_display,
+                        'RSI_Display': rsi_display,
+                        'Price_Display': price_display,
+                        'Last_Close': f"${latest_p['Price']:,.2f}", 
                         'ev30_raw': ev30, 'ev90_raw': ev90
                     })
     return divergences
@@ -672,7 +688,7 @@ def run_database_app(df):
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
         default_ticker = st.session_state.get("db_ticker", "")
-        db_ticker = st.text_input("Ticker", value=default_ticker.upper(), key="db_ticker_input").strip().upper()
+        db_ticker = st.text_input("Ticker (blank=all)", value=default_ticker.upper(), key="db_ticker_input").strip().upper()
         st.session_state["db_ticker"] = db_ticker
     with c2: start_date = st.date_input("Trade Start Date", value=max_data_date, key="db_start")
     with c3: end_date = st.date_input("Trade End Date", value=max_data_date, key="db_end")
@@ -1612,33 +1628,32 @@ def run_rsi_scanner_app():
                     progress_bar.empty()
                     
                     if raw_results_div:
-                        res_div_df = pd.DataFrame(raw_results_div).sort_values(by='Signal Date', ascending=False)
+                        res_div_df = pd.DataFrame(raw_results_div).sort_values(by='Signal_Date_ISO', ascending=False)
                         consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
                         
                         for tf in ['Daily', 'Weekly']:
                             target_highlight = target_highlight_weekly if tf == 'Weekly' else target_highlight_daily
+                            date_header = "Week Δ" if tf == 'Weekly' else "Day Δ"
                             
                             for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
                                 st.subheader(f"{emoji} {tf} {s_type} Signals")
                                 tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                 
                                 if not tbl_df.empty:
-                                    html_rows = ['<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="width:7%">Ticker</th><th style="width:25%">Tags</th><th style="width:8%">P1 Date</th><th style="width:8%">Signal Date</th><th style="width:8%">RSI</th><th style="width:8%">P1 Price</th><th style="width:8%">P2 Price</th><th style="width:8%">Last Close</th><th style="width:10%">EV 30p</th><th style="width:10%">EV 90p</th></tr></thead><tbody>']
+                                    html_rows = [f'<div class="rsi-table-wrapper"><table class="rsi-table"><thead><tr><th style="width:7%">Ticker</th><th style="width:25%">Tags</th><th style="width:16%">{date_header}</th><th style="width:8%">RSI Δ</th><th style="width:16%">Price Δ</th><th style="width:8%">Last Close</th><th style="width:10%">EV 30p</th><th style="width:10%">EV 90p</th></tr></thead><tbody>']
                                     
                                     for row in tbl_df.itertuples():
-                                        is_latest = (row._6 == target_highlight)
+                                        is_latest = (row.Signal_Date_ISO == target_highlight)
                                         date_cls = ' class="latest-date"' if is_latest else ''
                                         
                                         row_html = [
                                             '<tr>',
                                             f'<td style="text-align:left"><b>{row.Ticker}</b></td>',
                                             f'<td style="text-align:left; white-space: normal;">{style_tags(row.Tags)}</td>',
-                                            f'<td style="text-align:center">{row._5}</td>', 
-                                            f'<td style="text-align:center"{date_cls}>{row._6}</td>', 
-                                            f'<td style="text-align:center">{row.RSI}</td>',
-                                            f'<td style="text-align:left">{row._8}</td>', 
-                                            f'<td style="text-align:left">{row._9}</td>', 
-                                            f'<td style="text-align:left">{row._10}</td>' 
+                                            f'<td style="text-align:center"{date_cls}>{row.Date_Display}</td>', 
+                                            f'<td style="text-align:center">{row.RSI_Display}</td>',
+                                            f'<td style="text-align:center">{row.Price_Display}</td>', 
+                                            f'<td style="text-align:left">{row.Last_Close}</td>' 
                                         ]
                                         for data in [row.ev30_raw, row.ev90_raw]:
                                             if data:
