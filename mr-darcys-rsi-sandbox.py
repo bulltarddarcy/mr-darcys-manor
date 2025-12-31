@@ -2114,7 +2114,7 @@ def run_rsi_scanner_app(df_global):
                                             "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
                                             "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
                                             "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
-                                            "EV Target": st.column_config.NumberColumn("EV $", format="$%.2f"), 
+                                            "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
                                             "N": st.column_config.NumberColumn("N"),
                                             # Hide raw cols
                                             "Signal_Date_ISO": None, "Type": None, "Timeframe": None
