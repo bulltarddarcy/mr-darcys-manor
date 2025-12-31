@@ -11,8 +11,6 @@ import requests
 import re
 import time
 from io import StringIO, BytesIO
-import altair as alt
-import google.generativeai as genai
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- 0. PAGE CONFIGURATION (MUST BE FIRST) ---
@@ -378,18 +376,6 @@ def get_ticker_technicals(ticker: str, mapping: dict):
         except:
             return None
     return None
-
-def fetch_and_prepare_ai_context(url, name, limit=90):
-    try:
-        buffer = get_confirmed_gdrive_data(url)
-        if buffer and buffer != "HTML_ERROR":
-            df = pd.read_csv(buffer)
-            df_recent = df.tail(limit)
-            csv_str = df_recent.to_csv(index=False)
-            return f"\n\n--- DATASET: {name} ---\n{csv_str}"
-    except Exception as e:
-        return f"\n[Error loading {name}: {e}]"
-    return ""
 
 def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily'):
     """
