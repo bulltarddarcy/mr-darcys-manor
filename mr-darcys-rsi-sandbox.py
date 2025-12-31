@@ -2135,6 +2135,7 @@ def run_rsi_scanner_app(df_global):
                                         use_container_width=True,
                                         height=get_table_height(tbl_df, max_rows=50) # <--- INCREASED HEIGHT
                                     )
+                                    st.markdown("<br><br>", unsafe_allow_html=True)
                                 else: st.info("No signals.")
                     else: st.warning("No Divergence signals found.")
                 else:
@@ -2276,7 +2277,7 @@ def run_rsi_scanner_app(df_global):
                             use_container_width=True,
                             height=get_table_height(res_pct_df, max_rows=50) # <--- INCREASED HEIGHT
                         )
-
+                        st.markdown("<br><br>", unsafe_allow_html=True)
                     else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
 
             except Exception as e: st.error(f"Analysis failed: {e}")
