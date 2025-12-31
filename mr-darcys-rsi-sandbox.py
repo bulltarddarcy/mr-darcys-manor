@@ -114,6 +114,44 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         st.error(f"Error loading global data: {e}")
         return pd.DataFrame()
 
+def add_technicals(df):
+    """
+    Centralized technical indicator calculation.
+    Adds RSI (14), EMA (8, 21), and SMA (200) if they don't exist.
+    """
+    if df is None or df.empty: return df
+    
+    # 1. Identify Close Column (Case Insensitive / Variations)
+    cols = df.columns
+    # Priority: Price (internal), Close (standard), CLOSE (yahoo)
+    close_col = next((c for c in ['Price', 'Close', 'CLOSE'] if c in cols), None)
+    
+    if not close_col: return df
+
+    # 2. RSI Calculation
+    # Only calculate if neither RSI nor RSI_14 exists
+    if not any(x in cols for x in ['RSI', 'RSI_14']):
+        delta = df[close_col].diff()
+        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+        df['RSI_14'] = df['RSI']
+    
+    # 3. EMA/SMA Calculation
+    # Adds standardized names 'EMA_8', 'EMA_21', 'SMA_200'
+    if not any(x in cols for x in ['EMA8', 'EMA_8']):
+        df['EMA_8'] = df[close_col].ewm(span=8, adjust=False).mean()
+        
+    if not any(x in cols for x in ['EMA21', 'EMA_21']):
+        df['EMA_21'] = df[close_col].ewm(span=21, adjust=False).mean()
+        
+    if not any(x in cols for x in ['SMA200', 'SMA_200']):
+        if len(df) >= 200:
+            df['SMA_200'] = df[close_col].rolling(window=200).mean()
+            
+    return df
+    
 @st.cache_data(ttl=86400)
 def get_market_cap(symbol: str) -> float:
     try:
@@ -158,6 +196,7 @@ def is_above_ema21(symbol: str) -> bool:
         return True
 
 @st.cache_data(ttl=300)
+@st.cache_data(ttl=300)
 def get_stock_indicators(sym: str):
     try:
         ticker_obj = yf.Ticker(sym)
@@ -165,16 +204,18 @@ def get_stock_indicators(sym: str):
         
         if len(h_full) == 0: return None, None, None, None, None
         
-        sma200 = float(h_full["Close"].rolling(window=200).mean().iloc[-1]) if len(h_full) >= 200 else None
+        # Centralized Calc
+        h_full = add_technicals(h_full)
+        
+        sma200 = float(h_full["SMA_200"].iloc[-1]) if "SMA_200" in h_full.columns else None
         
         h_recent = h_full.iloc[-60:].copy() if len(h_full) > 60 else h_full.copy()
-        
         if len(h_recent) == 0: return None, None, None, None, None
         
-        close = h_recent["Close"]
-        spot_val = float(close.iloc[-1])
-        ema8  = float(close.ewm(span=8, adjust=False).mean().iloc[-1])
-        ema21 = float(close.ewm(span=21, adjust=False).mean().iloc[-1])
+        spot_val = float(h_recent["Close"].iloc[-1])
+        # Handle variations (Helper adds EMA_8, but existing files might have EMA8)
+        ema8 = float(h_recent.get("EMA_8", h_recent.get("EMA8")).iloc[-1])
+        ema21 = float(h_recent.get("EMA_21", h_recent.get("EMA21")).iloc[-1])
         
         return spot_val, ema8, ema21, sma200, h_full
     except: 
@@ -466,15 +507,10 @@ def get_optimal_rsi_duration(history_df, current_rsi, tolerance=2.0):
     if history_df is None or len(history_df) < 100:
         return 30, "Default (No Hist)"
 
+    # Centralized Calc handles RSI creation if missing
+    history_df = add_technicals(history_df)
+    
     close_col = "CLOSE" if "CLOSE" in history_df.columns else "Close"
-    
-    if "RSI_14" not in history_df.columns and "RSI" not in history_df.columns:
-         delta = history_df[close_col].diff()
-         gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-         loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-         rs = gain / loss
-         history_df["RSI"] = 100 - (100 / (1 + rs))
-    
     rsi_col = "RSI_14" if "RSI_14" in history_df.columns else "RSI"
     
     rsi_vals = history_df[rsi_col].values
@@ -636,7 +672,7 @@ def analyze_trade_setup(ticker, t_df, global_df):
     return score, reasons, suggestions
 
 def prepare_data(df):
-    # Standardize column names to remove spaces/dashes and make uppercase
+    # Standardize column names
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
     
     cols = df.columns
@@ -646,71 +682,40 @@ def prepare_data(df):
     high_col = next((c for c in cols if 'HIGH' in c and 'W_' not in c), None)
     low_col = next((c for c in cols if 'LOW' in c and 'W_' not in c), None)
     
-    # Identify RSI and EMA columns for Daily data (More Robust Search)
-    d_rsi = next((c for c in cols if 'RSI' in c and 'W_' not in c), 'RSI_14')
-    # Because we renamed columns in load_parquet_and_clean, we prioritize EMA8/EMA21
-    d_ema8 = next((c for c in cols if c in ['EMA8', 'EMA_8']), None)
-    d_ema21 = next((c for c in cols if c in ['EMA21', 'EMA_21']), None)
-    
     if not all([date_col, close_col, vol_col, high_col, low_col]): return None, None
     
     df.index = pd.to_datetime(df[date_col])
     df = df.sort_index()
     
-    # Build Daily Dataframe
-    needed_cols = [close_col, vol_col, high_col, low_col]
-    if d_rsi in df.columns: needed_cols.append(d_rsi)
-    if d_ema8: needed_cols.append(d_ema8)
-    if d_ema21: needed_cols.append(d_ema21)
-    
-    df_d = df[needed_cols].copy()
-    
-    # Map CSV names to internal script names used by find_divergences
-    rename_dict = {close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}
-    if d_rsi in df_d.columns: rename_dict[d_rsi] = 'RSI'
-    if d_ema8: rename_dict[d_ema8] = 'EMA8'   # Maps Found Column -> EMA8
-    if d_ema21: rename_dict[d_ema21] = 'EMA21' # Maps Found Column -> EMA21
-    
-    df_d.rename(columns=rename_dict, inplace=True)
+    # --- BUILD DAILY ---
+    df_d = df[[close_col, vol_col, high_col, low_col]].copy()
+    df_d.rename(columns={close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     
-    # Handle missing RSI calculation if needed
-    if 'RSI' not in df_d.columns:
-        delta = df_d['Price'].diff()
-        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-        rs = gain / loss
-        df_d['RSI'] = 100 - (100 / (1 + rs))
-        
+    # Calculate Techs (Price col exists now)
+    df_d = add_technicals(df_d)
+    
+    # Alias for compatibility with find_divergences (expects EMA8 not EMA_8)
+    if 'EMA_8' in df_d.columns: df_d['EMA8'] = df_d['EMA_8']
+    if 'EMA_21' in df_d.columns: df_d['EMA21'] = df_d['EMA_21']
+    
     df_d = df_d.dropna(subset=['Price', 'RSI'])
     
-    # Identify Weekly columns
-    w_close, w_vol, w_rsi = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
-    w_high, w_low = 'W_HIGH', 'W_LOW'
+    # --- BUILD WEEKLY ---
+    w_close, w_vol, w_high, w_low = 'W_CLOSE', 'W_VOLUME', 'W_HIGH', 'W_LOW'
     
-    # Robust Weekly EMA Search (prioritizing the renamed W_EMA8)
-    w_ema8 = next((c for c in cols if c in ['W_EMA8', 'W_EMA_8']), 'W_EMA_8')
-    w_ema21 = next((c for c in cols if c in ['W_EMA21', 'W_EMA_21']), 'W_EMA_21')
-    
-    # Build Weekly Dataframe
-    # Check if W_RSI exists or renamed W_RSI exists
-    actual_w_rsi = next((c for c in cols if c in ['W_RSI', 'W_RSI_14']), None)
-    
-    if all(c in df.columns for c in [w_close, w_vol, w_high, w_low]) and actual_w_rsi:
-        cols_w = [w_close, w_vol, w_high, w_low, actual_w_rsi]
-        if w_ema8 in df.columns: cols_w.append(w_ema8)
-        if w_ema21 in df.columns: cols_w.append(w_ema21)
-        
-        df_w = df[cols_w].copy()
-        
-        # Map Weekly CSV names to internal names
-        w_rename = {w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low', actual_w_rsi: 'RSI'}
-        if w_ema8 in df.columns: w_rename[w_ema8] = 'EMA8'
-        if w_ema21 in df.columns: w_rename[w_ema21] = 'EMA21'
-        
-        df_w.rename(columns=w_rename, inplace=True)
+    if all(c in df.columns for c in [w_close, w_vol, w_high, w_low]):
+        df_w = df[[w_close, w_vol, w_high, w_low]].copy()
+        df_w.rename(columns={w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low'}, inplace=True)
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
         df_w['ChartDate'] = df_w.index - pd.to_timedelta(df_w.index.dayofweek, unit='D')
+        
+        # Calculate Techs on Weekly Data
+        df_w = add_technicals(df_w)
+        
+        if 'EMA_8' in df_w.columns: df_w['EMA8'] = df_w['EMA_8']
+        if 'EMA_21' in df_w.columns: df_w['EMA21'] = df_w['EMA_21']
+        
         df_w = df_w.dropna(subset=['Price', 'RSI'])
     else: 
         df_w = None
@@ -942,26 +947,19 @@ def fetch_yahoo_data(ticker):
         if df.empty: return None
         
         df = df.reset_index()
-        
         date_col_name = df.columns[0]
         df = df.rename(columns={date_col_name: "DATE"})
         
         if not pd.api.types.is_datetime64_any_dtype(df["DATE"]):
             df["DATE"] = pd.to_datetime(df["DATE"])
-
         if df["DATE"].dt.tz is not None:
             df["DATE"] = df["DATE"].dt.tz_localize(None)
             
         df = df.rename(columns={"Close": "CLOSE", "Volume": "VOLUME", "High": "HIGH", "Low": "LOW", "Open": "OPEN"})
         df.columns = [c.upper() for c in df.columns]
         
-        delta = df["CLOSE"].diff()
-        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-        
-        rs = gain / loss
-        df["RSI"] = 100 - (100 / (1 + rs))
-        df["RSI_14"] = df["RSI"]
+        # Centralized Calc
+        df = add_technicals(df)
         
         return df
     except Exception:
