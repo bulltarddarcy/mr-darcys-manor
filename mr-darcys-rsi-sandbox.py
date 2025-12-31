@@ -292,11 +292,13 @@ def fetch_and_prepare_ai_context(url, name, limit=90):
         return f"\n[Error loading {name}: {e}]"
     return ""
 
-def calculate_optimal_signal_stats(history_indices, price_array, current_idx):
+def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish'):
     """
     Looks back at all indices in history_indices that are LESS than current_idx.
     Calculates forward returns for 10, 30, 60, 90, 180 periods.
     Returns the stats for the Optimal Period (Winner based on Profit Factor).
+    
+    signal_type: 'Bullish' or 'Bearish'. If Bearish, we treat price decreases as wins.
     """
     valid_hist_indices = [idx for idx in history_indices if idx < current_idx]
     
@@ -317,8 +319,11 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx):
                 entry_p = price_array[idx]
                 exit_p = price_array[exit_idx]
                 if entry_p > 0:
-                    ret = (exit_p - entry_p) / entry_p
-                    returns.append(ret)
+                    # Raw price return
+                    raw_ret = (exit_p - entry_p) / entry_p
+                    # For Bearish signals, a price decrease is a gain for the strategy
+                    strat_ret = -raw_ret if signal_type == 'Bearish' else raw_ret
+                    returns.append(strat_ret)
         
         if not returns:
             continue
@@ -333,7 +338,6 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx):
         gross_loss = np.abs(np.sum(losses))
         
         # Profit Factor: Gross Wins / Gross Losses
-        # Handle Division by Zero
         if gross_loss == 0:
             pf = 999.0 if gross_win > 0 else 0.0
         else:
@@ -728,7 +732,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         # Optimal Period Calculation
         # Hist_list contains 10 YEARS of indices. 
         hist_list = bullish_signal_indices if s_type == 'Bullish' else bearish_signal_indices
-        best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i)
+        best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type)
         
         if best_stats is None:
              best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
@@ -794,7 +798,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         
         # Backtest statistics use the FULL 10-YEAR list
         hist_list = bullish_signal_indices if is_bullish else bearish_signal_indices
-        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i)
+        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type)
         
         if best_stats is None:
              best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
