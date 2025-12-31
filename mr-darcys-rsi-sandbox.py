@@ -116,22 +116,26 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         st.error(f"Error loading global data: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=86400)
 def get_market_cap(symbol: str) -> float:
-    for attempt in range(3):
-        try:
-            t = yf.Ticker(symbol)
-            mc = t.fast_info.get('marketCap')
-            if mc: return float(mc)
-            info = t.info
-            mc = info.get('marketCap')
-            if mc: return float(mc)
-        except Exception:
-            time.sleep(0.1)
+    try:
+        t = yf.Ticker(symbol)
+        # fast_info is efficient and doesn't require a full API scrape
+        mc = t.fast_info.get('marketCap')
+        if mc: return float(mc)
+        
+        # Fallback: slightly slower but more comprehensive
+        info = t.info
+        mc = info.get('marketCap')
+        if mc: return float(mc)
+    except Exception:
+        # No sleep/retry; fail fast to keep UI snappy
+        pass
     return 0.0
 
 def fetch_market_caps_batch(tickers):
     results = {}
+    # Threading is still useful for the "cold start" (first time loading)
     with ThreadPoolExecutor(max_workers=32) as executor:
         future_to_ticker = {executor.submit(get_market_cap, t): t for t in tickers}
         for future in as_completed(future_to_ticker):
