@@ -1583,19 +1583,6 @@ def run_pivot_tables_app(df):
     def save_pv_state(key, saved_key):
         st.session_state[saved_key] = st.session_state[key]
 
-    st.markdown("""
-        <style>
-            .st-key-calc_out_ann input, .st-key-calc_out_coc input, .st-key-calc_out_dte input {
-                background-color: rgba(113, 210, 138, 0.1) !important;
-                color: #71d28a !important;
-                border: 1px solid #71d28a !important;
-                font-weight: 700 !important;
-                pointer-events: none !important;
-                cursor: default !important;
-            }
-        </style>
-    """, unsafe_allow_html=True)
-
     with col_filters:
         st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>🔍 Filters</h4>", unsafe_allow_html=True)
         fc1, fc2, fc3 = st.columns(3)
@@ -2254,10 +2241,6 @@ st.markdown("""<style>
 .price-badge-header{background: rgba(102, 183, 255, 0.1); border: 1px solid #66b7ff; border-radius:18px; padding:6px 10px; font-weight:800}
 .light-note { opacity: 0.7; font-size: 14px; margin-bottom: 10px; }
 
-/* BACKTESTER BOLD HEADERS */
-[data-testid="stDataFrame"] th {
-    font-weight: 900 !important;
-}
 </style>""", unsafe_allow_html=True)
 
 try:
