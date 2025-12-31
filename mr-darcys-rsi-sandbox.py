@@ -742,7 +742,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
             'Win Rate': best_stats['Win Rate'], 'EV': best_stats['EV'], 'N': best_stats['N']
         }) [cite: 2]
             
-    return divergences [cite: 1, 2]
+    return divergences
 
 def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None):
     signals = []
