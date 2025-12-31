@@ -923,16 +923,23 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         row_at_sig = df_tf.iloc[i] 
         curr_price = row_at_sig['Price']
         
-        ema8_val = row_at_sig.get('EMA8') 
-        ema21_val = row_at_sig.get('EMA21')
+        # 1. ROBUST FETCH: Try both 'EMA8' (clean) and 'EMA_8' (raw) keys
+        ema8_val = row_at_sig.get('EMA8') if 'EMA8' in row_at_sig else row_at_sig.get('EMA_8')
+        ema21_val = row_at_sig.get('EMA21') if 'EMA21' in row_at_sig else row_at_sig.get('EMA_21')
+
+        # 2. HELPER: Ensure value is not None and not NaN (which breaks comparisons)
+        def is_valid(val):
+            return val is not None and not pd.isna(val)
 
         if s_type == 'Bullish':
-            if ema8_val is not None and curr_price >= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
-            if ema21_val is not None and curr_price >= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
-        else: # Bearish
-            if ema8_val is not None and curr_price <= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
-            if ema21_val is not None and curr_price <= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
-        
+            # Bullish Tag: Price is ABOVE EMA
+            if is_valid(ema8_val) and curr_price >= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
+            if is_valid(ema21_val) and curr_price >= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
+        else: 
+            # Bearish Tag: Price is BELOW EMA
+            if is_valid(ema8_val) and curr_price <= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
+            if is_valid(ema21_val) and curr_price <= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
+            
         if sig["vol_high"]: tags.append("VOL_HIGH")
         if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("VOL_GROW")
         
