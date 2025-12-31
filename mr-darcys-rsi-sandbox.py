@@ -292,13 +292,14 @@ def fetch_and_prepare_ai_context(url, name, limit=90):
         return f"\n[Error loading {name}: {e}]"
     return ""
 
-def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish'):
+def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily'):
     """
     Looks back at all indices in history_indices that are LESS than current_idx.
     Calculates forward returns for 10, 30, 60, 90, 180 periods.
     Returns the stats for the Optimal Period (Winner based on Profit Factor).
     
     signal_type: 'Bullish' or 'Bearish'. If Bearish, we treat price decreases as wins.
+    timeframe: 'Daily' or 'Weekly'. Used for labeling the best period.
     """
     valid_hist_indices = [idx for idx in history_indices if idx < current_idx]
     
@@ -310,6 +311,7 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
     best_stats = None
     
     total_len = len(price_array)
+    unit = 'w' if timeframe.lower() == 'weekly' else 'd'
 
     for p in periods:
         returns = []
@@ -349,7 +351,7 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
         if pf > best_pf:
             best_pf = pf
             best_stats = {
-                "Best Period": f"{p}d",
+                "Best Period": f"{p}{unit}",
                 "Profit Factor": pf,
                 "Win Rate": win_rate,
                 "EV": avg_ret,
@@ -732,7 +734,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         # Optimal Period Calculation
         # Hist_list contains 10 YEARS of indices. 
         hist_list = bullish_signal_indices if s_type == 'Bullish' else bearish_signal_indices
-        best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type)
+        best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe)
         
         if best_stats is None:
              best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
@@ -750,7 +752,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
             
     return divergences
 
-def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None):
+def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None, timeframe='Daily'):
     signals = []
     if len(df) < 200: return signals
     
@@ -798,7 +800,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         
         # Backtest statistics use the FULL 10-YEAR list
         hist_list = bullish_signal_indices if is_bullish else bearish_signal_indices
-        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type)
+        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe)
         
         if best_stats is None:
              best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
@@ -1815,10 +1817,15 @@ def run_rsi_scanner_app(df_global):
                 * <b>Day/Week Δ</b>: Date the Divergence was confirmed (Pivot 2).
                 * <b>RSI Δ</b>: RSI value at Pivot 1 vs Pivot 2.
                 * <b>Price Δ</b>: Price at Pivot 1 vs Pivot 2.
-                * <b>Best Period</b>: The holding period (e.g., 30d) that historically yielded the highest Profit Factor.
-                * <b>Profit Factor</b>: Gross Wins / Gross Losses (Measure of efficiency).
+                * <b>Best Period</b>: The historical holding period (e.g., 30d/30w) that produced the best Profit Factor.
+                * <b>Profit Factor</b>: Gross Wins / Gross Losses. Measures efficiency.
+                    * **Bullish Table**: Win = Price went **UP**.
+                    * **Bearish Table**: Win = Price went **DOWN**.
+                * <b>Win Rate</b>: Percentage of historical trades that resulted in a "Win" (based on signal type above).
                 * <b>EV</b>: Expected Value. Average return per trade.
-                * <b>N</b>: Total historical instances found in the dataset.
+                    * **Bullish Table**: Positive EV means the stock historically **rose**.
+                    * **Bearish Table**: Positive EV means the stock historically **fell** (profitable for shorts/puts).
+                * <b>N</b>: Total historical instances used for the stats in the Winning Period.
                 """, unsafe_allow_html=True)
             with f_col4:
                 st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
@@ -1936,7 +1943,7 @@ def run_rsi_scanner_app(df_global):
                 <div class="footer-header">⚙️ STRATEGY</div>
                 * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
                 * **Signal-Based Optimization**: Instead of matching RSI values, this backtester finds all historical instances where the stock "Left the Low/High" and calculates performance.
-                * **Optimization Loop**: Calculates returns for **10, 30, 60, 90, 180** days and selects the Winner based on **Profit Factor**.
+                * **Optimization Loop**: Calculates returns for **10, 30, 60, 90, 180** days (or weeks) and selects the Winner based on **Profit Factor**.
                 * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
                 """, unsafe_allow_html=True)
             with c2:
@@ -1951,10 +1958,15 @@ def run_rsi_scanner_app(df_global):
                 * <b>Date</b>: The date the signal fired (Left Low/High).
                 * <b>RSI Δ</b>: RSI movement (e.g., 10th-Pct ↗ Current-RSI).
                 * <b>Signal Close</b>: Price when signal fired.
-                * <b>Best Period</b>: The historical holding period (e.g., 30d) that produced the best Profit Factor.
-                * <b>Profit Factor</b>: Gross Wins divided by Gross Losses.
-                * <b>EV</b>: Average expected return per trade.
-                * <b>N</b>: Total historical instances found in the dataset.
+                * <b>Best Period</b>: The historical holding period (e.g., 30d/30w) that produced the best Profit Factor.
+                * <b>Profit Factor</b>: Gross Wins / Gross Losses. 
+                    * **Leaving Low**: Win = Price went **UP**.
+                    * **Leaving High**: Win = Price went **DOWN**.
+                * <b>Win Rate</b>: Percentage of historical trades that resulted in a "Win" (based on action type above).
+                * <b>EV</b>: Expected Value. Average return per trade.
+                    * **Leaving Low**: Positive EV = Price historically **rose**.
+                    * **Leaving High**: Positive EV = Price historically **fell** (Profitable for shorts).
+                * <b>N</b>: Total historical instances used for the stats in the Winning Period.
                 """, unsafe_allow_html=True)
         
         if data_option_pct:
@@ -2001,7 +2013,9 @@ def run_rsi_scanner_app(df_global):
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
                         if d_d is not None:
-                            raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date))
+                            raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Daily'))
+                        if d_w is not None:
+                            raw_results_pct.extend(find_rsi_percentile_signals(d_w, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Weekly'))
                         if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
                     
                     progress_bar.empty()
