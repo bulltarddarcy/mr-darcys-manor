@@ -2204,26 +2204,7 @@ def run_rsi_scanner_app(df_global):
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_pct): cols[i % 6].write(ticker)
 
-                    c_p1, c_p2, c_p3 = st.columns(3)
-                    with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=st.session_state.saved_rsi_pct_low, step=1, key="rsi_pct_low", on_change=save_rsi_state, args=("rsi_pct_low", "saved_rsi_pct_low"))
-                    with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=st.session_state.saved_rsi_pct_high, step=1, key="rsi_pct_high", on_change=save_rsi_state, args=("rsi_pct_high", "saved_rsi_pct_high"))
-                    
-                    # Ensure options are correct for index
-                    show_opts = ["Everything", "Leaving High", "Leaving Low"]
-                    curr_show = st.session_state.saved_rsi_pct_show
-                    idx_show = show_opts.index(curr_show) if curr_show in show_opts else 0
-                    with c_p3: show_filter = st.selectbox("Actions to Show", show_opts, index=idx_show, key="rsi_pct_show", on_change=save_rsi_state, args=("rsi_pct_show", "saved_rsi_pct_show"))
-                    
-                    if not df_global.empty and "Trade Date" in df_global.columns:
-                        ref_date = df_global["Trade Date"].max().date()
-                    else:
-                        ref_date = date.today()
-                    default_start = ref_date - timedelta(days=14)
-                    
-                    if st.session_state.saved_rsi_pct_date is None:
-                        st.session_state.saved_rsi_pct_date = default_start
-
-                    c_p4, c_p5, c_p6, c_p7 = st.columns(4)
+                    c_p1, c_p2, c_p3, c_p7 = st.columns(4)
                     with c_p4: filter_date = st.date_input("Latest Date", value=st.session_state.saved_rsi_pct_date, key="rsi_pct_date", on_change=save_rsi_state, args=("rsi_pct_date", "saved_rsi_pct_date"))
                     with c_p5: min_n_pct = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
                     with c_p6: 
@@ -2287,6 +2268,35 @@ def run_rsi_scanner_app(df_global):
                                     elif "Leaving High" in str(act):
                                         styles[idx] = 'color: #c5221f;' # Red, no bold
                                 
+                                # Color SQN
+                                if 'SQN' in df_in.columns:
+                                    val = row['SQN']
+                                    if pd.notnull(val):
+                                        idx = df_in.columns.get_loc('SQN')
+                                        color = ''
+                                        font_weight = 'normal'
+                                        
+                                        if val < 1.6:
+                                            color = '#d32f2f' # Red
+                                        elif 1.6 <= val < 2.0:
+                                            color = '#f57c00' # Orange
+                                        elif 2.0 <= val < 2.5:
+                                            color = '#fbc02d' # Yellow-ish
+                                        elif 2.5 <= val < 3.0:
+                                            color = '#388e3c' # Light Green
+                                        elif 3.0 <= val <= 5.0:
+                                            color = '#2e7d32' # Strong Green
+                                            font_weight = 'bold'
+                                        elif 5.0 < val <= 7.0: # Covering the 5.1-6.9 gap logic
+                                            color = '#1b5e20' # Very Dark Green
+                                            font_weight = 'bold'
+                                        elif val > 7.0:
+                                            color = '#6a1b9a' # Purple/Gold "Holy Grail"
+                                            font_weight = 'bold'
+                                        
+                                        if color:
+                                            styles[idx] = f'color: {color}; font-weight: {font_weight};'
+
                                 return styles
                             return df_in.style.apply(highlight_row, axis=1)
 
@@ -2305,7 +2315,7 @@ def run_rsi_scanner_app(df_global):
                                 "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
                                 "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
                                 "N": st.column_config.NumberColumn("N"),
-                                "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="How to Read the Score:\n< 1.6: Poor. (Hard to trade, likely barely profitable).\n1.6 - 2.0: Average. (Decent, but you might struggle during drawdowns).\n2.0 - 3.0: Good. (A solid, professional strategy).\n3.0 - 5.0: Excellent. (A compounding machine).\n> 5.0: Holy Grail. (Rare; usually means you are printing money)."),
+                                "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="How to Read the Score:\n< 1.6: Poor / Hard to Trade (Likely not worth trading)\n1.6 – 1.9: Below Average (Tradeable, but difficult)\n2.0 – 2.5: Average\n2.5 – 3.0: Good\n3.0 – 5.0: Excellent\n5.1 – 6.9: Superb\n> 7.0: Holy Grail"),
                                 "Signal_Type": None, "Date_Obj": None
                             },
                             hide_index=True,
@@ -2316,7 +2326,7 @@ def run_rsi_scanner_app(df_global):
                     else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
 
             except Exception as e: st.error(f"Analysis failed: {e}")
-
+                
 st.markdown("""<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
 .zones-panel{padding:14px 0; border-radius:10px;}
