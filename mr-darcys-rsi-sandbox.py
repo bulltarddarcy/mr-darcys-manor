@@ -10,7 +10,7 @@ import math
 import requests
 import re
 import time
-from io import StringIO
+from io import StringIO, BytesIO
 import altair as alt
 import google.generativeai as genai
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -36,8 +36,18 @@ RSI_DIFF_THRESHOLD = 2
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
 EV_LOOKBACK_YEARS = 3
-# MIN_N_THRESHOLD is now dynamic based on user input
 URL_TICKER_MAP_DEFAULT = "https://drive.google.com/file/d/1MlVp6yF7FZjTdRFMpYCxgF-ezyKvO4gG/view?usp=sharing"
+
+# --- DATASET KEYS (PARQUET) ---
+# Hardcoded to ensure we use the Parquet sources as requested
+DATA_KEYS_PARQUET = {
+    "Darcy List": "PARQUET_DARCY",
+    "NQ100": "PARQUET_NQ100",
+    "SP100": "PARQUET_SP100",
+    "Sectors": "PARQUET_SECTORS",
+    "Macro": "PARQUET_MACRO",
+    "MidCaps": "PARQUET_MIDCAP"
+}
 
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
@@ -232,23 +242,83 @@ def get_confirmed_gdrive_data(url):
     except Exception as e:
         return None
 
-def load_dataset_config():
+def get_gdrive_binary_data(url):
+    """
+    Downloads binary data (like Parquet) from Google Drive.
+    """
     try:
-        if "URL_CONFIG" not in st.secrets:
-            return {"Darcy Data": "URL_DARCY", "S&P 100 Data": "URL_SP100"}
-        config_url = st.secrets["URL_CONFIG"]
-        buffer = get_confirmed_gdrive_data(config_url)
-        if buffer and buffer != "HTML_ERROR":
-            lines = buffer.getvalue().splitlines()
-            config_dict = {}
-            for line in lines:
-                if ',' in line:
-                    name, key = line.split(',')
-                    config_dict[name.strip()] = key.strip()
-            return config_dict
+        file_id = ""
+        if 'id=' in url:
+            file_id = url.split('id=')[1].split('&')[0]
+        elif '/d/' in url:
+            file_id = url.split('/d/')[1].split('/')[0]
+        
+        if not file_id: return None
+            
+        download_url = "https://docs.google.com/uc?export=download"
+        session = requests.Session()
+        response = session.get(download_url, params={'id': file_id}, stream=True)
+        
+        confirm_token = None
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                confirm_token = value
+                break
+        
+        if not confirm_token:
+            # For binary files, searching text content might be risky if file is huge, 
+            # but usually the warning page is small HTML.
+            if b"<!DOCTYPE html>" in response.content[:200]:
+                match = re.search(r'confirm=([0-9A-Za-z_]+)', response.text)
+                if match: confirm_token = match.group(1)
+
+        if confirm_token:
+            response = session.get(download_url, params={'id': file_id, 'confirm': confirm_token}, stream=True)
+            
+        return BytesIO(response.content)
     except Exception as e:
-        st.error(f"Error loading config file: {e}")
-    return {"Darcy Data": "URL_DARCY"}
+        st.error(f"Download Error: {e}")
+        return None
+
+@st.cache_data(ttl=900)
+def load_parquet_and_clean(url_key):
+    """
+    Loads Parquet data and normalizes column names (EMA_8 -> EMA8) 
+    so tags show up correctly in RSI tables.
+    """
+    url = st.secrets.get(url_key)
+    if not url: return None
+    
+    try:
+        # Get binary buffer from GDrive link
+        buffer = get_gdrive_binary_data(url)
+        if not buffer: return None
+        
+        df = pd.read_parquet(buffer, engine='pyarrow')
+        
+        # --- RENAME COLUMNS FOR COMPATIBILITY ---
+        # Source data often uses EMA_8, but script logic expects EMA8
+        rename_map = {
+            "EMA_8": "EMA8",
+            "EMA_21": "EMA21",
+            "RSI_14": "RSI",
+            "W_EMA_8": "W_EMA8",
+            "W_EMA_21": "W_EMA21",
+            "W_RSI_14": "W_RSI"
+        }
+        # Only rename columns that exist
+        actual_rename = {k: v for k, v in rename_map.items() if k in df.columns}
+        df.rename(columns=actual_rename, inplace=True)
+        
+        # Ensure Date format
+        date_cols = [c for c in df.columns if "DATE" in c.upper()]
+        if date_cols:
+            df[date_cols[0]] = pd.to_datetime(df[date_cols[0]])
+            
+        return df
+    except Exception as e:
+        st.error(f"Error loading {url_key}: {e}")
+        return None
 
 @st.cache_data(ttl=3600)
 def load_ticker_map():
@@ -297,9 +367,6 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
     Looks back at all indices in history_indices that are LESS than current_idx.
     Calculates forward returns for 10, 30, 60, 90, 180 periods.
     Returns the stats for the Optimal Period (Winner based on Profit Factor).
-    
-    signal_type: 'Bullish' or 'Bearish'. If Bearish, we treat price decreases as wins.
-    timeframe: 'Daily' or 'Weekly'. Used for labeling the best period.
     """
     valid_hist_indices = [idx for idx in history_indices if idx < current_idx]
     
@@ -548,8 +615,9 @@ def prepare_data(df):
     
     # Identify RSI and EMA columns for Daily data (More Robust Search)
     d_rsi = next((c for c in cols if 'RSI' in c and 'W_' not in c), 'RSI_14')
-    d_ema8 = next((c for c in cols if c in ['EMA_8', 'EMA8']), None)
-    d_ema21 = next((c for c in cols if c in ['EMA_21', 'EMA21']), None)
+    # Because we renamed columns in load_parquet_and_clean, we prioritize EMA8/EMA21
+    d_ema8 = next((c for c in cols if c in ['EMA8', 'EMA_8']), None)
+    d_ema21 = next((c for c in cols if c in ['EMA21', 'EMA_21']), None)
     
     if not all([date_col, close_col, vol_col, high_col, low_col]): return None, None
     
@@ -587,20 +655,23 @@ def prepare_data(df):
     w_close, w_vol, w_rsi = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
     w_high, w_low = 'W_HIGH', 'W_LOW'
     
-    # Robust Weekly EMA Search
-    w_ema8 = next((c for c in cols if c in ['W_EMA_8', 'W_EMA8']), 'W_EMA_8')
-    w_ema21 = next((c for c in cols if c in ['W_EMA_21', 'W_EMA21']), 'W_EMA_21')
+    # Robust Weekly EMA Search (prioritizing the renamed W_EMA8)
+    w_ema8 = next((c for c in cols if c in ['W_EMA8', 'W_EMA_8']), 'W_EMA_8')
+    w_ema21 = next((c for c in cols if c in ['W_EMA21', 'W_EMA_21']), 'W_EMA_21')
     
     # Build Weekly Dataframe
-    if all(c in df.columns for c in [w_close, w_vol, w_high, w_low, w_rsi]):
-        cols_w = [w_close, w_vol, w_high, w_low, w_rsi]
+    # Check if W_RSI exists or renamed W_RSI exists
+    actual_w_rsi = next((c for c in cols if c in ['W_RSI', 'W_RSI_14']), None)
+    
+    if all(c in df.columns for c in [w_close, w_vol, w_high, w_low]) and actual_w_rsi:
+        cols_w = [w_close, w_vol, w_high, w_low, actual_w_rsi]
         if w_ema8 in df.columns: cols_w.append(w_ema8)
         if w_ema21 in df.columns: cols_w.append(w_ema21)
         
         df_w = df[cols_w].copy()
         
         # Map Weekly CSV names to internal names
-        w_rename = {w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low', w_rsi: 'RSI'}
+        w_rename = {w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low', actual_w_rsi: 'RSI'}
         if w_ema8 in df.columns: w_rename[w_ema8] = 'EMA8'
         if w_ema21 in df.columns: w_rename[w_ema21] = 'EMA21'
         
@@ -709,6 +780,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         row_at_sig = df_tf.iloc[i] 
         curr_price = row_at_sig['Price']
         
+        # EMA Check uses keys mapped in prepare_data ('EMA8', 'EMA21')
         ema8_val = row_at_sig.get('EMA8') 
         ema21_val = row_at_sig.get('EMA21')
 
@@ -1634,7 +1706,8 @@ def run_rsi_scanner_app(df_global):
         </style>
         """, unsafe_allow_html=True)
     
-    dataset_map = load_dataset_config()
+    # Use Hardcoded Parquet Options
+    dataset_map = DATA_KEYS_PARQUET
     options = list(dataset_map.keys())
 
     tab_div, tab_pct, tab_bot = st.tabs(["📉 Divergences", "🔢 Percentiles", "🤖 Backtester"])
@@ -1838,11 +1911,11 @@ def run_rsi_scanner_app(df_global):
         
         if data_option_div:
             try:
-                target_url = st.secrets[dataset_map[data_option_div]]
-                csv_buffer = get_confirmed_gdrive_data(target_url)
+                # Use load_parquet_and_clean which fixes EMA tags
+                key = dataset_map[data_option_div]
+                master = load_parquet_and_clean(key)
                 
-                if csv_buffer and csv_buffer != "HTML_ERROR":
-                    master = pd.read_csv(csv_buffer)
+                if master is not None and not master.empty:
                     t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                     
                     date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
@@ -1931,6 +2004,8 @@ def run_rsi_scanner_app(df_global):
                                     )
                                 else: st.info("No signals.")
                     else: st.warning("No Divergence signals found.")
+                else:
+                    st.error(f"Failed to load dataset: {data_option_div}")
             except Exception as e: st.error(f"Analysis failed: {e}")
 
     with tab_pct:
@@ -1971,11 +2046,11 @@ def run_rsi_scanner_app(df_global):
         
         if data_option_pct:
             try:
-                target_url = st.secrets[dataset_map[data_option_pct]]
-                csv_buffer = get_confirmed_gdrive_data(target_url)
+                # Use load_parquet_and_clean
+                key = dataset_map[data_option_pct]
+                master = load_parquet_and_clean(key)
                 
-                if csv_buffer and csv_buffer != "HTML_ERROR":
-                    master = pd.read_csv(csv_buffer)
+                if master is not None and not master.empty:
                     t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                     date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
                     max_date_in_set = None
@@ -2073,56 +2148,6 @@ def run_rsi_scanner_app(df_global):
 
             except Exception as e: st.error(f"Analysis failed: {e}")
 
-def run_trade_ideas_app(df_global):
-    st.title("🤖 AI Macro Portfolio Manager")
-    st.caption("This module ingests the Darcy, SP100, NQ100, and Macro datasets to generate a comprehensive strategy report.")
-    
-    if st.button("Run Global Macro Scan"):
-        if "GOOGLE_API_KEY" not in st.secrets:
-            st.error("Missing GOOGLE_API_KEY in secrets.toml")
-        elif "URL_Prompt" not in st.secrets:
-            st.error("Missing URL_Prompt in secrets.toml")
-        else:
-            try:
-                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-                
-                with st.spinner("Step 1/3: Fetching System Prompt..."):
-                    prompt_buffer = get_confirmed_gdrive_data(st.secrets["URL_Prompt"])
-                    if not prompt_buffer or prompt_buffer == "HTML_ERROR":
-                        st.error("Failed to load prompt.")
-                        st.stop()
-                    system_prompt = prompt_buffer.getvalue()
-
-                with st.spinner("Step 2/3: Ingesting Datasets..."):
-                    context_data = ""
-                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_DARCY"], "DARCY WATCHLIST", 90)
-                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_SP100"], "S&P 100", 90)
-                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_NQ100"], "NASDAQ 100", 90)
-                    context_data += fetch_and_prepare_ai_context(st.secrets["URL_MACRO"], "MACRO INDICATORS", 90)
-                    
-                    full_prompt = f"{system_prompt}\n\n==========\nLIVE DATA CONTEXT:\n{context_data}\n=========="
-
-                with st.spinner("Step 3/3: AI Analysis (may take 60s)..."):
-                    candidate_models = ["gemini-1.5-pro", "gemini-1.5-flash"]
-                    response = None
-                    for model_name in candidate_models:
-                        try:
-                            model = genai.GenerativeModel(model_name)
-                            response = model.generate_content(full_prompt)
-                            break 
-                        except Exception:
-                            continue 
-                    
-                    if response:
-                        st.success("Analysis Complete!")
-                        st.markdown("---")
-                        st.markdown(response.text)
-                    else:
-                        st.error("AI models failed. Check API Quota.")
-                    
-            except Exception as e:
-                st.error(f"AI Pipeline Failed: {e}")
-
 st.markdown("""<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
 .zones-panel{padding:14px 0; border-radius:10px;}
@@ -2186,7 +2211,6 @@ try:
         st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
         st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
         st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="📈", url_path="rsi_scanner"), 
-        st.Page(lambda: run_trade_ideas_app(df_global), title="Trade Ideas", icon="💡", url_path="trade_ideas"),
     ])
 
     st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
