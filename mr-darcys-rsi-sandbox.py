@@ -368,42 +368,39 @@ def get_gdrive_binary_data(url):
 @st.cache_data(ttl=900)
 def load_parquet_and_clean(url_key):
     """
-    Loads Parquet data, normalizes column names, and forces float64 types.
+    Loads Parquet data, normalizes column names to internal standard.
     """
     url = st.secrets.get(url_key)
     if not url: return None
     
     try:
-        # Get binary buffer from GDrive link
         buffer = get_gdrive_binary_data(url)
         if not buffer: return None
         
         df = pd.read_parquet(buffer, engine='pyarrow')
         
         # --- RENAME COLUMNS FOR COMPATIBILITY ---
-        # Source data often uses EMA_8, but script logic expects EMA8
+        # Maps your NEW source headers to Internal Script headers
         rename_map = {
-            "EMA_8": "EMA8",
-            "EMA_21": "EMA21",
-            "RSI_14": "RSI",
-            "W_EMA_8": "W_EMA8",
-            "W_EMA_21": "W_EMA21",
-            "W_RSI_14": "W_RSI"
+            "RSI14": "RSI",       # You removed the underscore
+            "W_RSI14": "W_RSI",   # You removed the underscore
+            "W_EMA8": "W_EMA8",   # Ensure Weekly EMA matches internal standard
+            "W_EMA21": "W_EMA21",
+            "EMA8": "EMA8",       # Redundant but safe
+            "EMA21": "EMA21"
         }
-        # Only rename columns that exist
+        
+        # Apply renaming only if columns exist
         actual_rename = {k: v for k, v in rename_map.items() if k in df.columns}
         df.rename(columns=actual_rename, inplace=True)
         
-        # --- STRICT TYPE CASTING (Optimization #3) ---
-        # Parquet often loads as float32. We force float64 to prevent numpy precision bugs.
+        # --- STRICT TYPE CASTING ---
         for col in df.columns:
             c_up = col.upper()
-            # If the column name suggests it contains numeric data
             if any(x in c_up for x in ['CLOSE', 'HIGH', 'LOW', 'OPEN', 'VOL', 'RSI', 'EMA', 'SMA']):
                 try:
                     df[col] = df[col].astype('float64')
                 except Exception:
-                    # If conversion fails (e.g. column has strings), skip it
                     pass
         
         # Ensure Date format
@@ -706,7 +703,8 @@ def analyze_trade_setup(ticker, t_df, global_df):
     return score, reasons, suggestions
 
 def prepare_data(df):
-    # Standardize column names
+    # Standardize column names (removes spaces, dashes, converts to UPPER)
+    # Example: "RSI 14" -> "RSI14"
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
     
     cols = df.columns
@@ -722,48 +720,40 @@ def prepare_data(df):
     df = df.sort_index()
     
     # --- BUILD DAILY ---
-    # Identify Daily columns
-    d_rsi = next((c for c in cols if 'RSI' in c and 'W_' not in c), 'RSI')
-    d_ema8 = next((c for c in cols if c in ['EMA8', 'EMA_8']), None)
-    d_ema21 = next((c for c in cols if c in ['EMA21', 'EMA_21']), None)
+    # Identify keys. Since we cleaned upstream, we look for 'RSI14' or 'RSI'
+    d_rsi = next((c for c in cols if c in ['RSI', 'RSI14'] and 'W_' not in c), 'RSI')
+    d_ema8 = next((c for c in cols if c == 'EMA8'), 'EMA8')
+    d_ema21 = next((c for c in cols if c == 'EMA21'), 'EMA21')
 
     needed_cols = [close_col, vol_col, high_col, low_col]
     if d_rsi in df.columns: needed_cols.append(d_rsi)
-    if d_ema8: needed_cols.append(d_ema8)
-    if d_ema21: needed_cols.append(d_ema21)
+    if d_ema8 in df.columns: needed_cols.append(d_ema8)
+    if d_ema21 in df.columns: needed_cols.append(d_ema21)
     
     df_d = df[needed_cols].copy()
     
-    # Map CSV names to internal script names
+    # Map to Internal Names
     rename_dict = {close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}
     if d_rsi in df_d.columns: rename_dict[d_rsi] = 'RSI'
-    # Initial mapping: map whatever we found to 'EMA8' directly
-    if d_ema8: rename_dict[d_ema8] = 'EMA8'
-    if d_ema21: rename_dict[d_ema21] = 'EMA21'
+    # EMA8/21 are already named correctly, no rename needed usually, but good for safety
+    if d_ema8 in df_d.columns: rename_dict[d_ema8] = 'EMA8'
+    if d_ema21 in df_d.columns: rename_dict[d_ema21] = 'EMA21'
     
     df_d.rename(columns=rename_dict, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     
-    # Calculate Techs (This might add 'EMA_8' if 'EMA8' was missing)
+    # Calculate Techs (if missing)
     df_d = add_technicals(df_d)
-    
-    # --- FINAL STANDARDIZATION ---
-    # If add_technicals created 'EMA_8', rename it to 'EMA8' so we only have one standard.
-    if 'EMA_8' in df_d.columns and 'EMA8' not in df_d.columns:
-        df_d.rename(columns={'EMA_8': 'EMA8'}, inplace=True)
-    if 'EMA_21' in df_d.columns and 'EMA21' not in df_d.columns:
-        df_d.rename(columns={'EMA_21': 'EMA21'}, inplace=True)
-    
     df_d = df_d.dropna(subset=['Price', 'RSI'])
     
     # --- BUILD WEEKLY ---
     w_close, w_vol = 'W_CLOSE', 'W_VOLUME'
     w_high, w_low = 'W_HIGH', 'W_LOW'
     
-    # Identify Weekly columns (if they exist)
-    w_rsi_source = next((c for c in cols if c in ['W_RSI', 'W_RSI_14']), None)
-    w_ema8_source = next((c for c in cols if c in ['W_EMA8', 'W_EMA_8']), None)
-    w_ema21_source = next((c for c in cols if c in ['W_EMA21', 'W_EMA_21']), None)
+    # Look for W_RSI14 (from your new file) or W_RSI (internal)
+    w_rsi_source = next((c for c in cols if c in ['W_RSI', 'W_RSI14']), None)
+    w_ema8_source = next((c for c in cols if c in ['W_EMA8']), None)
+    w_ema21_source = next((c for c in cols if c in ['W_EMA21']), None)
     
     if all(c in df.columns for c in [w_close, w_vol, w_high, w_low]):
         cols_w = [w_close, w_vol, w_high, w_low]
@@ -783,13 +773,6 @@ def prepare_data(df):
         df_w['ChartDate'] = df_w.index - pd.to_timedelta(df_w.index.dayofweek, unit='D')
         
         df_w = add_technicals(df_w)
-        
-        # --- FINAL STANDARDIZATION WEEKLY ---
-        if 'EMA_8' in df_w.columns and 'EMA8' not in df_w.columns:
-            df_w.rename(columns={'EMA_8': 'EMA8'}, inplace=True)
-        if 'EMA_21' in df_w.columns and 'EMA21' not in df_w.columns:
-            df_w.rename(columns={'EMA_21': 'EMA21'}, inplace=True)
-        
         df_w = df_w.dropna(subset=['Price', 'RSI'])
     else: 
         df_w = None
@@ -924,20 +907,20 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         row_at_sig = df_tf.iloc[i] 
         curr_price = row_at_sig['Price']
         
-        # We can now confidently look for 'EMA8' because prepare_data enforced it
-        ema8_val = row_at_sig.get('EMA8') 
+        # Direct fetch - we know these exist now
+        ema8_val = row_at_sig.get('EMA8')
         ema21_val = row_at_sig.get('EMA21')
 
-        # Simple Check: Not None and Not NaN
+        # Helper to ensure data exists before comparing
         def is_valid(val):
             return val is not None and not pd.isna(val)
 
         if s_type == 'Bullish':
-            # Bullish: Tag if Price >= EMA
+            # Bullish Table: Only show if Price is ABOVE EMA (Momentum Confirmed)
             if is_valid(ema8_val) and curr_price >= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
             if is_valid(ema21_val) and curr_price >= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
         else: 
-            # Bearish: Tag if Price <= EMA
+            # Bearish Table: Only show if Price is BELOW EMA (Trend Breakdown)
             if is_valid(ema8_val) and curr_price <= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
             if is_valid(ema21_val) and curr_price <= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
             
