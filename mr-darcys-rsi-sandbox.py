@@ -368,8 +368,7 @@ def get_gdrive_binary_data(url):
 @st.cache_data(ttl=900)
 def load_parquet_and_clean(url_key):
     """
-    Loads Parquet data and normalizes column names (EMA_8 -> EMA8) 
-    so tags show up correctly in RSI tables.
+    Loads Parquet data, normalizes column names, and forces float64 types.
     """
     url = st.secrets.get(url_key)
     if not url: return None
@@ -394,6 +393,18 @@ def load_parquet_and_clean(url_key):
         # Only rename columns that exist
         actual_rename = {k: v for k, v in rename_map.items() if k in df.columns}
         df.rename(columns=actual_rename, inplace=True)
+        
+        # --- STRICT TYPE CASTING (Optimization #3) ---
+        # Parquet often loads as float32. We force float64 to prevent numpy precision bugs.
+        for col in df.columns:
+            c_up = col.upper()
+            # If the column name suggests it contains numeric data
+            if any(x in c_up for x in ['CLOSE', 'HIGH', 'LOW', 'OPEN', 'VOL', 'RSI', 'EMA', 'SMA']):
+                try:
+                    df[col] = df[col].astype('float64')
+                except Exception:
+                    # If conversion fails (e.g. column has strings), skip it
+                    pass
         
         # Ensure Date format
         date_cols = [c for c in df.columns if "DATE" in c.upper()]
