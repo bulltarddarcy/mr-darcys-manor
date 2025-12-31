@@ -500,7 +500,7 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
         win_rate = (len(wins) / n) * 100
         avg_ret = np.mean(period_returns) * 100
         
-        # --- SQN Calculation ---
+        # --- SQN Calculation (Merged from Previous Request) ---
         std_dev = np.std(period_returns)
         if std_dev > 0 and n > 0:
             sqn = (np.mean(period_returns) / std_dev) * np.sqrt(n)
@@ -962,7 +962,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input)
         
         if best_stats is None:
-             best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0, "SQN": 0.0}
+             best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
              
         if best_stats["N"] < min_n:
             continue
@@ -1257,6 +1257,7 @@ def run_rankings_app(df):
                 st.markdown("<div style='color: #f29ca0; font-weight:bold;'>Top Bearish Scores</div>", unsafe_allow_html=True)
                 if not top_bears.empty:
                     st.dataframe(top_bears[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=get_table_height(top_bears, max_rows=100))
+        st.markdown("<br><br>", unsafe_allow_html=True)
 
     with tab_ideas:
         if top_bulls.empty:
@@ -1318,6 +1319,7 @@ def run_rankings_app(df):
                         st.markdown("---")
                         for r in cand['Reasons']:
                             st.caption(f"• {r}")
+        st.markdown("<br><br>", unsafe_allow_html=True)
 
     with tab_vol:
         st.caption("ℹ️ Legacy Methodology: Score = (Calls + Puts Sold) - (Puts Bought).")
@@ -1390,6 +1392,7 @@ def run_rankings_app(df):
             st.markdown("<div style='color: #f29ca0; font-weight:bold;'>Bearish Volume</div>", unsafe_allow_html=True)
             if not bear_df.empty:
                 st.dataframe(bear_df[cols_final], use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bear_df, max_rows=100))
+        st.markdown("<br><br>", unsafe_allow_html=True)
 
 def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
@@ -1490,6 +1493,7 @@ def run_strike_zones_app(df):
             key="sz_editor"
         )
         f = edit_pool_raw[edited_df["Include"]].copy()
+        st.markdown("<br><br>", unsafe_allow_html=True)
     else:
         f = edit_pool_raw.copy()
 
@@ -2229,7 +2233,6 @@ def run_rsi_scanner_app(df_global):
                         elif show_filter == "Leaving Low":
                             res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
                             
-                        # [CHANGE 1] Added styling for Action column
                         def style_pct_df(df_in):
                             def highlight_row(row):
                                 styles = [''] * len(row)
