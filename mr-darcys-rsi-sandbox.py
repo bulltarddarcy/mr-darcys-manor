@@ -536,20 +536,20 @@ def analyze_trade_setup(ticker, t_df, global_df):
     return score, reasons, suggestions
 
 def prepare_data(df):
-    # Standardize column names to remove spaces/dashes/underscores and make uppercase
-    df.columns = [col.strip().replace(' ', '').replace('-', '').replace('_', '').upper() for col in df.columns]
+    # Standardize column names to remove spaces/dashes and make uppercase
+    df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
     
     cols = df.columns
     date_col = next((c for c in cols if 'DATE' in c), None)
-    close_col = next((c for c in cols if 'CLOSE' in c and 'W' not in c), None)
-    vol_col = next((c for c in cols if ('VOL' in c or 'VOLUME' in c) and 'W' not in c), None)
-    high_col = next((c for c in cols if 'HIGH' in c and 'W' not in c), None)
-    low_col = next((c for c in cols if 'LOW' in c and 'W' not in c), None)
+    close_col = next((c for c in cols if 'CLOSE' in c and 'W_' not in c), None)
+    vol_col = next((c for c in cols if ('VOL' in c or 'VOLUME' in c) and 'W_' not in c), None)
+    high_col = next((c for c in cols if 'HIGH' in c and 'W_' not in c), None)
+    low_col = next((c for c in cols if 'LOW' in c and 'W_' not in c), None)
     
-    # Identify RSI and EMA columns for Daily data (Stripped naming search)
-    d_rsi = next((c for c in cols if 'RSI' in c and 'W' not in c), 'RSI14')
-    d_ema8 = next((c for c in cols if c in ['EMA8']), None)
-    d_ema21 = next((c for c in cols if c in ['EMA21']), None)
+    # Identify RSI and EMA columns for Daily data (More Robust Search)
+    d_rsi = next((c for c in cols if 'RSI' in c and 'W_' not in c), 'RSI_14')
+    d_ema8 = next((c for c in cols if c in ['EMA_8', 'EMA8']), None)
+    d_ema21 = next((c for c in cols if c in ['EMA_21', 'EMA21']), None)
     
     if not all([date_col, close_col, vol_col, high_col, low_col]): return None, None
     
@@ -564,15 +564,11 @@ def prepare_data(df):
     
     df_d = df[needed_cols].copy()
     
-    # Force Numeric conversion for all columns
-    for c in df_d.columns:
-        df_d[c] = pd.to_numeric(df_d[c], errors='coerce')
-    
     # Map CSV names to internal script names used by find_divergences
     rename_dict = {close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}
     if d_rsi in df_d.columns: rename_dict[d_rsi] = 'RSI'
-    if d_ema8: rename_dict[d_ema8] = 'EMA8'   
-    if d_ema21: rename_dict[d_ema21] = 'EMA21' 
+    if d_ema8: rename_dict[d_ema8] = 'EMA8'   # Maps Found Column -> EMA8
+    if d_ema21: rename_dict[d_ema21] = 'EMA21' # Maps Found Column -> EMA21
     
     df_d.rename(columns=rename_dict, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
@@ -587,10 +583,13 @@ def prepare_data(df):
         
     df_d = df_d.dropna(subset=['Price', 'RSI'])
     
-    # Identify Weekly columns (Stripped names)
-    w_close, w_vol, w_rsi = 'WCLOSE', 'WVOLUME', 'WRSI14'
-    w_high, w_low = 'WHIGH', 'WLOW'
-    w_ema8, w_ema21 = 'WEMA8', 'WEMA21'
+    # Identify Weekly columns
+    w_close, w_vol, w_rsi = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
+    w_high, w_low = 'W_HIGH', 'W_LOW'
+    
+    # Robust Weekly EMA Search
+    w_ema8 = next((c for c in cols if c in ['W_EMA_8', 'W_EMA8']), 'W_EMA_8')
+    w_ema21 = next((c for c in cols if c in ['W_EMA_21', 'W_EMA21']), 'W_EMA_21')
     
     # Build Weekly Dataframe
     if all(c in df.columns for c in [w_close, w_vol, w_high, w_low, w_rsi]):
@@ -599,10 +598,6 @@ def prepare_data(df):
         if w_ema21 in df.columns: cols_w.append(w_ema21)
         
         df_w = df[cols_w].copy()
-        
-        # Force Numeric conversion
-        for c in df_w.columns:
-            df_w[c] = pd.to_numeric(df_w[c], errors='coerce')
         
         # Map Weekly CSV names to internal names
         w_rename = {w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low', w_rsi: 'RSI'}
@@ -714,16 +709,15 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         row_at_sig = df_tf.iloc[i] 
         curr_price = row_at_sig['Price']
         
-        # Use .get() and verify with pd.notna to handle numeric types correctly
         ema8_val = row_at_sig.get('EMA8') 
         ema21_val = row_at_sig.get('EMA21')
 
         if s_type == 'Bullish':
-            if pd.notna(ema8_val) and curr_price >= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
-            if pd.notna(ema21_val) and curr_price >= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
+            if ema8_val is not None and curr_price >= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
+            if ema21_val is not None and curr_price >= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
         else: # Bearish
-            if pd.notna(ema8_val) and curr_price <= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
-            if pd.notna(ema21_val) and curr_price <= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
+            if ema8_val is not None and curr_price <= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
+            if ema21_val is not None and curr_price <= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
         
         if sig["vol_high"]: tags.append("VOL_HIGH")
         if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("VOL_GROW")
