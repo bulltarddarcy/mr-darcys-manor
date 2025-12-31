@@ -389,56 +389,74 @@ def fetch_and_prepare_ai_context(url, name, limit=90):
 
 def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily'):
     """
-    Looks back at all indices in history_indices that are LESS than current_idx.
-    Calculates forward returns for 10, 30, 60, 90, 180 periods.
-    Returns the stats for the Optimal Period (Winner based on Profit Factor).
+    Vectorized calculation of forward returns for multiple periods.
+    Eliminates the loop over history_indices for performance.
     """
-    valid_hist_indices = [idx for idx in history_indices if idx < current_idx]
+    # 1. Filter for valid historical indices (indices strictly less than current)
+    # Ensure inputs are numpy arrays for vectorization
+    hist_arr = np.array(history_indices)
+    valid_mask = hist_arr < current_idx
+    valid_indices = hist_arr[valid_mask]
     
-    if not valid_hist_indices:
+    if len(valid_indices) == 0:
         return None
 
-    periods = [10, 30, 60, 90, 180]
-    best_pf = -1.0
-    best_stats = None
-    
+    periods = np.array([10, 30, 60, 90, 180])
     total_len = len(price_array)
     unit = 'w' if timeframe.lower() == 'weekly' else 'd'
 
-    for p in periods:
-        returns = []
-        for idx in valid_hist_indices:
-            exit_idx = idx + p
-            if exit_idx < total_len:
-                entry_p = price_array[idx]
-                exit_p = price_array[exit_idx]
-                if entry_p > 0:
-                    # Raw price return
-                    raw_ret = (exit_p - entry_p) / entry_p
-                    # For Bearish signals, a price decrease is a gain for the strategy
-                    strat_ret = -raw_ret if signal_type == 'Bearish' else raw_ret
-                    returns.append(strat_ret)
+    # 2. Vectorized Exit Index Calculation
+    # Broadcasting: (N_signals, 1) + (1, N_periods) -> (N_signals, N_periods)
+    # This creates a matrix where each row is a signal and each col is a target exit index
+    exit_indices_matrix = valid_indices[:, None] + periods[None, :]
+    
+    # 3. Create Validity Mask (Mark exits that go beyond the data array length)
+    valid_exits_mask = exit_indices_matrix < total_len
+    
+    # 4. Fetch Prices Safely
+    # Clip indices to max length to prevent IndexError during fetch (we filter invalid ones out later using the mask)
+    safe_exit_indices = np.clip(exit_indices_matrix, 0, total_len - 1)
+    
+    entry_prices = price_array[valid_indices]          # Shape: (N_signals,)
+    exit_prices_matrix = price_array[safe_exit_indices] # Shape: (N_signals, N_periods)
+    
+    # 5. Calculate Returns Matrix
+    # Broadcasting: (N_signals, N_periods) - (N_signals, 1)
+    raw_returns_matrix = (exit_prices_matrix - entry_prices[:, None]) / entry_prices[:, None]
+    
+    # Adjust for signal type
+    if signal_type == 'Bearish':
+        strat_returns_matrix = -raw_returns_matrix
+    else:
+        strat_returns_matrix = raw_returns_matrix
+
+    # 6. Calculate Stats per Period Column
+    best_pf = -1.0
+    best_stats = None
+    
+    # Loop over the 5 periods (cols) - minimal overhead compared to looping N signals
+    for i, p in enumerate(periods):
+        # Select returns for this period, filtering out out-of-bounds exits
+        col_mask = valid_exits_mask[:, i]
+        period_returns = strat_returns_matrix[col_mask, i]
         
-        if not returns:
+        if len(period_returns) == 0:
             continue
             
-        returns_np = np.array(returns)
-        n = len(returns_np)
-        
-        wins = returns_np[returns_np > 0]
-        losses = returns_np[returns_np < 0]
+        wins = period_returns[period_returns > 0]
+        losses = period_returns[period_returns < 0]
         
         gross_win = np.sum(wins)
         gross_loss = np.abs(np.sum(losses))
         
-        # Profit Factor: Gross Wins / Gross Losses
         if gross_loss == 0:
             pf = 999.0 if gross_win > 0 else 0.0
         else:
             pf = gross_win / gross_loss
             
+        n = len(period_returns)
         win_rate = (len(wins) / n) * 100
-        avg_ret = np.mean(returns_np) * 100
+        avg_ret = np.mean(period_returns) * 100
         
         if pf > best_pf:
             best_pf = pf
