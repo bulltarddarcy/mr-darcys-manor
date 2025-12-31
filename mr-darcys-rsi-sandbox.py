@@ -33,7 +33,6 @@ SIGNAL_LOOKBACK_PERIOD = 25
 RSI_DIFF_THRESHOLD = 2
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
-URL_TICKER_MAP_DEFAULT = None
 
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
@@ -409,10 +408,10 @@ def load_parquet_and_clean(url_key):
 @st.cache_data(ttl=3600)
 def load_ticker_map():
     try:
-        # Defaults to None if key is missing in secrets
-        url = st.secrets.get("URL_TICKER_MAP", URL_TICKER_MAP_DEFAULT)
+        # Removed the second argument (URL_TICKER_MAP_DEFAULT)
+        # st.secrets.get("KEY") returns None by default if key is missing
+        url = st.secrets.get("URL_TICKER_MAP")
         
-        # Safety check: If url is None or empty, stop here
         if not url: 
             return {}
 
