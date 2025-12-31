@@ -539,46 +539,50 @@ def prepare_data(df):
     high_col = next((c for c in cols if 'HIGH' in c and 'W_' not in c), None)
     low_col = next((c for c in cols if 'LOW' in c and 'W_' not in c), None)
     
-    rsi_col = next((c for c in cols if 'RSI' in c and 'W_' not in c), None)
+    # --- UPDATED EMA MAPPING FOR DAILY ---
+    d_rsi = next((c for c in cols if 'RSI' in c and 'W_' not in c), 'RSI_14')
+    d_ema8 = 'EMA_8' if 'EMA_8' in cols else None
+    d_ema21 = 'EMA_21' if 'EMA_21' in cols else None
     
     if not all([date_col, close_col, vol_col, high_col, low_col]): return None, None
     
     df.index = pd.to_datetime(df[date_col])
     df = df.sort_index()
     
-    d_rsi = rsi_col if rsi_col else 'RSI_14'
-    d_ema8, d_ema21 = 'EMA_8', 'EMA_21'
-    
     needed_cols = [close_col, vol_col, high_col, low_col]
     if d_rsi in df.columns: needed_cols.append(d_rsi)
-    if d_ema8 in df.columns: needed_cols.append(d_ema8)
-    if d_ema21 in df.columns: needed_cols.append(d_ema21)
+    if d_ema8: needed_cols.append(d_ema8)
+    if d_ema21: needed_cols.append(d_ema21)
     
     df_d = df[needed_cols].copy()
     
+    # Map CSV names to internal script names
     rename_dict = {close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}
     if d_rsi in df_d.columns: rename_dict[d_rsi] = 'RSI'
-    if d_ema8 in df_d.columns: rename_dict[d_ema8] = 'EMA8'
-    if d_ema21 in df_d.columns: rename_dict[d_ema21] = 'EMA21'
+    if d_ema8: rename_dict[d_ema8] = 'EMA8'   # Internal script needs 'EMA8'
+    if d_ema21: rename_dict[d_ema21] = 'EMA21' # Internal script needs 'EMA21'
     
     df_d.rename(columns=rename_dict, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     
-    if 'RSI' not in df_d.columns:
-        delta = df_d['Price'].diff()
-        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-        rs = gain / loss
-        df_d['RSI'] = 100 - (100 / (1 + rs))
-        
-    df_d = df_d.dropna(subset=['Price', 'RSI'])
-    
+    # --- UPDATED EMA MAPPING FOR WEEKLY ---
     w_close, w_vol, w_rsi = 'W_CLOSE', 'W_VOLUME', 'W_RSI_14'
-    w_high, w_low, w_ema8, w_ema21 = 'W_HIGH', 'W_LOW', 'W_EMA_8', 'W_EMA_21'
+    w_high, w_low = 'W_HIGH', 'W_LOW'
+    w_ema8, w_ema21 = 'W_EMA_8', 'W_EMA_21'
     
     if all(c in df.columns for c in [w_close, w_vol, w_high, w_low, w_rsi]):
-        df_w = df[[w_close, w_vol, w_high, w_low, w_rsi, w_ema8, w_ema21]].copy()
-        df_w.rename(columns={w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low', w_rsi: 'RSI', w_ema8: 'EMA8', w_ema21: 'EMA21'}, inplace=True)
+        # Include EMAs in the weekly copy
+        cols_w = [w_close, w_vol, w_high, w_low, w_rsi]
+        if w_ema8 in df.columns: cols_w.append(w_ema8)
+        if w_ema21 in df.columns: cols_w.append(w_ema21)
+        
+        df_w = df[cols_w].copy()
+        
+        w_rename = {w_close: 'Price', w_vol: 'Volume', w_high: 'High', w_low: 'Low', w_rsi: 'RSI'}
+        if w_ema8 in df.columns: w_rename[w_ema8] = 'EMA8'
+        if w_ema21 in df.columns: w_rename[w_ema21] = 'EMA21'
+        
+        df_w.rename(columns=w_rename, inplace=True)
         df_w['VolSMA'] = df_w['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
         df_w['ChartDate'] = df_w.index - pd.to_timedelta(df_w.index.dayofweek, unit='D')
         df_w = df_w.dropna(subset=['Price', 'RSI'])
