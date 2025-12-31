@@ -68,7 +68,7 @@ def get_parquet_config():
             "SP100": "PARQUET_SP100",
             "Sectors": "PARQUET_SECTORS",
             "Macro": "PARQUET_MACRO",
-            "MidCaps": "PARQUET_MIDCAP"
+            "MidCaps SP400": "PARQUET_MIDCAP"
         }
     return config
 
