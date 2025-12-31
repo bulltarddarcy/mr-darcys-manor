@@ -76,6 +76,17 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         st.error(f"Error loading global data: {e}")
         return pd.DataFrame()
 
+def parse_periods(periods_str):
+    """Parses a comma-separated string into a list of integers."""
+    try:
+        # Split by comma, strip whitespace, convert to int, filter valid numbers, sort unique
+        p_list = sorted(list(set([int(x.strip()) for x in periods_str.split(',') if x.strip().isdigit()])))
+        if not p_list:
+            return [10, 30, 60, 90, 180]
+        return p_list
+    except:
+        return [10, 30, 60, 90, 180]
+
 def add_technicals(df):
     """
     Centralized technical indicator calculation.
@@ -90,7 +101,6 @@ def add_technicals(df):
     if not close_col: return df
 
     # 2. RSI Calculation
-    # FIX: Added 'RSI14' to this list so we don't overwrite your source data
     if not any(x in cols for x in ['RSI', 'RSI_14', 'RSI14']):
         delta = df[close_col].diff()
         gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
@@ -125,13 +135,11 @@ def get_market_cap(symbol: str) -> float:
         mc = info.get('marketCap')
         if mc: return float(mc)
     except Exception:
-        # No sleep/retry; fail fast to keep UI snappy
         pass
     return 0.0
 
 def fetch_market_caps_batch(tickers):
     results = {}
-    # Threading is still useful for the "cold start" (first time loading)
     with ThreadPoolExecutor(max_workers=32) as executor:
         future_to_ticker = {executor.submit(get_market_cap, t): t for t in tickers}
         for future in as_completed(future_to_ticker):
@@ -275,8 +283,6 @@ def get_parquet_config():
     Loads dataset configuration. 
     Priority 1: Text file in Google Drive (URL defined in secrets as URL_PARQUET_LIST)
     Priority 2: String in secrets (PARQUET_CONFIG)
-    
-    If neither is found, it renders an error and stops execution.
     """
     config = {}
     
@@ -293,14 +299,13 @@ def get_parquet_config():
                     parts = line.split(',')
                     if len(parts) >= 2:
                         name = parts[0].strip()
-                        # Clean up "" prefix if present
                         name = re.sub(r'\\s*', '', name)
                         key = parts[1].strip()
                         config[name] = key
         except Exception as e:
             print(f"Error loading external config: {e}")
 
-    # 2. Fallback to secrets string if file failed or variable not set
+    # 2. Fallback to secrets string
     if not config:
         try:
             raw_config = st.secrets.get("PARQUET_CONFIG", "")
@@ -315,20 +320,15 @@ def get_parquet_config():
         except Exception:
             pass
     
-    # 3. Final Validation - Error if empty
     if not config:
         st.error("⛔ CRITICAL ERROR: No dataset configuration found. Please check 'URL_PARQUET_LIST' in your secrets.toml.")
-        st.stop() # Stops the script immediately so it doesn't crash later
+        st.stop()
         
     return config
 
-# Initialize the config AFTER the function is defined
 DATA_KEYS_PARQUET = get_parquet_config()
 
 def get_gdrive_binary_data(url):
-    """
-    Downloads binary data (like Parquet) from Google Drive.
-    """
     try:
         file_id = ""
         if 'id=' in url:
@@ -349,8 +349,6 @@ def get_gdrive_binary_data(url):
                 break
         
         if not confirm_token:
-            # For binary files, searching text content might be risky if file is huge, 
-            # but usually the warning page is small HTML.
             if b"<!DOCTYPE html>" in response.content[:200]:
                 match = re.search(r'confirm=([0-9A-Za-z_]+)', response.text)
                 if match: confirm_token = match.group(1)
@@ -365,9 +363,6 @@ def get_gdrive_binary_data(url):
 
 @st.cache_data(ttl=900)
 def load_parquet_and_clean(url_key):
-    """
-    Loads Parquet data, normalizes column names to internal standard.
-    """
     url = st.secrets.get(url_key)
     if not url: return None
     
@@ -377,22 +372,18 @@ def load_parquet_and_clean(url_key):
         
         df = pd.read_parquet(buffer, engine='pyarrow')
         
-        # --- RENAME COLUMNS FOR COMPATIBILITY ---
-        # Maps your NEW source headers to Internal Script headers
         rename_map = {
-            "RSI14": "RSI",       # You removed the underscore
-            "W_RSI14": "W_RSI",   # You removed the underscore
-            "W_EMA8": "W_EMA8",   # Ensure Weekly EMA matches internal standard
+            "RSI14": "RSI",
+            "W_RSI14": "W_RSI",
+            "W_EMA8": "W_EMA8",
             "W_EMA21": "W_EMA21",
-            "EMA8": "EMA8",       # Redundant but safe
+            "EMA8": "EMA8",
             "EMA21": "EMA21"
         }
         
-        # Apply renaming only if columns exist
         actual_rename = {k: v for k, v in rename_map.items() if k in df.columns}
         df.rename(columns=actual_rename, inplace=True)
         
-        # --- STRICT TYPE CASTING ---
         for col in df.columns:
             c_up = col.upper()
             if any(x in c_up for x in ['CLOSE', 'HIGH', 'LOW', 'OPEN', 'VOL', 'RSI', 'EMA', 'SMA']):
@@ -401,7 +392,6 @@ def load_parquet_and_clean(url_key):
                 except Exception:
                     pass
         
-        # Ensure Date format
         date_cols = [c for c in df.columns if "DATE" in c.upper()]
         if date_cols:
             df[date_cols[0]] = pd.to_datetime(df[date_cols[0]])
@@ -414,12 +404,8 @@ def load_parquet_and_clean(url_key):
 @st.cache_data(ttl=3600)
 def load_ticker_map():
     try:
-        # Removed the second argument (URL_TICKER_MAP_DEFAULT)
-        # st.secrets.get("KEY") returns None by default if key is missing
         url = st.secrets.get("URL_TICKER_MAP")
-        
-        if not url: 
-            return {}
+        if not url: return {}
 
         buffer = get_confirmed_gdrive_data(url)
         if buffer and buffer != "HTML_ERROR":
@@ -447,13 +433,11 @@ def get_ticker_technicals(ticker: str, mapping: dict):
             return None
     return None
 
-def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily'):
+def calculate_optimal_signal_stats(history_indices, price_array, current_idx, signal_type='Bullish', timeframe='Daily', periods_input=None):
     """
     Vectorized calculation of forward returns for multiple periods.
-    Eliminates the loop over history_indices for performance.
     """
-    # 1. Filter for valid historical indices (indices strictly less than current)
-    # Ensure inputs are numpy arrays for vectorization
+    # 1. Filter for valid historical indices
     hist_arr = np.array(history_indices)
     valid_mask = hist_arr < current_idx
     valid_indices = hist_arr[valid_mask]
@@ -461,42 +445,40 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
     if len(valid_indices) == 0:
         return None
 
-    periods = np.array([10, 30, 60, 90, 180])
+    # Handle Periods
+    if periods_input is None:
+        periods = np.array([10, 30, 60, 90, 180])
+    else:
+        periods = np.array(periods_input)
+
     total_len = len(price_array)
     unit = 'w' if timeframe.lower() == 'weekly' else 'd'
 
     # 2. Vectorized Exit Index Calculation
-    # Broadcasting: (N_signals, 1) + (1, N_periods) -> (N_signals, N_periods)
-    # This creates a matrix where each row is a signal and each col is a target exit index
     exit_indices_matrix = valid_indices[:, None] + periods[None, :]
     
-    # 3. Create Validity Mask (Mark exits that go beyond the data array length)
+    # 3. Create Validity Mask
     valid_exits_mask = exit_indices_matrix < total_len
     
     # 4. Fetch Prices Safely
-    # Clip indices to max length to prevent IndexError during fetch (we filter invalid ones out later using the mask)
     safe_exit_indices = np.clip(exit_indices_matrix, 0, total_len - 1)
     
-    entry_prices = price_array[valid_indices]          # Shape: (N_signals,)
-    exit_prices_matrix = price_array[safe_exit_indices] # Shape: (N_signals, N_periods)
+    entry_prices = price_array[valid_indices]
+    exit_prices_matrix = price_array[safe_exit_indices]
     
     # 5. Calculate Returns Matrix
-    # Broadcasting: (N_signals, N_periods) - (N_signals, 1)
     raw_returns_matrix = (exit_prices_matrix - entry_prices[:, None]) / entry_prices[:, None]
     
-    # Adjust for signal type
     if signal_type == 'Bearish':
         strat_returns_matrix = -raw_returns_matrix
     else:
         strat_returns_matrix = raw_returns_matrix
 
-    # 6. Calculate Stats per Period Column
+    # 6. Calculate Stats per Period
     best_pf = -1.0
     best_stats = None
     
-    # Loop over the 5 periods (cols) - minimal overhead compared to looping N signals
     for i, p in enumerate(periods):
-        # Select returns for this period, filtering out out-of-bounds exits
         col_mask = valid_exits_mask[:, i]
         period_returns = strat_returns_matrix[col_mask, i]
         
@@ -536,7 +518,6 @@ def get_optimal_rsi_duration(history_df, current_rsi, tolerance=2.0):
     if history_df is None or len(history_df) < 100:
         return 30, "Default (No Hist)"
 
-    # Centralized Calc handles RSI creation if missing
     history_df = add_technicals(history_df)
     
     close_col = "CLOSE" if "CLOSE" in history_df.columns else "Close"
@@ -702,7 +683,6 @@ def analyze_trade_setup(ticker, t_df, global_df):
 
 def prepare_data(df):
     # Standardize column names (removes spaces, dashes, converts to UPPER)
-    # Example: "RSI 14" -> "RSI14"
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
     
     cols = df.columns
@@ -718,7 +698,6 @@ def prepare_data(df):
     df = df.sort_index()
     
     # --- BUILD DAILY ---
-    # Identify keys. Since we cleaned upstream, we look for 'RSI14' or 'RSI'
     d_rsi = next((c for c in cols if c in ['RSI', 'RSI14'] and 'W_' not in c), 'RSI')
     d_ema8 = next((c for c in cols if c == 'EMA8'), 'EMA8')
     d_ema21 = next((c for c in cols if c == 'EMA21'), 'EMA21')
@@ -730,17 +709,14 @@ def prepare_data(df):
     
     df_d = df[needed_cols].copy()
     
-    # Map to Internal Names
     rename_dict = {close_col: 'Price', vol_col: 'Volume', high_col: 'High', low_col: 'Low'}
     if d_rsi in df_d.columns: rename_dict[d_rsi] = 'RSI'
-    # EMA8/21 are already named correctly, no rename needed usually, but good for safety
     if d_ema8 in df_d.columns: rename_dict[d_ema8] = 'EMA8'
     if d_ema21 in df_d.columns: rename_dict[d_ema21] = 'EMA21'
     
     df_d.rename(columns=rename_dict, inplace=True)
     df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     
-    # Calculate Techs (if missing)
     df_d = add_technicals(df_d)
     df_d = df_d.dropna(subset=['Price', 'RSI'])
     
@@ -748,7 +724,6 @@ def prepare_data(df):
     w_close, w_vol = 'W_CLOSE', 'W_VOLUME'
     w_high, w_low = 'W_HIGH', 'W_LOW'
     
-    # Look for W_RSI14 (from your new file) or W_RSI (internal)
     w_rsi_source = next((c for c in cols if c in ['W_RSI', 'W_RSI14']), None)
     w_ema8_source = next((c for c in cols if c in ['W_EMA8']), None)
     w_ema21_source = next((c for c in cols if c in ['W_EMA21']), None)
@@ -777,11 +752,10 @@ def prepare_data(df):
         
     return df_d, df_w
 
-def find_divergences(df_tf, ticker, timeframe, min_n=0):
+def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None):
     divergences = []
     n_rows = len(df_tf)
     
-    # 1. Setup & Safety Check
     if n_rows < DIVERGENCE_LOOKBACK + 1: return divergences
     
     rsi_vals = df_tf['RSI'].values
@@ -876,9 +850,8 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         s_type = sig["type"]
         idx_p1_abs = sig["p1_idx"]
         
-        # --- UPDATED TAGS LOGIC ---
         tags = []
-        latest_row = df_tf.iloc[-1]  # Check LAST row for current trend
+        latest_row = df_tf.iloc[-1]
         last_price = latest_row['Price']
         last_ema8 = latest_row.get('EMA8') 
         last_ema21 = latest_row.get('EMA21')
@@ -892,11 +865,9 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
             if is_valid(last_ema8) and last_price <= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
             if is_valid(last_ema21) and last_price <= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
             
-        # Updated Volume Tag Names
         if sig["vol_high"]: tags.append("V_HI")
         if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("V_GROW")
         
-        # Display Data
         sig_date_iso = get_date_str(i, '%Y-%m-%d')
         date_display = f"{get_date_str(idx_p1_abs, '%b %d')} → {get_date_str(i, '%b %d')}"
         rsi_display = f"{int(round(rsi_vals[idx_p1_abs]))} {'↗' if rsi_vals[i] > rsi_vals[idx_p1_abs] else '↘'} {int(round(rsi_vals[i]))}"
@@ -906,7 +877,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
 
         hist_list = bullish_signal_indices if s_type == 'Bullish' else bearish_signal_indices
-        best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe)
+        best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input)
         
         if best_stats is None:
              best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
@@ -914,15 +885,17 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         if best_stats["N"] < min_n: continue
 
         # --- EV PRICE CALCULATION ---
-        # Apply EV% to the Signal Close Price (i)
         ev_val = best_stats['EV']
         sig_close = close_vals[i]
         
-        if s_type == 'Bullish':
-            ev_price = sig_close * (1 + (ev_val / 100.0))
+        # New Rule: If N=0, EV Target is 0
+        if best_stats['N'] == 0:
+            ev_price = 0.0
         else:
-            # For Bearish, EV is profit. If EV is +20%, Price dropped 20%.
-            ev_price = sig_close * (1 - (ev_val / 100.0))
+            if s_type == 'Bullish':
+                ev_price = sig_close * (1 + (ev_val / 100.0))
+            else:
+                ev_price = sig_close * (1 - (ev_val / 100.0))
 
         divergences.append({
             'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 
@@ -930,17 +903,16 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
             'RSI_Display': rsi_display, 'Price_Display': price_display, 'Last_Close': f"${latest_row['Price']:,.2f}", 
             'Best Period': best_stats['Best Period'], 'Profit Factor': best_stats['Profit Factor'],
             'Win Rate': best_stats['Win Rate'], 'EV': best_stats['EV'], 
-            'EV Target': ev_price, # <--- New Data Field
+            'EV Target': ev_price, 
             'N': best_stats['N']
         })
             
     return divergences
 
-def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None, timeframe='Daily'):
+def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None, timeframe='Daily', periods_input=None):
     signals = []
     if len(df) < 200: return signals
     
-    # We use the full history provided (up to 10 years)
     cutoff = df.index.max() - timedelta(days=365*10)
     hist_df = df[df.index >= cutoff].copy()
     
@@ -953,7 +925,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
     rsi_vals = rsi_series.values 
     price_vals = hist_df['Price'].values
     
-    # 1. Identify ALL Signal Indices (Vectorized)
+    # 1. Identify ALL Signal Indices
     prev_rsi = rsi_series.shift(1)
     
     bull_mask = (prev_rsi < p10) & (rsi_series >= (p10 + 1.0))
@@ -979,7 +951,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         curr_rsi_val = rsi_vals[i]
         
         hist_list = bullish_signal_indices if is_bullish else bearish_signal_indices
-        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe)
+        best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input)
         
         if best_stats is None:
              best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
@@ -994,13 +966,14 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         ev_val = best_stats['EV']
         sig_close = curr_row['Price']
         
-        if is_bullish:
-            # Bullish: Target is Price * (1 + EV%)
-            ev_price = sig_close * (1 + (ev_val / 100.0))
+        # New Rule: If N=0, EV Target is 0
+        if best_stats['N'] == 0:
+            ev_price = 0.0
         else:
-            # Bearish: EV is positive if price drops. 
-            # If EV is 20%, price dropped 20%. Target = Price * (1 - 0.20)
-            ev_price = sig_close * (1 - (ev_val / 100.0))
+            if is_bullish:
+                ev_price = sig_close * (1 + (ev_val / 100.0))
+            else:
+                ev_price = sig_close * (1 - (ev_val / 100.0))
 
         signals.append({
             'Ticker': ticker,
@@ -1015,7 +988,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
             'Profit Factor': best_stats['Profit Factor'],
             'Win Rate': best_stats['Win Rate'],
             'EV': best_stats['EV'],
-            'EV Target': ev_price,  # <--- Added Here
+            'EV Target': ev_price,
             'N': best_stats['N']
         })
             
@@ -1108,7 +1081,6 @@ def run_database_app(df):
     st.subheader("Non-Expired Trades")
     st.caption("⚠️ User should check OI to confirm trades are still open")
     st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=True, hide_index=True, height=get_table_height(f_display, max_rows=30))
-    # Padding at the bottom
     st.markdown("<br><br><br>", unsafe_allow_html=True)
 
 @st.cache_data(ttl=600, show_spinner="Crunching Smart Money Data...")
@@ -1292,21 +1264,14 @@ def run_rankings_app(df):
             prog_bar = st.progress(0, text="Analyzing technicals...")
             bull_list = top_bulls["Symbol"].tolist()
             
-            # --- PARALLEL OPTIMIZATION START ---
-            # 1. Parallel Fetch (Batch Download)
-            # This downloads all tickers at once (Fast) instead of one-by-one (Slow)
             batch_results = fetch_technicals_batch(bull_list)
             
             for i, t in enumerate(bull_list):
                 prog_bar.progress((i+1)/len(bull_list), text=f"Checking {t}...")
                 
-                # 2. Retrieve Pre-fetched Data
-                # batch_results returns: (spot, ema8, ema21, sma200, h_full)
-                # We extract index 4 (h_full) which is the DataFrame we need
                 data_tuple = batch_results.get(t)
                 t_df = data_tuple[4] if data_tuple else None
 
-                # Fallback: If batch failed (rare), try single fetch
                 if t_df is None or t_df.empty:
                     t_df = fetch_yahoo_data(t)
 
@@ -1324,7 +1289,6 @@ def run_rankings_app(df):
                         "Reasons": reasons,
                         "Suggestions": suggs
                     })
-            # --- PARALLEL OPTIMIZATION END ---
             
             prog_bar.empty()
             best_ideas = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
@@ -1763,11 +1727,10 @@ def run_pivot_tables_app(df):
                 valid_symbols = {s for s in valid_symbols if get_market_cap(s) >= float(min_mkt_cap)}
             
             if ema_filter == "Yes":
-                # Optimization: Batch fetch instead of sequential calls
                 batch_results = fetch_technicals_batch(list(valid_symbols))
                 valid_symbols = {
                     s for s in valid_symbols 
-                    if batch_results.get(s, (None, None))[2] is None or # Retain original behavior (fail open)
+                    if batch_results.get(s, (None, None))[2] is None or 
                     (batch_results[s][0] is not None and batch_results[s][2] is not None and batch_results[s][0] > batch_results[s][2])
                 }
             
@@ -1819,7 +1782,6 @@ def run_rsi_scanner_app(df_global):
         </style>
         """, unsafe_allow_html=True)
     
-    # Use Hardcoded Parquet Options
     dataset_map = DATA_KEYS_PARQUET
     options = list(dataset_map.keys())
 
@@ -1841,7 +1803,6 @@ def run_rsi_scanner_app(df_global):
         c_left, c_right = st.columns([1, 6])
         
         with c_left:
-            # FIX 1: ADDED KEY TO TEXT INPUT TO PREVENT TAB RESET
             ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)", key="rsi_bt_ticker_input").strip().upper()
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
@@ -1863,11 +1824,9 @@ def run_rsi_scanner_app(df_global):
                     
                     date_col = next((c for c in df.columns if 'DATE' in c), None)
                     close_col = next((c for c in df.columns if 'CLOSE' in c), None)
-                    # FIX: Explicitly prioritize RSI14 and ignore W_RSI14 for the daily backtester
                     rsi_priority = ['RSI14', 'RSI', 'RSI_14']
                     rsi_col = next((c for c in rsi_priority if c in df.columns), None)
                     
-                    # Fallback: Find any column with 'RSI' that is NOT Weekly (W_)
                     if not rsi_col:
                         rsi_col = next((c for c in df.columns if 'RSI' in c and 'W_' not in c), None)
 
@@ -1930,7 +1889,7 @@ def run_rsi_scanner_app(df_global):
                             
                             results.append({
                                 "Days": p, 
-                                "Profit Factor": pf, # Correct Order
+                                "Profit Factor": pf, 
                                 "Win Rate": win_rate, 
                                 "EV": avg_ret, 
                                 "Count": len(valid_indices)
@@ -1984,6 +1943,18 @@ def run_rsi_scanner_app(df_global):
     with tab_div:
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
         
+        # New Inputs row for Divergence
+        c_d1, c_d2 = st.columns(2)
+        with c_d1:
+             # Moved Min N filter here
+             min_n_div = st.number_input("Minimum N", min_value=0, value=0, step=1, key="rsi_div_min_n")
+        with c_d2:
+             # New Input for Time Periods
+             periods_str_div = st.text_input("Test Periods (days/weeks)", value="10,30,60,90,180", key="rsi_div_periods")
+        
+        # Parse Periods
+        periods_div = parse_periods(periods_str_div)
+
         with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
             f_col1, f_col2, f_col3, f_col4 = st.columns(4)
             with f_col1:
@@ -1999,8 +1970,8 @@ def run_rsi_scanner_app(df_global):
                 st.markdown('<div class="footer-header">🔮 SIGNAL-BASED OPTIMIZATION</div>', unsafe_allow_html=True)
                 st.markdown(f"""
                 * **New Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal type (e.g., Daily Bullish Divergence) for the ticker.
-                * **Optimization Loop**: It calculates the forward returns for **10, 30, 60, 90, and 180** trading days for each historical signal.
-                * **Selection**: It compares these 5 holding periods and selects the **Optimal Time Period** based on the highest **Profit Factor**.
+                * **Optimization Loop**: It calculates the forward returns for **{','.join(map(str, periods_div))}** trading days for each historical signal.
+                * **Selection**: It compares these holding periods and selects the **Optimal Time Period** based on the highest **Profit Factor**.
                 * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
                 """)
             with f_col3:
@@ -2017,7 +1988,7 @@ def run_rsi_scanner_app(df_global):
                 * <b>EV</b>: Expected Value. Average return per trade.
                     * **Bullish Table**: Positive EV means the stock historically **rose**.
                     * **Bearish Table**: Positive EV means the stock historically **fell** (profitable for shorts/puts).
-                * <b>EV Target</b>: Signal Price CLOSE x (1+EV).
+                * <b>EV Target</b>: Signal Price CLOSE x (1+EV). (If N=0, Target=0)
                 * <b>N</b>: Total historical instances used for the stats in the Winning Period.
                 """, unsafe_allow_html=True)
             with f_col4:
@@ -2031,7 +2002,6 @@ def run_rsi_scanner_app(df_global):
         
         if data_option_div:
             try:
-                # Use load_parquet_and_clean which fixes EMA tags
                 key = dataset_map[data_option_div]
                 master = load_parquet_and_clean(key)
                 
@@ -2048,7 +2018,7 @@ def run_rsi_scanner_app(df_global):
                     all_tickers = sorted(master[t_col].unique())
                     with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
                         sq_div = st.text_input("Filter...", key="rsi_div_filter_ticker").upper()
-                        min_n_div = st.number_input("Minimum N", min_value=0, value=0, step=1, key="rsi_div_min_n")
+                        # Removed Min N from here
                         ft_div = [t for t in all_tickers if sq_div in t]
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_div): cols[i % 6].write(ticker)
@@ -2061,8 +2031,9 @@ def run_rsi_scanner_app(df_global):
                     
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
-                        if d_d is not None: raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div))
-                        if d_w is not None: raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div))
+                        # Passed periods_div to function
+                        if d_d is not None: raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div))
+                        if d_w is not None: raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div))
                         if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
                     
                     progress_bar.empty()
@@ -2105,7 +2076,7 @@ def run_rsi_scanner_app(df_global):
                                         style_div_df(tbl_df),
                                         column_config={
                                             "Ticker": st.column_config.TextColumn("Ticker"),
-                                            "Tags": st.column_config.ListColumn("Tags", width="medium"), # ListColumn for Bubbles
+                                            "Tags": st.column_config.ListColumn("Tags", width="medium"), 
                                             "Date_Display": st.column_config.TextColumn(date_header),
                                             "RSI_Display": st.column_config.TextColumn("RSI Δ"),
                                             "Price_Display": st.column_config.TextColumn(price_header),
@@ -2116,12 +2087,11 @@ def run_rsi_scanner_app(df_global):
                                             "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
                                             "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
                                             "N": st.column_config.NumberColumn("N"),
-                                            # Hide raw cols
                                             "Signal_Date_ISO": None, "Type": None, "Timeframe": None
                                         },
                                         hide_index=True,
                                         use_container_width=True,
-                                        height=get_table_height(tbl_df, max_rows=50) # <--- INCREASED HEIGHT
+                                        height=get_table_height(tbl_df, max_rows=50)
                                     )
                                     st.markdown("<br><br>", unsafe_allow_html=True)
                                 else: st.info("No signals.")
@@ -2133,6 +2103,9 @@ def run_rsi_scanner_app(df_global):
     with tab_pct:
         data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
         
+        # Parse Periods for Percentile
+        # We need to capture the input first, so we move inputs up before expander or inside it
+        
         with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -2140,7 +2113,7 @@ def run_rsi_scanner_app(df_global):
                  st.markdown("""
                 * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
                 * **Signal-Based Optimization**: Instead of matching RSI values, this backtester finds all historical instances where the stock "Left the Low/High" and calculates performance.
-                * **Optimization Loop**: Calculates returns for **10, 30, 60, 90, 180** days (or weeks) and selects the Winner based on **Profit Factor**.
+                * **Optimization Loop**: Calculates returns for multiple days (or weeks) and selects the Winner based on **Profit Factor**.
                 * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
                 """)
             with c2:
@@ -2161,13 +2134,12 @@ def run_rsi_scanner_app(df_global):
                     * **Leaving High**: Win = Price went **DOWN**.
                 * **Win Rate**: Percentage of historical trades that resulted in a "Win".
                 * **EV**: Expected Value. Average return per trade.
-                * **EV Target**: Signal Close × (1 + EV).
+                * **EV Target**: Signal Close × (1 + EV). (If N=0, Target=0)
                 * **N**: Total historical instances used for the stats in the Winning Period.
                 """)
         
         if data_option_pct:
             try:
-                # Use load_parquet_and_clean
                 key = dataset_map[data_option_pct]
                 master = load_parquet_and_clean(key)
                 
@@ -2186,7 +2158,7 @@ def run_rsi_scanner_app(df_global):
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_pct): cols[i % 6].write(ticker)
 
-                    c_p1, c_p2, c_p3, c_p4, c_p5 = st.columns(5)
+                    c_p1, c_p2, c_p3 = st.columns(3)
                     with c_p1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=10, step=1, key="rsi_pct_low")
                     with c_p2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=90, step=1, key="rsi_pct_high")
                     with c_p3: show_filter = st.selectbox("Actions to Show", ["Everything", "Leaving High", "Leaving Low"], index=0, key="rsi_pct_show")
@@ -2197,8 +2169,12 @@ def run_rsi_scanner_app(df_global):
                         ref_date = date.today()
                     default_start = ref_date - timedelta(days=14)
                     
+                    c_p4, c_p5, c_p6 = st.columns(3)
                     with c_p4: filter_date = st.date_input("Latest Date", value=default_start, key="rsi_pct_date")
-                    with c_p5: min_n_pct = st.number_input("Minimum N", min_value=1, value=1, step=1, key="rsi_pct_min_n")
+                    with c_p5: min_n_pct = st.number_input("Minimum N", min_value=0, value=1, step=1, key="rsi_pct_min_n")
+                    with c_p6: periods_str_pct = st.text_input("Test Periods", value="10,30,60,90,180", key="rsi_pct_periods")
+
+                    periods_pct = parse_periods(periods_str_pct)
 
                     raw_results_pct = []
                     progress_bar = st.progress(0, text="Scanning Percentiles...")
@@ -2208,10 +2184,11 @@ def run_rsi_scanner_app(df_global):
                     
                     for i, (ticker, group) in enumerate(grouped_list):
                         d_d, d_w = prepare_data(group.copy())
+                        # Passed periods_pct
                         if d_d is not None:
-                            raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Daily'))
+                            raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Daily', periods_input=periods_pct))
                         if d_w is not None:
-                            raw_results_pct.extend(find_rsi_percentile_signals(d_w, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Weekly'))
+                            raw_results_pct.extend(find_rsi_percentile_signals(d_w, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Weekly', periods_input=periods_pct))
                         if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
                     
                     progress_bar.empty()
@@ -2256,14 +2233,13 @@ def run_rsi_scanner_app(df_global):
                                 "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
                                 "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
                                 "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
-                                "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), # <--- Added
+                                "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
                                 "N": st.column_config.NumberColumn("N"),
-                                # Hide raw
                                 "Signal_Type": None, "Date_Obj": None
                             },
                             hide_index=True,
                             use_container_width=True,
-                            height=get_table_height(res_pct_df, max_rows=50) # <--- INCREASED HEIGHT
+                            height=get_table_height(res_pct_df, max_rows=50)
                         )
                         st.markdown("<br><br>", unsafe_allow_html=True)
                     else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
