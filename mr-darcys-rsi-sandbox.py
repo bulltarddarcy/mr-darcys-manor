@@ -950,18 +950,15 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
     p90 = hist_df['RSI'].quantile(pct_high)
     
     rsi_series = hist_df['RSI']
-    rsi_vals = rsi_series.values # Keep as numpy array for fast indexing later
+    rsi_vals = rsi_series.values 
     price_vals = hist_df['Price'].values
     
     # 1. Identify ALL Signal Indices (Vectorized)
-    # Shift RSI to compare previous candle vs current candle in one pass
     prev_rsi = rsi_series.shift(1)
     
-    # Create Boolean Masks (NaNs from shift automatically evaluate to False)
     bull_mask = (prev_rsi < p10) & (rsi_series >= (p10 + 1.0))
     bear_mask = (prev_rsi > p90) & (rsi_series <= (p90 - 1.0))
     
-    # Convert True locations to integer indices
     bullish_signal_indices = np.where(bull_mask)[0].tolist()
     bearish_signal_indices = np.where(bear_mask)[0].tolist()
             
@@ -973,7 +970,6 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         curr_row = hist_df.iloc[i]
         curr_date = curr_row.name.date()
         
-        # Only show the signal in the table if it's within the requested recent window
         if filter_date and curr_date < filter_date:
             continue
             
@@ -982,7 +978,6 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         thresh_val = p10 if is_bullish else p90
         curr_rsi_val = rsi_vals[i]
         
-        # Backtest statistics use the FULL 10-YEAR list
         hist_list = bullish_signal_indices if is_bullish else bearish_signal_indices
         best_stats = calculate_optimal_signal_stats(hist_list, price_vals, i, signal_type=s_type, timeframe=timeframe)
         
@@ -995,19 +990,32 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
         rsi_disp = f"{thresh_val:.0f} ↗ {curr_rsi_val:.0f}" if is_bullish else f"{thresh_val:.0f} ↘ {curr_rsi_val:.0f}"
         action_str = "Leaving Low" if is_bullish else "Leaving High"
         
+        # --- NEW EV TARGET CALCULATION ---
+        ev_val = best_stats['EV']
+        sig_close = curr_row['Price']
+        
+        if is_bullish:
+            # Bullish: Target is Price * (1 + EV%)
+            ev_price = sig_close * (1 + (ev_val / 100.0))
+        else:
+            # Bearish: EV is positive if price drops. 
+            # If EV is 20%, price dropped 20%. Target = Price * (1 - 0.20)
+            ev_price = sig_close * (1 - (ev_val / 100.0))
+
         signals.append({
             'Ticker': ticker,
             'Date': curr_row.name.strftime('%b %d'),
             'Date_Obj': curr_date,
             'Action': action_str,
             'RSI_Display': rsi_disp,
-            'Signal_Price': f"${curr_row['Price']:,.2f}",
+            'Signal_Price': f"${sig_close:,.2f}",
             'Last_Close': f"${latest_close:,.2f}", 
             'Signal_Type': s_type,
             'Best Period': best_stats['Best Period'],
             'Profit Factor': best_stats['Profit Factor'],
             'Win Rate': best_stats['Win Rate'],
             'EV': best_stats['EV'],
+            'EV Target': ev_price,  # <--- Added Here
             'N': best_stats['N']
         })
             
@@ -2249,6 +2257,7 @@ def run_rsi_scanner_app(df_global):
                                 "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
                                 "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
                                 "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
+                                "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), # <--- Added
                                 "N": st.column_config.NumberColumn("N"),
                                 # Hide raw
                                 "Signal_Type": None, "Date_Obj": None
