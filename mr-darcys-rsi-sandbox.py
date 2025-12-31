@@ -926,10 +926,10 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
             
         # 2. Volume Tags: Based on SIGNAL DATE (The moment the signal fired)
         # vol_high was calculated during the scan based on the signal candle 'i'
-        if sig["vol_high"]: tags.append("VOL_HIGH")
+        if sig["vol_high"]: tags.append("V_HI")
         
         # VOL_GROW compares Vol at Signal (i) vs Vol at Pivot 1 (idx_p1_abs)
-        if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("VOL_GROW")
+        if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("V_GROW")
         
         # --- END TAGS UPDATE ---
         
@@ -2034,10 +2034,10 @@ def run_rsi_scanner_app(df_global):
             with f_col4:
                 st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
                 st.markdown(f"""
-                * **EMA{EMA8_PERIOD}**: Bullish (Price > EMA8) or Bearish (Price < EMA8).
-                * **EMA{EMA21_PERIOD}**: Bullish (Price > EMA21) or Bearish (Price < EMA21).
-                * **VOL_HIGH**: Signal candle volume is > 150% of the 30-day average.
-                * **VOL_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).
+                * **EMA{EMA8_PERIOD}**: Bullish (Last Close > EMA8) or Bearish (Last Close < EMA8).
+                * **EMA{EMA21_PERIOD}**: Bullish (Last Close > EMA21) or Bearish (Last Close < EMA21).
+                * **V_HI**: Signal candle volume is > 150% of the 30-day average.
+                * **V_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).
                 """)
         
         if data_option_div:
