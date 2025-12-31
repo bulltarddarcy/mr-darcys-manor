@@ -900,32 +900,38 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
 
         s_type = sig["type"]
         idx_p1_abs = sig["p1_idx"]
-        latest_p = df_tf.iloc[-1] 
         
-        # Tags Generation
+        # --- TAGS LOGIC UPDATE ---
         tags = []
-        row_at_sig = df_tf.iloc[i] 
-        curr_price = row_at_sig['Price']
         
-        # Direct fetch - we know these exist now
-        ema8_val = row_at_sig.get('EMA8')
-        ema21_val = row_at_sig.get('EMA21')
+        # 1. EMA Tags: Based on LAST CLOSE vs LAST EMA (Current Trend Status)
+        latest_row = df_tf.iloc[-1]  # Get the very last row of data (Today)
+        last_price = latest_row['Price']
+        
+        # Use .get() to avoid errors if cols are missing
+        last_ema8 = latest_row.get('EMA8') 
+        last_ema21 = latest_row.get('EMA21')
 
-        # Helper to ensure data exists before comparing
         def is_valid(val):
             return val is not None and not pd.isna(val)
 
         if s_type == 'Bullish':
-            # Bullish Table: Only show if Price is ABOVE EMA (Momentum Confirmed)
-            if is_valid(ema8_val) and curr_price >= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
-            if is_valid(ema21_val) and curr_price >= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
+            # Bullish Table: Tag if Current Price >= Current EMA (Trend Confirmed Now)
+            if is_valid(last_ema8) and last_price >= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
+            if is_valid(last_ema21) and last_price >= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
         else: 
-            # Bearish Table: Only show if Price is BELOW EMA (Trend Breakdown)
-            if is_valid(ema8_val) and curr_price <= ema8_val: tags.append(f"EMA{EMA8_PERIOD}")
-            if is_valid(ema21_val) and curr_price <= ema21_val: tags.append(f"EMA{EMA21_PERIOD}")
+            # Bearish Table: Tag if Current Price <= Current EMA (Trend Breakdown Now)
+            if is_valid(last_ema8) and last_price <= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
+            if is_valid(last_ema21) and last_price <= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
             
+        # 2. Volume Tags: Based on SIGNAL DATE (The moment the signal fired)
+        # vol_high was calculated during the scan based on the signal candle 'i'
         if sig["vol_high"]: tags.append("VOL_HIGH")
+        
+        # VOL_GROW compares Vol at Signal (i) vs Vol at Pivot 1 (idx_p1_abs)
         if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("VOL_GROW")
+        
+        # --- END TAGS UPDATE ---
         
         # Display Data
         sig_date_iso = get_date_str(i, '%Y-%m-%d')
@@ -949,7 +955,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0):
         divergences.append({
             'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe, 
             'Tags': tags, 'Signal_Date_ISO': sig_date_iso, 'Date_Display': date_display,
-            'RSI_Display': rsi_display, 'Price_Display': price_display, 'Last_Close': f"${latest_p['Price']:,.2f}", 
+            'RSI_Display': rsi_display, 'Price_Display': price_display, 'Last_Close': f"${latest_row['Price']:,.2f}", 
             'Best Period': best_stats['Best Period'], 'Profit Factor': best_stats['Profit Factor'],
             'Win Rate': best_stats['Win Rate'], 'EV': best_stats['EV'], 'N': best_stats['N']
         })
