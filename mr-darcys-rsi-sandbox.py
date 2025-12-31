@@ -1808,7 +1808,7 @@ def run_rsi_scanner_app(df_global):
                     all_tickers = sorted(master[t_col].unique())
                     with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
                         sq_div = st.text_input("Filter...", key="rsi_div_filter_ticker").upper()
-                        min_n_div = st.number_input("Minimum N", min_value=1, value=1, step=1, key="rsi_div_min_n")
+                        min_n_div = st.number_input("Minimum N", min_value=0, value=0, step=1, key="rsi_div_min_n")
                         ft_div = [t for t in all_tickers if sq_div in t]
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_div): cols[i % 6].write(ticker)
