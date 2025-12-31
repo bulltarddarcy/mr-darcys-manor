@@ -39,15 +39,40 @@ EV_LOOKBACK_YEARS = 3
 URL_TICKER_MAP_DEFAULT = "https://drive.google.com/file/d/1MlVp6yF7FZjTdRFMpYCxgF-ezyKvO4gG/view?usp=sharing"
 
 # --- DATASET KEYS (PARQUET) ---
-# Hardcoded to ensure we use the Parquet sources as requested
-DATA_KEYS_PARQUET = {
-    "Darcy List": "PARQUET_DARCY",
-    "NQ100": "PARQUET_NQ100",
-    "SP100": "PARQUET_SP100",
-    "Sectors": "PARQUET_SECTORS",
-    "Macro": "PARQUET_MACRO",
-    "MidCaps": "PARQUET_MIDCAP"
-}
+def get_parquet_config():
+    """
+    Loads dataset configuration from st.secrets['PARQUET_CONFIG'].
+    Format expected in secrets:
+    Display Name,SECRET_KEY
+    Display Name 2,SECRET_KEY_2
+    """
+    config = {}
+    try:
+        raw_config = st.secrets.get("PARQUET_CONFIG", "")
+        if raw_config:
+            lines = raw_config.strip().split('\n')
+            for line in lines:
+                parts = line.split(',')
+                if len(parts) >= 2:
+                    name = parts[0].strip()
+                    key = parts[1].strip()
+                    config[name] = key
+    except Exception as e:
+        print(f"Error parsing PARQUET_CONFIG: {e}")
+    
+    # Fallback to hardcoded defaults if secret is missing or parsing failed
+    if not config:
+        config = {
+            "Darcy List": "PARQUET_DARCY",
+            "NQ100": "PARQUET_NQ100",
+            "SP100": "PARQUET_SP100",
+            "Sectors": "PARQUET_SECTORS",
+            "Macro": "PARQUET_MACRO",
+            "MidCaps": "PARQUET_MIDCAP"
+        }
+    return config
+
+DATA_KEYS_PARQUET = get_parquet_config()
 
 @st.cache_data(ttl=600, show_spinner="Updating Data...")
 def load_and_clean_data(url: str) -> pd.DataFrame:
