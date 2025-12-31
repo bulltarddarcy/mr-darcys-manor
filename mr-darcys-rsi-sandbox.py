@@ -83,16 +83,15 @@ def add_technicals(df):
     """
     if df is None or df.empty: return df
     
-    # 1. Identify Close Column (Case Insensitive / Variations)
+    # 1. Identify Close Column
     cols = df.columns
-    # Priority: Price (internal), Close (standard), CLOSE (yahoo)
     close_col = next((c for c in ['Price', 'Close', 'CLOSE'] if c in cols), None)
     
     if not close_col: return df
 
     # 2. RSI Calculation
-    # Only calculate if neither RSI nor RSI_14 exists
-    if not any(x in cols for x in ['RSI', 'RSI_14']):
+    # FIX: Added 'RSI14' to this list so we don't overwrite your source data
+    if not any(x in cols for x in ['RSI', 'RSI_14', 'RSI14']):
         delta = df[close_col].diff()
         gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
         loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
@@ -101,7 +100,6 @@ def add_technicals(df):
         df['RSI_14'] = df['RSI']
     
     # 3. EMA/SMA Calculation
-    # Adds standardized names 'EMA_8', 'EMA_21', 'SMA_200'
     if not any(x in cols for x in ['EMA8', 'EMA_8']):
         df['EMA_8'] = df[close_col].ewm(span=8, adjust=False).mean()
         
@@ -1857,7 +1855,13 @@ def run_rsi_scanner_app(df_global):
                     
                     date_col = next((c for c in df.columns if 'DATE' in c), None)
                     close_col = next((c for c in df.columns if 'CLOSE' in c), None)
-                    rsi_col = next((c for c in df.columns if 'RSI' in c), None)
+                    # FIX: Explicitly prioritize RSI14 and ignore W_RSI14 for the daily backtester
+                    rsi_priority = ['RSI14', 'RSI', 'RSI_14']
+                    rsi_col = next((c for c in rsi_priority if c in df.columns), None)
+                    
+                    # Fallback: Find any column with 'RSI' that is NOT Weekly (W_)
+                    if not rsi_col:
+                        rsi_col = next((c for c in df.columns if 'RSI' in c and 'W_' not in c), None)
 
                     if not all([date_col, close_col]):
                         st.error("Data source missing Date or Close columns.")
