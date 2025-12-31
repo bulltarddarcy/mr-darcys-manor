@@ -2204,12 +2204,31 @@ def run_rsi_scanner_app(df_global):
                         cols = st.columns(6)
                         for i, ticker in enumerate(ft_pct): cols[i % 6].write(ticker)
 
-                    c_p1, c_p2, c_p3, c_p7 = st.columns(4)
-                    with c_p4: filter_date = st.date_input("Latest Date", value=st.session_state.saved_rsi_pct_date, key="rsi_pct_date", on_change=save_rsi_state, args=("rsi_pct_date", "saved_rsi_pct_date"))
-                    with c_p5: min_n_pct = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
-                    with c_p6: 
+                    pct_col1, pct_col2, pct_col3 = st.columns(3)
+                    with pct_col1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=st.session_state.saved_rsi_pct_low, step=1, key="rsi_pct_low", on_change=save_rsi_state, args=("rsi_pct_low", "saved_rsi_pct_low"))
+                    with pct_col2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=st.session_state.saved_rsi_pct_high, step=1, key="rsi_pct_high", on_change=save_rsi_state, args=("rsi_pct_high", "saved_rsi_pct_high"))
+                    
+                    # Ensure options are correct for index
+                    show_opts = ["Everything", "Leaving High", "Leaving Low"]
+                    curr_show = st.session_state.saved_rsi_pct_show
+                    idx_show = show_opts.index(curr_show) if curr_show in show_opts else 0
+                    with pct_col3: show_filter = st.selectbox("Actions to Show", show_opts, index=idx_show, key="rsi_pct_show", on_change=save_rsi_state, args=("rsi_pct_show", "saved_rsi_pct_show"))
+                    
+                    if not df_global.empty and "Trade Date" in df_global.columns:
+                        ref_date = df_global["Trade Date"].max().date()
+                    else:
+                        ref_date = date.today()
+                    default_start = ref_date - timedelta(days=14)
+                    
+                    if st.session_state.saved_rsi_pct_date is None:
+                        st.session_state.saved_rsi_pct_date = default_start
+
+                    pct_col4, pct_col5, pct_col6, pct_col7 = st.columns(4)
+                    with pct_col4: filter_date = st.date_input("Latest Date", value=st.session_state.saved_rsi_pct_date, key="rsi_pct_date", on_change=save_rsi_state, args=("rsi_pct_date", "saved_rsi_pct_date"))
+                    with pct_col5: min_n_pct = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
+                    with pct_col6: 
                         periods_str_pct = st.text_input("Test Periods (days only)", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
-                    with c_p7:
+                    with pct_col7:
                          # Default for Pct is SQN (Index 1)
                          curr_pct_opt = st.session_state.saved_rsi_pct_opt
                          idx_pct_opt = ["Profit Factor", "SQN"].index(curr_pct_opt) if curr_pct_opt in ["Profit Factor", "SQN"] else 1
