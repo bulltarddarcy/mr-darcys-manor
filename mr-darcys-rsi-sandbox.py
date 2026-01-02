@@ -2442,8 +2442,6 @@ def run_seasonality_app(df_global):
         'Type': f'Avg ({start_year}-{end_year})'
     })
 
-    # Current Year Cumulative (Up to last available month)
-    # We include current month in cumulative line as it "tracks" live
     curr_monthly_stats = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)) 
     curr_cumsum = curr_monthly_stats.cumsum()
     valid_curr_indices = curr_monthly_stats.dropna().index
@@ -2456,68 +2454,103 @@ def run_seasonality_app(df_global):
     })
     combined_line_data = pd.concat([line_data_hist, line_data_curr])
 
-    # --- 6. Visualization ---
+    # --- 6. Summary Logic ---
+    # Current MTD
+    cur_val = curr_monthly_stats.get(current_month, 0.0)
+    if pd.isna(cur_val): cur_val = 0.0
+    cur_color = "#71d28a" if cur_val > 0 else "#f29ca0" # Green/Red hex
+    
+    # Next Month Logic
+    idx_next = (current_month % 12) + 1
+    idx_next_2 = ((current_month + 1) % 12) + 1
+    
+    nm_name = month_names[idx_next-1]
+    nnm_name = month_names[idx_next_2-1]
+    
+    nm_avg = avg_stats.get(idx_next, 0.0)
+    nm_wr = win_rates.get(idx_next, 0.0)
+    nnm_avg = avg_stats.get(idx_next_2, 0.0)
+
+    # Positioning Heuristic
+    if nm_avg >= 1.5 and nm_wr >= 65:
+        positioning = "🚀 <b>Strong Bullish Seasonality.</b> Historically a standout month; consider long exposure."
+    elif nm_avg > 0 and nm_wr >= 50:
+        positioning = "↗️ <b>Mildly Bullish.</b> Tends to be positive, but conviction is moderate."
+    elif nm_avg < 0 and nm_avg > -1.0:
+        positioning = "⚠️ <b>Choppy/Weak.</b> Historically drags or trends slightly negative."
+    else:
+        positioning = "🐻 <b>Bearish Seasonality.</b> Historically a weak month; consider hedging."
+
+    trend_vs = "improves" if nnm_avg > nm_avg else "weakens"
+    
+    st.markdown(f"""
+    <div style="background-color: rgba(128,128,128,0.05); border-left: 5px solid #66b7ff; padding: 15px; border-radius: 4px; margin-bottom: 25px;">
+        <div style="font-weight: bold; font-size: 1.1em; margin-bottom: 8px; color: #444;">🤖 Seasonal Outlook</div>
+        <div style="margin-bottom: 4px;">• <b>Current:</b> {ticker} is <span style="color:{cur_color}; font-weight:bold;">{cur_val:+.1f}%</span> in {month_names[current_month-1]} so far.</div>
+        <div style="margin-bottom: 4px;">• <b>Next Month ({nm_name}):</b> {positioning} (Avg: {nm_avg:+.1f}%, Win Rate: {nm_wr:.1f}%)</div>
+        <div>• <b>Following ({nnm_name}):</b> Seasonality {trend_vs} to an average of <b>{nnm_avg:+.1f}%</b>.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # --- 7. Visualization ---
     
     # --- CHART 1: Cumulative Performance (Line) ---
     st.subheader(f"📈 Performance Tracking: {current_year} vs. History")
     
-    chart_line = alt.Chart(combined_line_data).mark_line(point=True).encode(
+    line_base = alt.Chart(combined_line_data).encode(
         x=alt.X('MonthName', sort=month_names, title='Month'),
         y=alt.Y('Value', title='Cumulative Return (%)'),
-        color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None)),
-        tooltip=[alt.Tooltip('MonthName', title='Month'), alt.Tooltip('Value', format='.2f', title='Cumulative %')]
-    ).properties(height=350)
+        color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None))
+    )
     
-    st.altair_chart(chart_line, use_container_width=True)
+    lines = line_base.mark_line(point=True)
+    labels = line_base.mark_text(
+        align='center', baseline='bottom', dy=-10, fontSize=12, fontWeight='bold'
+    ).encode(text=alt.Text('Value', format='.1f'))
+    
+    st.altair_chart((lines + labels).properties(height=350), use_container_width=True)
 
     # --- CHART 2: Monthly Comparison (Grouped Bar) ---
     st.subheader(f"📊 Monthly Return: History vs. {current_year}")
     
-    # 1. Historical Bars
     hist_bar_data = pd.DataFrame({
-        'Month': range(1, 13),
-        'MonthName': month_names,
-        'Value': avg_stats.values,
-        'WinRate': win_rates.values,
+        'Month': range(1, 13), 'MonthName': month_names,
+        'Value': avg_stats.values, 'WinRate': win_rates.values,
         'Type': 'Historical Avg'
     })
 
-    # 2. Current Year Bars (Only Completed Months)
-    # Filter for months STRICTLY LESS than current month
     completed_curr_df = curr_df[curr_df['Month'] < current_month].copy()
-    
     curr_bar_data = pd.DataFrame()
+    
     if not completed_curr_df.empty:
-        # Group just in case there are duplicates (unlikely with monthly resample)
         curr_vals = completed_curr_df.groupby('Month')['Pct'].mean()
         curr_bar_data = pd.DataFrame({
             'Month': curr_vals.index,
             'MonthName': [month_names[i-1] for i in curr_vals.index],
             'Value': curr_vals.values,
-            'WinRate': [np.nan] * len(curr_vals), # No win rate for single year
+            'WinRate': [np.nan] * len(curr_vals),
             'Type': f'{current_year} Actual'
         })
     
     combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
 
-    # Altair Grouped Bar Chart
-    base = alt.Chart(combined_bar_data).encode(
-        x=alt.X('MonthName', sort=month_names, title=None)
+    bar_base = alt.Chart(combined_bar_data).encode(
+        x=alt.X('MonthName', sort=month_names, title=None), xOffset='Type'
     )
 
-    chart_grouped = base.mark_bar().encode(
+    bars = bar_base.mark_bar().encode(
         y=alt.Y('Value', title='Return (%)'),
-        xOffset='Type', # This creates the side-by-side grouping
-        color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None), scale=alt.Scale(scheme='category10')),
-        tooltip=[
-            alt.Tooltip('MonthName', title='Month'),
-            alt.Tooltip('Type', title='Data'),
-            alt.Tooltip('Value', format='.2f', title='Return (%)'),
-            alt.Tooltip('WinRate', format='.1f', title='Hist Win Rate (%)')
-        ]
-    ).properties(height=300)
+        color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None), scale=alt.Scale(scheme='category10'))
+    )
 
-    st.altair_chart(chart_grouped, use_container_width=True)
+    bar_labels = bar_base.mark_text(fontSize=11, fontWeight='bold').encode(
+        y=alt.Y('Value'),
+        text=alt.Text('Value', format='.1f'),
+        dy=alt.condition(alt.datum.Value >= 0, alt.value(-10), alt.value(15)),
+        color=alt.value('black')
+    )
+
+    st.altair_chart((bars + bar_labels).properties(height=300), use_container_width=True)
 
     # --- CARDS: Win Rates ---
     st.markdown("##### 🎯 Historical Win Rate & Expectancy")
@@ -2539,9 +2572,9 @@ def run_seasonality_app(df_global):
             <div style="background-color: rgba(128,128,128,0.05); border-radius: 8px; padding: 8px 5px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {border_color};">
                 <div style="font-size: 0.85rem; font-weight: bold; color: #555;">{mn}</div>
                 <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Win Rate</div>
-                <div style="font-size: 1.0rem; font-weight: 700;">{wr:.0f}%</div>
+                <div style="font-size: 1.0rem; font-weight: 700;">{wr:.1f}%</div>
                 <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Avg Rtn</div>
-                <div style="font-size: 0.9rem; font-weight: 600; color: {'#1f7a1f' if avg > 0 else '#a11f1f'};">{avg:+.2f}%</div>
+                <div style="font-size: 0.9rem; font-weight: 600; color: {'#1f7a1f' if avg > 0 else '#a11f1f'};">{avg:+.1f}%</div>
             </div>
             """, unsafe_allow_html=True
         )
@@ -2552,7 +2585,6 @@ def run_seasonality_app(df_global):
     
     pivot_hist = hist_filtered.pivot(index='Year', columns='Month', values='Pct')
     
-    # Add current year row if we have completed data
     if not completed_curr_df.empty:
         pivot_curr = completed_curr_df.pivot(index='Year', columns='Month', values='Pct')
         full_pivot = pd.concat([pivot_curr, pivot_hist])
@@ -2574,16 +2606,13 @@ def run_seasonality_app(df_global):
         bg_color = "rgba(113, 210, 138, 0.2)" if val > 0 else "rgba(242, 156, 160, 0.2)"
         return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
         
-    # Dynamic Height Calculation (Row count * row height + header buffer)
-    # Each row is approx 35px, header is 35px.
     table_height = (len(full_pivot) + 1) * 35 + 3
 
     st.dataframe(
-        full_pivot.style.format("{:+.2f}%").applymap(color_map),
+        full_pivot.style.format("{:+.1f}%").applymap(color_map),
         use_container_width=True,
         height=table_height
     )
-
 st.markdown("""<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
 .zones-panel{padding:14px 0; border-radius:10px;}
