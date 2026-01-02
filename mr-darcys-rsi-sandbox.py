@@ -2345,7 +2345,163 @@ def run_rsi_scanner_app(df_global):
                     else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
 
             except Exception as e: st.error(f"Analysis failed: {e}")
-                
+
+def run_seasonality_app(df_global):
+    st.title("📅 Seasonality")
+    
+    # --- 1. Inputs & Configuration ---
+    c1, c2, c3 = st.columns([1, 1, 3])
+    with c1:
+        ticker = st.text_input("Ticker", value="SPY", key="seas_ticker").strip().upper()
+    with c2:
+        # Toggle to show partial year data or strict full years
+        strict_years = st.checkbox("Strict Full Years", value=False, help="If checked, excludes the current incomplete year from historical averages.")
+        
+    if not ticker:
+        st.info("Please enter a ticker symbol.")
+        return
+
+    # --- 2. Data Fetching ---
+    # Try using the Secret Ticker Map first (as requested)
+    ticker_map = load_ticker_map()
+    with st.spinner(f"Fetching history for {ticker}..."):
+        # get_ticker_technicals returns: (spot, ema8, ema21, sma200, df_history)
+        data_tuple = get_ticker_technicals(ticker, ticker_map)
+        df = data_tuple[4] if data_tuple else None
+        
+        # Fallback to Yahoo if Drive data is missing
+        if df is None or df.empty:
+            df = fetch_yahoo_data(ticker)
+
+    if df is None or df.empty:
+        st.error(f"Could not load data for {ticker}. Check the ticker symbol or your TICKER_MAP.")
+        return
+
+    # --- 3. Data Processing ---
+    # Ensure standard column names and Date index
+    df.columns = [c.strip().upper() for c in df.columns]
+    date_col = next((c for c in df.columns if 'DATE' in c), None)
+    close_col = next((c for c in df.columns if 'CLOSE' in c), None)
+    
+    if not date_col or not close_col:
+        st.error("Data source format error: Missing Date or Close columns.")
+        return
+        
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df.set_index(date_col).sort_index()
+    
+    # Resample to Monthly Returns
+    # We take the last close of the month
+    df_monthly = df[close_col].resample('M').last()
+    
+    # Calculate % Change
+    df_pct = df_monthly.pct_change() * 100
+    
+    # Create Analysis DataFrame
+    season_df = pd.DataFrame({
+        'Pct': df_pct,
+        'Year': df_pct.index.year,
+        'Month': df_pct.index.month
+    }).dropna()
+
+    if strict_years:
+        current_year = date.today().year
+        season_df = season_df[season_df['Year'] < current_year]
+
+    # --- 4. Statistics Calculation ---
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    
+    # Helper to calculate stats for a specific lookback window (e.g., Last 10 Years)
+    def get_seasonal_stats(lookback_years):
+        min_year = season_df['Year'].max() - lookback_years
+        subset = season_df[season_df['Year'] > min_year].copy()
+        
+        # Group by Month (1-12) and calc mean
+        stats = subset.groupby('Month')['Pct'].mean()
+        # Reindex to ensure all 12 months exist (fill 0 if missing)
+        stats = stats.reindex(range(1, 13), fill_value=0)
+        return stats
+
+    avg_5y = get_seasonal_stats(5)
+    avg_10y = get_seasonal_stats(10)
+    avg_20y = get_seasonal_stats(20)
+    avg_all = get_seasonal_stats(999) # All history
+
+    # Combine into a single DF for charting
+    chart_df = pd.DataFrame({
+        "Month": month_names,
+        "Last 5 Years": avg_5y.values,
+        "Last 10 Years": avg_10y.values,
+        "Last 20 Years": avg_20y.values,
+        "All History": avg_all.values
+    }).set_index("Month")
+
+    # --- 5. Visualization: Average Monthly Returns ---
+    st.subheader(f"📊 Seasonal Profiles: {ticker}")
+    st.caption("Average monthly return (%) over different timeframes.")
+    
+    tab_chart, tab_data = st.tabs(["Chart View", "Heatmap Data"])
+    
+    with tab_chart:
+        # Multi-select to choose which averages to compare
+        options = ["Last 5 Years", "Last 10 Years", "Last 20 Years", "All History"]
+        selection = st.multiselect("Select Timeframes", options, default=["Last 10 Years", "All History"], label_visibility="collapsed")
+        
+        if selection:
+            st.bar_chart(chart_df[selection], height=350)
+        else:
+            st.warning("Select a timeframe to view the chart.")
+
+        # --- Win Rate Analysis ---
+        st.markdown("##### 🎯 Monthly Win Rate (All History)")
+        win_rates = season_df.groupby('Month')['Pct'].apply(lambda x: (x > 0).mean() * 100).reindex(range(1, 13), fill_value=0)
+        
+        # Create a visually nice Win Rate display
+        cols = st.columns(6) # Row 1 (Jan-Jun)
+        cols2 = st.columns(6) # Row 2 (Jul-Dec)
+        
+        for i in range(12):
+            mn = month_names[i]
+            wr = win_rates.loc[i+1]
+            # Color logic: > 50% Green, < 50% Red
+            color = "#71d28a" if wr >= 50 else "#f29ca0"
+            
+            # Place in correct row
+            target_col = cols[i] if i < 6 else cols2[i-6]
+            target_col.markdown(
+                f"""
+                <div style="background-color: rgba(128,128,128,0.1); border-radius: 8px; padding: 10px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {color};">
+                    <div style="font-size: 0.8rem; font-weight: bold; color: #888;">{mn}</div>
+                    <div style="font-size: 1.1rem; font-weight: 700;">{wr:.0f}%</div>
+                </div>
+                """, unsafe_allow_html=True
+            )
+
+    with tab_data:
+        st.subheader("🗓️ Historical Monthly Returns")
+        
+        # Pivot: Rows = Years, Cols = Months
+        pivot_grid = season_df.pivot(index='Year', columns='Month', values='Pct')
+        pivot_grid.columns = month_names # Rename 1-12 to Jan-Dec
+        pivot_grid = pivot_grid.sort_index(ascending=False) # Newest years on top
+        
+        # Add a "Year Total" column
+        pivot_grid["Total"] = pivot_grid.sum(axis=1)
+
+        # Style the dataframe
+        def color_map(val):
+            if pd.isna(val): return ""
+            if val == 0: return "color: #888;"
+            color = "#71d28a" if val > 0 else "#f29ca0"
+            bg_color = "rgba(113, 210, 138, 0.15)" if val > 0 else "rgba(242, 156, 160, 0.15)"
+            return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
+
+        st.dataframe(
+            pivot_grid.style.format("{:+.2f}%").applymap(color_map),
+            use_container_width=True,
+            height=600
+        )
+
 st.markdown("""<style>
 .block-container{padding-top:3.5rem;padding-bottom:1rem;}
 .zones-panel{padding:14px 0; border-radius:10px;}
@@ -2399,12 +2555,14 @@ try:
     df_global = load_and_clean_data(sheet_url)
     last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
 
+    # --- MODIFIED NAVIGATION ---
     pg = st.navigation([
         st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
         st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
         st.Page(lambda: run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
         st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
-        st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="📈", url_path="rsi_scanner"), 
+        st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="📈", url_path="rsi_scanner"),
+        st.Page(lambda: run_seasonality_app(df_global), title="Seasonality", icon="📅", url_path="seasonality"), # <--- Added this line
     ])
 
     st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
