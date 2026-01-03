@@ -3084,13 +3084,8 @@ def run_ema_distance_app(df_global):
     t50_80 = thresholds['Dist_50']['p80']
     
     # 1. Identify Signal Days in History
-    # Double: 8 > p90 AND 21 > p80
     mask_double = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_80)
-    
-    # Fast/Swing: 8 > p90 AND 50 > p80
     mask_fs = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_50'] >= t50_80)
-    
-    # Triple: All 3
     mask_triple = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_80) & (df_clean['Dist_50'] >= t50_80)
     
     # --- Backtest Helper Function ---
@@ -3137,9 +3132,9 @@ def run_ema_distance_app(df_global):
     n_t, hr_t, med_t = run_backtest(mask_triple, df_clean[close_col], df_clean[low_col])
 
     # Check Current Status
-    curr_d = mask_double.iloc[-1]
-    curr_fs = mask_fs.iloc[-1]
-    curr_t = mask_triple.iloc[-1]
+    curr_d = bool(mask_double.iloc[-1])
+    curr_fs = bool(mask_fs.iloc[-1])
+    curr_t = bool(mask_triple.iloc[-1])
     
     # Build Table
     combo_rows = [
@@ -3174,7 +3169,8 @@ def run_ema_distance_app(df_global):
     def color_combo(row):
         styles = [''] * len(row)
         if row['Triggered']:
-            return ['background-color: #fce8e6; color: #c5221f; font-weight: bold;'] * len(row)
+            # Gentle Yellow Background with Black Text
+            return ['background-color: #fffde7; color: black; font-weight: bold; border-left: 5px solid #fbc02d;'] * len(row)
         return styles
 
     st.dataframe(
