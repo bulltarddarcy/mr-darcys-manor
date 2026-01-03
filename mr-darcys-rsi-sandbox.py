@@ -1800,2657 +1800,335 @@ def run_rsi_scanner_app(df_global):
     st.markdown("""
         <style>
         .top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; }
-        .footer-header { color: #31333f; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 5px; font-weight: bold; }
-        [data-testid="stDataFrame"] th { font-weight: 900 !important; }
+        .main-stat { font-size: 26px; font-weight: bold; color: #333; }
+        .sub-stat { font-size: 14px; color: #666; }
+        .green-box { background-color: #d4edda; padding: 10px; border-radius: 5px; border-left: 5px solid #28a745; margin-bottom: 10px; }
+        .red-box { background-color: #f8d7da; padding: 10px; border-radius: 5px; border-left: 5px solid #dc3545; margin-bottom: 10px; }
         </style>
-        """, unsafe_allow_html=True)
-    
-    # --- Session State Init ---
-    if 'saved_rsi_div_min_n' not in st.session_state: st.session_state.saved_rsi_div_min_n = 0
-    if 'saved_rsi_div_periods_days' not in st.session_state: st.session_state.saved_rsi_div_periods_days = "5, 21, 63, 126"
-    if 'saved_rsi_div_periods_weeks' not in st.session_state: st.session_state.saved_rsi_div_periods_weeks = "4, 13, 26, 52, 104"
-    if 'saved_rsi_div_opt' not in st.session_state: st.session_state.saved_rsi_div_opt = "Profit Factor" 
-    
-    if 'saved_rsi_pct_low' not in st.session_state: st.session_state.saved_rsi_pct_low = 10
-    if 'saved_rsi_pct_high' not in st.session_state: st.session_state.saved_rsi_pct_high = 90
-    if 'saved_rsi_pct_show' not in st.session_state: st.session_state.saved_rsi_pct_show = "Everything"
-    if 'saved_rsi_pct_opt' not in st.session_state: st.session_state.saved_rsi_pct_opt = "SQN" 
-    
-    if 'saved_rsi_pct_date' not in st.session_state: st.session_state.saved_rsi_pct_date = None
-    if 'saved_rsi_pct_min_n' not in st.session_state: st.session_state.saved_rsi_pct_min_n = 1
-    if 'saved_rsi_pct_periods' not in st.session_state: st.session_state.saved_rsi_pct_periods = "5, 21, 63, 126"
+    """, unsafe_allow_html=True)
 
-    def save_rsi_state(key, saved_key):
-        st.session_state[saved_key] = st.session_state[key]
-        
-    dataset_map = DATA_KEYS_PARQUET
-    options = list(dataset_map.keys())
-    
-    OPT_MAP = {"Profit Factor": "PF", "SQN": "SQN"}
+    with st.expander("ℹ️ Page Notes: Strategy Logic"):
+        st.markdown("""
+        **RSI Mean Reversion Scanner**
+        * **Standard RSI (14):** Looks for basic Overbought (>70) or Oversold (<30) conditions.
+        * **RSI Divergence:** Detects if Price makes a Lower Low while RSI makes a Higher Low (Bullish), or Price Higher High / RSI Lower High (Bearish).
+        * **Percentile Rank:** Compares current RSI to its own 252-day history. (e.g., "5th Percentile" means RSI is lower now than 95% of the past year).
+        """)
 
-    tab_div, tab_pct, tab_bot = st.tabs(["📉 Divergences", "🔢 Percentiles", "🤖 Backtester"])
+    # 1. SCANNER INPUTS
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        scan_mode = st.radio("Scan Mode", ["Standard RSI Levels", "RSI Divergence", "RSI Percentile Extremes"], index=0)
+    with c2:
+        lookback_days = st.number_input("Analysis Lookback (Days)", min_value=30, max_value=500, value=252)
+    with c3:
+        min_vol = st.number_input("Min Volume (Avg 30d)", value=500000, step=100000)
 
-    with tab_bot:
-        st.markdown('<div class="light-note" style="margin-bottom: 15px;">ℹ️ If this is buggy, just go back to the RSI Divergences tab and back here and it will work.</div>', unsafe_allow_html=True)
-        
-        with st.expander("ℹ️ Page Notes: Backtester Logic"):
-            st.markdown("""
-            * **Data Source**: Unlike the Divergences and Percentile tabs (which use limited ~10yr history files), this tab pulls **Complete Price History** via Yahoo Finance or the full Ticker Map file.
-            * **Methodology**: Calculates forward returns for all historical periods matching the criteria.
-            * **Metrics**:
-                * **Profit Factor**: Gross Wins / Gross Losses.
-                * **Win Rate**: Percentage of trades that closed positive.
-                * **EV**: Average Return % per trade.
-            """)
-
-        c_left, c_right = st.columns([1, 6])
-        
-        with c_left:
-            ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)", key="rsi_bt_ticker_input").strip().upper()
-            lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
-            rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
-            rsi_metric_container = st.empty()
-        
-        if ticker:
-            ticker_map = load_ticker_map()
-            
-            with st.spinner(f"Crunching numbers for {ticker}..."):
-                df = get_ticker_technicals(ticker, ticker_map)
-                
-                if df is None or df.empty:
-                    df = fetch_yahoo_data(ticker)
-                
-                if df is None or df.empty:
-                    st.error(f"Sorry, data could not be retrieved for {ticker} (neither via Drive nor Yahoo Finance).")
-                else:
-                    df.columns = [c.strip().upper() for c in df.columns]
-                    
-                    date_col = next((c for c in df.columns if 'DATE' in c), None)
-                    close_col = next((c for c in df.columns if 'CLOSE' in c), None)
-                    rsi_priority = ['RSI14', 'RSI', 'RSI_14']
-                    rsi_col = next((c for c in rsi_priority if c in df.columns), None)
-                    
-                    if not rsi_col:
-                        rsi_col = next((c for c in df.columns if 'RSI' in c and 'W_' not in c), None)
-
-                    if not all([date_col, close_col]):
-                        st.error("Data source missing Date or Close columns.")
-                    else:
-                        df[date_col] = pd.to_datetime(df[date_col])
-                        df = df.sort_values(by=date_col).reset_index(drop=True)
-
-                        if not rsi_col:
-                            delta = df[close_col].diff()
-                            gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-                            loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-                            rs = gain / loss
-                            df['RSI'] = 100 - (100 / (1 + rs))
-                            rsi_col = 'RSI'
-
-                        cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
-                        df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True) 
-
-                        current_row = df.iloc[-1]
-                        current_rsi = current_row[rsi_col]
-                        
-                        rsi_metric_container.markdown(f"""<div style="margin-top: 10px; font-size: 0.9rem; color: #666;">Current RSI</div><div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 15px;">{current_rsi:.2f}</div>""", unsafe_allow_html=True)
-                        
-                        rsi_min = current_rsi - rsi_tol
-                        rsi_max = current_rsi + rsi_tol
-                        
-                        hist_df = df.iloc[:-1].copy()
-                        matches = hist_df[(hist_df[rsi_col] >= rsi_min) & (hist_df[rsi_col] <= rsi_max)].copy()
-                        
-                        full_close = df[close_col].values
-                        match_indices = matches.index.values
-                        total_len = len(full_close)
-
-                        results = []
-                        # UPDATED BACKTESTER PERIODS (Trading Days)
-                        periods = [1, 5, 10, 21, 42, 63, 126, 252]
-                        
-                        for p in periods:
-                            valid_indices = match_indices[match_indices + p < total_len]
-                            
-                            if len(valid_indices) == 0:
-                                results.append({"Days": p, "Win Rate": np.nan, "EV": np.nan, "Count": 0, "Profit Factor": np.nan})
-                                continue
-                                
-                            entry_prices = full_close[valid_indices]
-                            exit_prices = full_close[valid_indices + p]
-                            
-                            returns = (exit_prices - entry_prices) / entry_prices
-                            
-                            wins = returns[returns > 0]
-                            losses = returns[returns < 0]
-                            gross_win = np.sum(wins)
-                            gross_loss = np.abs(np.sum(losses))
-                            
-                            pf = gross_win / gross_loss if gross_loss > 0 else (999.0 if gross_win > 0 else 0.0)
-                            
-                            win_rate = np.mean(returns > 0) * 100
-                            avg_ret = np.mean(returns) * 100
-                            
-                            results.append({
-                                "Days": p, 
-                                "Profit Factor": pf, 
-                                "Win Rate": win_rate, 
-                                "EV": avg_ret, 
-                                "Count": len(valid_indices)
-                            })
-
-                        res_df = pd.DataFrame(results)
-
-                        with c_right:
-                            if matches.empty:
-                                st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
-                            else:
-                                def highlight_best(row):
-                                    days = row['Days']
-                                    if days <= 20: threshold = 30
-                                    elif days <= 60: threshold = 20
-                                    else: threshold = 10
-                                    
-                                    condition = (row['Count'] >= threshold) and (row['Win Rate'] > 75)
-                                    color = 'background-color: rgba(144, 238, 144, 0.2)' if condition else ''
-                                    return [color] * len(row)
-
-                                def highlight_ret(val):
-                                    if val is None or pd.isna(val): return ''
-                                    if not isinstance(val, (int, float)): return ''
-                                    color = '#71d28a' if val > 0 else '#f29ca0'
-                                    return f'color: {color}; font-weight: bold;'
-                                
-                                format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
-                                format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
-                                format_pf = lambda x: f"{x:.2f}" if pd.notnull(x) else "—"
-
-                                st.dataframe(
-                                    res_df.style
-                                    .format({"Win Rate": format_wr, "EV": format_func, "Profit Factor": format_pf})
-                                    .map(highlight_ret, subset=["EV"])
-                                    .apply(highlight_best, axis=1)
-                                    .set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),
-                                    use_container_width=False, # Changed to False for content fitting
-                                    column_config={
-                                        "Days": st.column_config.NumberColumn("Days"),
-                                        "Profit Factor": st.column_config.NumberColumn("Profit Factor"),
-                                        "Win Rate": st.column_config.TextColumn("Win Rate"),
-                                        "EV": st.column_config.TextColumn("EV"),
-                                        "Count": st.column_config.NumberColumn("Count")
-                                    },
-                                    hide_index=True,
-                                    height=get_table_height(res_df, max_rows=50)
-                                )
-
-                        st.markdown("<br><br><br>", unsafe_allow_html=True)
-
-    with tab_div:
-        data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
-        
-        with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
-            f_col1, f_col2, f_col3, f_col4 = st.columns(4)
-            with f_col1:
-                st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                * **Identification**: Scans for **True Pivots** over a **{SIGNAL_LOOKBACK_PERIOD}-period** window.
-                * **Divergence**: 
-                    * **Bullish**: Price makes a Lower Low, but RSI makes a Higher Low.
-                    * **Bearish**: Price makes a Higher High, but RSI makes a Lower High.
-                * **Invalidation**: If RSI crosses the 50 midline between pivots, the setup is reset.
-                """)
-            with f_col2:
-                st.markdown('<div class="footer-header">🔮 SIGNAL-BASED OPTIMIZATION</div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                * **New Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal type (e.g., Daily Bullish Divergence) for the ticker.
-                * **Optimization Loop**: It calculates the forward returns for specified trading periods for each historical signal.
-                * **Selection**: It compares these holding periods and selects the **Optimal Time Period** based on the highest **Profit Factor** (or SQN if selected).
-                * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
-                """)
-            with f_col3:
-                st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
-                st.markdown("""
-                * <b>Day/Week Δ</b>: Date the Divergence was confirmed (Pivot 2).
-                * <b>RSI Δ</b>: RSI value at Pivot 1 vs Pivot 2.
-                * <b>Price Δ</b>: Price at Pivot 1 vs Pivot 2.
-                * <b>Best Period</b>: The historical holding period (e.g., 21d/13w) that produced the best Profit Factor.
-                * <b>Profit Factor</b>: Gross Wins / Gross Losses. Measures efficiency.
-                    * **Bullish Table**: Win = Price went **UP**.
-                    * **Bearish Table**: Win = Price went **DOWN**.
-                * <b>Win Rate</b>: Percentage of historical trades that resulted in a "Win" (based on signal type above).
-                * <b>EV</b>: Expected Value. Average return per trade.
-                    * **Bullish Table**: Positive EV means the stock historically **rose**.
-                    * **Bearish Table**: Positive EV means the stock historically **fell** (profitable for shorts/puts).
-                * <b>EV Target</b>: Signal Price CLOSE x (1+EV). (If N=0, Target=0)
-                * <b>N</b>: Total historical instances used for the stats in the Winning Period.
-                """, unsafe_allow_html=True)
-            with f_col4:
-                st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                * **EMA{EMA8_PERIOD}**: Bullish (Last Close > EMA8) or Bearish (Last Close < EMA8).
-                * **EMA{EMA21_PERIOD}**: Bullish (Last Close > EMA21) or Bearish (Last Close < EMA21).
-                * **V_HI**: Signal candle volume is > 150% of the 30-day average.
-                * **V_GROW**: Volume on the second pivot (P2) is higher than the first pivot (P1).
-                """)
-        
-        if data_option_div:
-            try:
-                key = dataset_map[data_option_div]
-                master = load_parquet_and_clean(key)
-                
-                if master is not None and not master.empty:
-                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                    
-                    date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
-                    if date_col_raw:
-                        max_dt_obj = pd.to_datetime(master[date_col_raw]).max()
-                        target_highlight_daily = max_dt_obj.strftime('%Y-%m-%d')
-                        days_to_subtract = max_dt_obj.weekday() + (7 if max_dt_obj.weekday() < 4 else 0)
-                        target_highlight_weekly = (max_dt_obj - timedelta(days=days_to_subtract)).strftime('%Y-%m-%d')
-                    
-                    all_tickers = sorted(master[t_col].unique())
-                    with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-                        sq_div = st.text_input("Filter...", key="rsi_div_filter_ticker").upper()
-                        ft_div = [t for t in all_tickers if sq_div in t]
-                        
-                        cols = st.columns(6)
-                        rows_per_col = math.ceil(len(ft_div) / 6)
-                        for i in range(6):
-                            start = i * rows_per_col
-                            end = start + rows_per_col
-                            subset = ft_div[start:end]
-                            with cols[i]:
-                                for t in subset:
-                                    st.write(t)
-
-                    c_d1, c_d2, c_d3, c_d4 = st.columns(4)
-                    with c_d1:
-                         min_n_div = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_div_min_n, step=1, key="rsi_div_min_n", on_change=save_rsi_state, args=("rsi_div_min_n", "saved_rsi_div_min_n"))
-                    with c_d2:
-                         periods_str_div_days = st.text_input("Test Periods (Trading Days)", value=st.session_state.saved_rsi_div_periods_days, key="rsi_div_periods_days", on_change=save_rsi_state, args=("rsi_div_periods_days", "saved_rsi_div_periods_days"))
-                    with c_d3:
-                         periods_str_div_weeks = st.text_input("Test Periods (Weeks)", value=st.session_state.saved_rsi_div_periods_weeks, key="rsi_div_periods_weeks", on_change=save_rsi_state, args=("rsi_div_periods_weeks", "saved_rsi_div_periods_weeks"))
-                    with c_d4:
-                         curr_div_opt = st.session_state.saved_rsi_div_opt
-                         idx_div_opt = ["Profit Factor", "SQN"].index(curr_div_opt) if curr_div_opt in ["Profit Factor", "SQN"] else 0
-                         opt_mode_div = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_div_opt, key="rsi_div_opt", on_change=save_rsi_state, args=("rsi_div_opt", "saved_rsi_div_opt"))
-                    
-                    periods_div_days = parse_periods(periods_str_div_days)
-                    periods_div_weeks = parse_periods(periods_str_div_weeks)
-                    
-                    div_opt_code = OPT_MAP[opt_mode_div]
-
-                    raw_results_div = []
-                    progress_bar = st.progress(0, text="Scanning Divergences...")
-                    grouped = master.groupby(t_col)
-                    grouped_list = list(grouped)
-                    total_groups = len(grouped_list)
-                    
-                    for i, (ticker, group) in enumerate(grouped_list):
-                        d_d, d_w = prepare_data(group.copy())
-                        if d_d is not None: raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div_days, optimize_for=div_opt_code))
-                        if d_w is not None: raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div_weeks, optimize_for=div_opt_code))
-                        if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
-                    
-                    progress_bar.empty()
-                    
-                    if raw_results_div:
-                        res_div_df = pd.DataFrame(raw_results_div).sort_values(by='Signal_Date_ISO', ascending=False)
-                        consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
-                        
-                        for tf in ['Daily', 'Weekly']:
-                            target_highlight = target_highlight_weekly if tf == 'Weekly' else target_highlight_daily
-                            date_header = "Week Δ" if tf == 'Weekly' else "Day Δ"
-                            
-                            for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                                st.subheader(f"{emoji} {tf} {s_type} Signals")
-                                tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
-                                
-                                price_header = "Low Price Δ" if s_type == 'Bullish' else "High Price Δ"
-                                
-                                if not tbl_df.empty:
-                                    def style_div_df(df_in):
-                                        def highlight_row(row):
-                                            styles = [''] * len(row)
-                                            if row['Signal_Date_ISO'] == target_highlight:
-                                                idx = df_in.columns.get_loc('Date_Display')
-                                                styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
-                                            
-                                            if 'EV' in df_in.columns:
-                                                val = row['EV']
-                                                if pd.notnull(val) and val != 0:
-                                                    is_green = val > 0
-                                                    bg = 'background-color: #e6f4ea; color: #1e7e34;' if is_green else 'background-color: #fce8e6; color: #c5221f;'
-                                                    idx = df_in.columns.get_loc('EV')
-                                                    styles[idx] = f'{bg} font-weight: 500;'
-                                            return styles
-                                        return df_in.style.apply(highlight_row, axis=1)
-
-                                    st.dataframe(
-                                        style_div_df(tbl_df),
-                                        column_config={
-                                            "Ticker": st.column_config.TextColumn("Ticker"),
-                                            "Tags": st.column_config.ListColumn("Tags", width="medium"), 
-                                            "Date_Display": st.column_config.TextColumn(date_header),
-                                            "RSI_Display": st.column_config.TextColumn("RSI Δ"),
-                                            "Price_Display": st.column_config.TextColumn(price_header),
-                                            "Last_Close": st.column_config.TextColumn("Last Close"),
-                                            "Best Period": st.column_config.TextColumn("Best Period"),
-                                            "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
-                                            "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
-                                            "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
-                                            "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
-                                            "N": st.column_config.NumberColumn("N"),
-                                            "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="System Quality Number"),
-                                            "Signal_Date_ISO": None, "Type": None, "Timeframe": None
-                                        },
-                                        hide_index=True,
-                                        use_container_width=True,
-                                        height=get_table_height(tbl_df, max_rows=50)
-                                    )
-                                    st.markdown("<br><br>", unsafe_allow_html=True)
-                                else: st.info("No signals.")
-                    else: st.warning("No Divergence signals found.")
-                else:
-                    st.error(f"Failed to load dataset: {data_option_div}")
-            except Exception as e: st.error(f"Analysis failed: {e}")
-
-    with tab_pct:
-        data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
-        
-        with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                 st.markdown('<div class="footer-header">⚙️ STRATEGY</div>', unsafe_allow_html=True)
-                 st.markdown("""
-                * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
-                * **Signal-Based Optimization**: Instead of matching RSI values, this backtester finds all historical instances where the stock "Left the Low/High" and calculates performance.
-                * **Optimization Loop**: Calculates returns for multiple days (or weeks) and selects the Winner based on **Profit Factor** (or SQN if selected).
-                * **Data Constraint**: This scanner utilizes up to 10 years of data if provided in the source file.
-                """)
-            with c2:
-                st.markdown('<div class="footer-header">🔢 PERCENTILE DEFINITION</div>', unsafe_allow_html=True)
-                st.markdown("""
-                * **Low/High Percentile**: Calculated based on the full history (up to 10 years). 
-                * **Example**: If RSI < 10th Percentile, it means the current RSI is lower than it has been 90% of the time historically. This adapts to each stock's unique personality better than fixed 30/70 levels.
-                """)
-            with c3:
-                st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
-                st.markdown("""
-                * **Date**: The date the signal fired (Left Low/High).
-                * **RSI Δ**: RSI movement (e.g., 10th-Pct ↗ Current-RSI).
-                * **Signal Close**: Price when signal fired.
-                * **Best Period**: The historical holding period (e.g., 21d) that produced the best result (PF or SQN).
-                * **Profit Factor**: Gross Wins / Gross Losses. 
-                    * **Leaving Low**: Win = Price went **UP**.
-                    * **Leaving High**: Win = Price went **DOWN**.
-                * **Win Rate**: Percentage of historical trades that resulted in a "Win".
-                * **EV**: Expected Value. Average return per trade.
-                * **EV Target**: Signal Close × (1 + EV). (If N=0, Target=0)
-                * **N**: Total historical instances used for the stats in the Winning Period.
-                * **SQN**: System Quality Number. Measures relationship between expectancy and volatility.
-                """)
-        
-        if data_option_pct:
-            try:
-                key = dataset_map[data_option_pct]
-                master = load_parquet_and_clean(key)
-                
-                if master is not None and not master.empty:
-                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                    date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
-                    max_date_in_set = None
-                    if date_col_raw:
-                        max_dt_obj = pd.to_datetime(master[date_col_raw]).max()
-                        max_date_in_set = max_dt_obj.date()
-
-                    all_tickers = sorted(master[t_col].unique())
-                    with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-                        sq_pct = st.text_input("Filter...", key="rsi_pct_filter_ticker").upper()
-                        ft_pct = [t for t in all_tickers if sq_pct in t]
-                        
-                        cols = st.columns(6)
-                        rows_per_col = math.ceil(len(ft_pct) / 6)
-                        for i in range(6):
-                            start = i * rows_per_col
-                            end = start + rows_per_col
-                            subset = ft_pct[start:end]
-                            with cols[i]:
-                                for t in subset:
-                                    st.write(t)
-
-                    pct_col1, pct_col2, pct_col3 = st.columns(3)
-                    with pct_col1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=st.session_state.saved_rsi_pct_low, step=1, key="rsi_pct_low", on_change=save_rsi_state, args=("rsi_pct_low", "saved_rsi_pct_low"))
-                    with pct_col2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=st.session_state.saved_rsi_pct_high, step=1, key="rsi_pct_high", on_change=save_rsi_state, args=("rsi_pct_high", "saved_rsi_pct_high"))
-                    
-                    show_opts = ["Everything", "Leaving High", "Leaving Low"]
-                    curr_show = st.session_state.saved_rsi_pct_show
-                    idx_show = show_opts.index(curr_show) if curr_show in show_opts else 0
-                    with pct_col3: show_filter = st.selectbox("Actions to Show", show_opts, index=idx_show, key="rsi_pct_show", on_change=save_rsi_state, args=("rsi_pct_show", "saved_rsi_pct_show"))
-                    
-                    if not df_global.empty and "Trade Date" in df_global.columns:
-                        ref_date = df_global["Trade Date"].max().date()
-                    else:
-                        ref_date = date.today()
-                    default_start = ref_date - timedelta(days=14)
-                    
-                    if st.session_state.saved_rsi_pct_date is None:
-                        st.session_state.saved_rsi_pct_date = default_start
-
-                    pct_col4, pct_col5, pct_col6, pct_col7 = st.columns(4)
-                    with pct_col4: filter_date = st.date_input("Latest Date", value=st.session_state.saved_rsi_pct_date, key="rsi_pct_date", on_change=save_rsi_state, args=("rsi_pct_date", "saved_rsi_pct_date"))
-                    with pct_col5: min_n_pct = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
-                    with pct_col6: 
-                        periods_str_pct = st.text_input("Test Periods (Trading Days only)", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
-                    with pct_col7:
-                         curr_pct_opt = st.session_state.saved_rsi_pct_opt
-                         idx_pct_opt = ["Profit Factor", "SQN"].index(curr_pct_opt) if curr_pct_opt in ["Profit Factor", "SQN"] else 1
-                         opt_mode_pct = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_pct_opt, key="rsi_pct_opt", on_change=save_rsi_state, args=("rsi_pct_opt", "saved_rsi_pct_opt"))
-
-                    periods_pct = parse_periods(periods_str_pct)
-                    pct_opt_code = OPT_MAP[opt_mode_pct]
-
-                    raw_results_pct = []
-                    progress_bar = st.progress(0, text="Scanning Percentiles...")
-                    grouped = master.groupby(t_col)
-                    grouped_list = list(grouped)
-                    total_groups = len(grouped_list)
-                    
-                    for i, (ticker, group) in enumerate(grouped_list):
-                        d_d, d_w = prepare_data(group.copy())
-                        
-                        if d_d is not None:
-                            raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Daily', periods_input=periods_pct, optimize_for=pct_opt_code))
-                        
-                        if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
-                    
-                    progress_bar.empty()
-
-                    if raw_results_pct:
-                        res_pct_df = pd.DataFrame(raw_results_pct).sort_values(by='Date_Obj', ascending=False)
-                        
-                        if show_filter == "Leaving High":
-                            res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bearish']
-                        elif show_filter == "Leaving Low":
-                            res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
-                            
-                        def style_pct_df(df_in):
-                            def highlight_row(row):
-                                styles = [''] * len(row)
-                                if row['Date_Obj'] == max_date_in_set:
-                                    idx = df_in.columns.get_loc('Date')
-                                    styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
-                                
-                                if 'EV' in df_in.columns:
-                                    val = row['EV']
-                                    if pd.notnull(val) and val != 0:
-                                        is_green = val > 0
-                                        bg = 'background-color: #e6f4ea; color: #1e7e34;' if is_green else 'background-color: #fce8e6; color: #c5221f;'
-                                        idx = df_in.columns.get_loc('EV')
-                                        styles[idx] = f'{bg} font-weight: 500;'
-                                
-                                if 'Action' in df_in.columns:
-                                    act = row['Action']
-                                    idx = df_in.columns.get_loc('Action')
-                                    if "Leaving Low" in str(act):
-                                        styles[idx] = 'color: #1e7e34;' 
-                                    elif "Leaving High" in str(act):
-                                        styles[idx] = 'color: #c5221f;' 
-                                
-                                if 'SQN' in df_in.columns:
-                                    val = row['SQN']
-                                    if pd.notnull(val):
-                                        idx = df_in.columns.get_loc('SQN')
-                                        color = ''
-                                        font_weight = 'normal'
-                                        
-                                        if val < 1.6:
-                                            color = '#d32f2f'
-                                        elif 1.6 <= val < 2.0:
-                                            color = '#f57c00'
-                                        elif 2.0 <= val < 2.5:
-                                            color = '#fbc02d'
-                                        elif 2.5 <= val < 3.0:
-                                            color = '#388e3c'
-                                        elif 3.0 <= val <= 5.0:
-                                            color = '#2e7d32'
-                                            font_weight = 'bold'
-                                        elif 5.0 < val <= 7.0:
-                                            color = '#1b5e20'
-                                            font_weight = 'bold'
-                                        elif val > 7.0:
-                                            color = '#6a1b9a'
-                                            font_weight = 'bold'
-                                        
-                                        if color:
-                                            styles[idx] = f'color: {color}; font-weight: {font_weight};'
-
-                                return styles
-                            return df_in.style.apply(highlight_row, axis=1)
-
-                        st.dataframe(
-                            style_pct_df(res_pct_df),
-                            column_config={
-                                "Ticker": st.column_config.TextColumn("Ticker"),
-                                "Date": st.column_config.TextColumn("Date"),
-                                "Action": st.column_config.TextColumn("Action"),
-                                "RSI_Display": st.column_config.TextColumn("RSI Δ"),
-                                "Signal_Price": st.column_config.TextColumn("Signal Close"),
-                                "Last_Close": st.column_config.TextColumn("Last Close"), 
-                                "Best Period": st.column_config.TextColumn("Best Period"),
-                                "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
-                                "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
-                                "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
-                                "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
-                                "N": st.column_config.NumberColumn("N"),
-                                "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="How to Read the Score:\n< 1.6: Poor / Hard to Trade (Likely not worth trading)\n1.6 – 1.9: Below Average (Tradeable, but difficult)\n2.0 – 2.5: Average\n2.5 – 3.0: Good\n3.0 – 5.0: Excellent\n5.1 – 6.9: Superb\n> 7.0: Holy Grail"),
-                                "Signal_Type": None, "Date_Obj": None
-                            },
-                            hide_index=True,
-                            use_container_width=True,
-                            height=get_table_height(res_pct_df, max_rows=50)
-                        )
-                        st.markdown("<br><br>", unsafe_allow_html=True)
-                    else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
-
-            except Exception as e: st.error(f"Analysis failed: {e}")
-
-    st.title("📅 Seasonality")
-    
-    # --- Helper: Optimized Data Fetching ---
-    def fetch_history_optimized(ticker_sym, t_map):
-        pq_key = f"{ticker_sym}_PARQUET"
-        if pq_key in t_map:
-            try:
-                file_id = t_map[pq_key]
-                url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                buffer = get_gdrive_binary_data(url)
-                if buffer:
-                    df = pd.read_parquet(buffer, engine='pyarrow')
-                    if isinstance(df.index, pd.DatetimeIndex):
-                        df = df.reset_index()
-                    elif df.index.name and 'DATE' in df.index.name.upper():
-                        df = df.reset_index()
-                    elif 'Date' not in df.columns and 'DATE' not in df.columns:
-                        df = df.reset_index()
-                    return df
-            except Exception:
-                pass 
-        if ticker_sym in t_map:
-            return get_ticker_technicals(ticker_sym, t_map)
-        return fetch_yahoo_data(ticker_sym)
-
-    # --- Helper: Finance Formatting ---
-    def fmt_finance(val):
-        if pd.isna(val): return ""
-        if isinstance(val, str): return val
-        if val < 0: return f"({abs(val):.1f}%)"
-        return f"{val:.1f}%"
-
-    # --- Helper: Sector Fetching (Cached) ---
-    @st.cache_data(ttl=86400 * 7) # Cache for 7 days
-    def fetch_sector_map_cached(tickers):
-        sector_map = {}
-        # We process in small chunks to avoid overwhelming yfinance if possible, 
-        # though standard Ticker access is usually 1:1.
-        # Ideally, this should be in the user's uploaded file, but we fallback to YF.
-        
-        # Fast path: Check fast_info or info (slow)
-        # Note: Fetching info for 100+ tickers is SLOW. We will try to be lazy.
-        return sector_map
-
-    def get_sector_lazy(ticker, existing_map):
-        if ticker in existing_map: return existing_map[ticker]
-        try:
-            # Try to get sector from yfinance
-            t = yf.Ticker(ticker)
-            # info is expensive, but necessary for sector
-            sec = t.info.get('sector', 'Unknown')
-            return sec
-        except:
-            return 'Unknown'
-
-    # Create Tabs
-    tab_single, tab_scan = st.tabs(["🔎 Single Ticker Analysis", "🚀 Opportunity Scanner"])
-    
-    # ==============================================================================
-    # TAB 1: SINGLE TICKER ANALYSIS
-    # ==============================================================================
-    with tab_single:
-        with st.expander("ℹ️ Page Notes: Methodology"):
-            st.markdown("""
-            **📊 Calendar Month Performance**
-            * **Year Total (Right Column):** The **SUM** of returns for that year.
-            * **Month Average (Bottom Row):** The **AVERAGE** return for that specific month across all history.
-            """)
-
-        c1, c2, c3 = st.columns([1, 1, 1])
-        with c1:
-            ticker = st.text_input("Ticker", value="SPY", key="seas_ticker").strip().upper()
-            
-        if not ticker:
-            st.info("Please enter a ticker symbol.")
-            return
-
+    # 2. RUN SCAN BUTTON
+    if st.button("Run RSI Scan"):
         ticker_map = load_ticker_map()
-        df = None
-        
-        with st.spinner(f"Fetching history for {ticker}..."):
-            df = fetch_history_optimized(ticker, ticker_map)
-
-        if df is None or df.empty:
-            st.error(f"Could not load data for {ticker}. Check the ticker symbol or your TICKER_MAP.")
-            return
-
-        df.columns = [c.strip().upper() for c in df.columns]
-        date_col = next((c for c in df.columns if 'DATE' in c), None)
-        close_col = next((c for c in df.columns if 'CLOSE' in c), None)
-        
-        if not date_col or not close_col:
-            st.error("Data source format error: Missing Date or Close columns.")
-            return
-            
-        df[date_col] = pd.to_datetime(df[date_col])
-        df = df.set_index(date_col).sort_index()
-        
-        # Resample to Monthly Returns
-        df_monthly = df[close_col].resample('M').last()
-        df_pct = df_monthly.pct_change() * 100
-        
-        season_df = pd.DataFrame({
-            'Pct': df_pct,
-            'Year': df_pct.index.year,
-            'Month': df_pct.index.month
-        }).dropna()
-
-        today = date.today()
-        current_year = today.year
-        current_month = today.month
-        
-        hist_df = season_df[season_df['Year'] < current_year].copy()
-        curr_df = season_df[season_df['Year'] == current_year].copy()
-        
-        if hist_df.empty:
-            st.warning("Not enough historical full-year data available.")
+        if not ticker_map:
+            st.error("No TICKER_MAP found.")
         else:
-            min_avail_year = int(hist_df['Year'].min())
-            max_avail_year = int(hist_df['Year'].max())
+            all_tickers = [k for k in ticker_map.keys() if not k.endswith('_PARQUET')]
             
-            with c2:
-                start_year = st.number_input("Start Year (History)", min_value=min_avail_year, max_value=max_avail_year, value=max_avail_year-10 if max_avail_year-10 >= min_avail_year else min_avail_year, key="seas_start")
-            with c3:
-                end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_avail_year, value=max_avail_year, key="seas_end")
-
-            mask = (hist_df['Year'] >= start_year) & (hist_df['Year'] <= end_year)
-            hist_filtered = hist_df[mask].copy()
+            # Filter by Volume first (rough pass to save time)
+            valid_tickers = []
             
-            if hist_filtered.empty:
-                st.warning("No data in selected date range.")
-            else:
-                month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                
-                # --- STATS ---
-                avg_stats = hist_filtered.groupby('Month')['Pct'].mean().reindex(range(1, 13), fill_value=0)
-                win_rates = hist_filtered.groupby('Month')['Pct'].apply(lambda x: (x > 0).mean() * 100).reindex(range(1, 13), fill_value=0)
+            # Helper to get vol quickly
+            def check_vol(t):
+                try:
+                    # We can use get_ticker_technicals or fetch_yahoo_data
+                    # For speed, let's just fetch history and check
+                    # Or relying on the cached 'get_ticker_technicals' might be faster if recently used
+                    # But here, let's just use the robust fetch:
+                    df = fetch_yahoo_data(t) # or parquet if implemented
+                    if df is not None and not df.empty:
+                        avg_vol = df['Volume'].tail(30).mean()
+                        if avg_vol >= min_vol:
+                            return t, df
+                except:
+                    pass
+                return None, None
 
-                # --- OUTLOOK ---
-                cur_val = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)).get(current_month, 0.0)
-                if pd.isna(cur_val): cur_val = 0.0
-                
-                hist_avg = avg_stats.get(current_month, 0.0)
-                diff = cur_val - hist_avg
-                if diff > 0:
-                    context_str = f"Outperforming Hist Avg of {fmt_finance(hist_avg)}"
-                else:
-                    context_str = f"Underperforming Hist Avg of {fmt_finance(hist_avg)}"
-                
-                cur_color = "#71d28a" if cur_val > 0 else "#f29ca0"
-
-                idx_next = (current_month % 12) + 1
-                idx_next_2 = ((current_month + 1) % 12) + 1
-                nm_name = month_names[idx_next-1]
-                nnm_name = month_names[idx_next_2-1]
-                nm_avg = avg_stats.get(idx_next, 0.0)
-                nm_wr = win_rates.get(idx_next, 0.0)
-                nnm_avg = avg_stats.get(idx_next_2, 0.0)
-
-                if nm_avg >= 1.5 and nm_wr >= 65:
-                    positioning = "🚀 <b>Strong Bullish.</b> Historically a standout month."
-                elif nm_avg > 0 and nm_wr >= 50:
-                    positioning = "↗️ <b>Mildly Bullish.</b> Positive bias, moderate conviction."
-                elif nm_avg < 0 and nm_avg > -1.0:
-                    positioning = "⚠️ <b>Choppy/Weak.</b> Historically drags or trends flat."
-                else:
-                    positioning = "🐻 <b>Bearish.</b> Historically a weak month."
-
-                trend_vs = "improves" if nnm_avg > nm_avg else "weakens"
-                
-                st.markdown(f"""
-                <div style="background-color: rgba(128,128,128,0.05); border-left: 5px solid #66b7ff; padding: 15px; border-radius: 4px; margin-bottom: 25px;">
-                    <div style="font-weight: bold; font-size: 1.1em; margin-bottom: 8px; color: #444;">🤖 Seasonal Outlook</div>
-                    <div style="margin-bottom: 4px;">• <b>Current ({month_names[current_month-1]}):</b> <span style="color:{cur_color}; font-weight:bold;">{fmt_finance(cur_val)}</span>. {context_str}.</div>
-                    <div style="margin-bottom: 4px;">• <b>Next Month ({nm_name}):</b> {positioning} (Avg: {fmt_finance(nm_avg)}, Win Rate: {nm_wr:.1f}%)</div>
-                    <div>• <b>Following ({nnm_name}):</b> Seasonality {trend_vs} to an average of <b>{fmt_finance(nnm_avg)}</b>.</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                col_chart1, col_chart2 = st.columns(2, gap="medium")
-
-                # --- CHART 1: Performance (Line) ---
-                with col_chart1:
-                    st.subheader(f"📈 Performance Tracking")
-                    hist_cumsum = avg_stats.cumsum()
-                    line_data_hist = pd.DataFrame({
-                        'Month': range(1, 13), 'MonthName': month_names,
-                        'Value': hist_cumsum.values, 'Type': f'Avg ({start_year}-{end_year})'
-                    })
-
-                    curr_monthly_stats = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)) 
-                    curr_cumsum = curr_monthly_stats.cumsum()
-                    valid_curr_indices = curr_monthly_stats.dropna().index
-                    
-                    line_data_curr = pd.DataFrame({
-                        'Month': valid_curr_indices,
-                        'MonthName': [month_names[i-1] for i in valid_curr_indices],
-                        'Value': curr_cumsum.loc[valid_curr_indices].values,
-                        'Type': f'Current Year ({current_year})'
-                    })
-                    combined_line_data = pd.concat([line_data_hist, line_data_curr])
-                    combined_line_data['Label'] = combined_line_data['Value'].apply(fmt_finance)
-
-                    line_base = alt.Chart(combined_line_data).encode(
-                        x=alt.X('MonthName', sort=month_names, title='Month'),
-                        y=alt.Y('Value', title='Cumulative Return (%)'),
-                        color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None))
-                    )
-                    st.altair_chart((line_base.mark_line(point=True) + line_base.mark_text(dy=-10, fontSize=12, fontWeight='bold').encode(text='Label')).properties(height=350).configure_axis(labelFontSize=11, titleFontSize=13), use_container_width=True)
-
-                # --- CHART 2: Monthly Returns (Bar) ---
-                with col_chart2:
-                    st.subheader(f"📊 Monthly Returns")
-                    hist_bar_data = pd.DataFrame({'Month': range(1, 13), 'MonthName': month_names, 'Value': avg_stats.values, 'Type': 'Historical Avg'})
-                    
-                    completed_curr_df = curr_df[curr_df['Month'] < current_month].copy()
-                    curr_bar_data = pd.DataFrame()
-                    if not completed_curr_df.empty:
-                        curr_vals = completed_curr_df.groupby('Month')['Pct'].mean()
-                        curr_bar_data = pd.DataFrame({'Month': curr_vals.index, 'MonthName': [month_names[i-1] for i in curr_vals.index], 'Value': curr_vals.values, 'Type': f'{current_year} Actual'})
-                    
-                    combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
-                    combined_bar_data['Label'] = combined_bar_data['Value'].apply(fmt_finance)
-
-                    base = alt.Chart(combined_bar_data).encode(x=alt.X('MonthName', sort=month_names, title=None))
-                    bars = base.mark_bar().encode(
-                        y=alt.Y('Value', title='Return (%)'), xOffset='Type',
-                        color=alt.condition(alt.datum.Value > 0, alt.value("#71d28a"), alt.value("#f29ca0"))
-                    )
-                    st.altair_chart((bars + base.mark_text(dy=-10, fontSize=11, fontWeight='bold', color='black').encode(y=alt.Y('Value'), xOffset='Type', text='Label')).properties(height=350).configure_axis(labelFontSize=11, titleFontSize=13), use_container_width=True)
-
-                # --- CARDS ---
-                st.markdown("##### 🎯 Historical Win Rate & Expectancy")
-                cols = st.columns(6); cols2 = st.columns(6)
-                for i in range(12):
-                    mn = month_names[i]
-                    wr = win_rates.loc[i+1]
-                    avg = avg_stats.loc[i+1]
-                    border_color = "#71d28a" if avg > 0 else "#f29ca0"
-                    target_col = cols[i] if i < 6 else cols2[i-6]
-                    target_col.markdown(f"""<div style="background-color: rgba(128,128,128,0.05); border-radius: 8px; padding: 8px 5px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {border_color};"><div style="font-size: 0.85rem; font-weight: bold; color: #555;">{mn}</div><div style="font-size: 0.75rem; color: #888; margin-top:2px;">Win Rate</div><div style="font-size: 1.0rem; font-weight: 700;">{wr:.1f}%</div><div style="font-size: 0.75rem; color: #888; margin-top:2px;">Avg Rtn</div><div style="font-size: 0.9rem; font-weight: 600; color: {'#1f7a1f' if avg > 0 else '#a11f1f'};">{fmt_finance(avg)}</div></div>""", unsafe_allow_html=True)
-
-                # --- HEATMAP ---
-                st.markdown("---"); st.subheader("🗓️ Monthly Returns Heatmap")
-                pivot_hist = hist_filtered.pivot(index='Year', columns='Month', values='Pct')
-                if not completed_curr_df.empty:
-                    pivot_curr = completed_curr_df.pivot(index='Year', columns='Month', values='Pct')
-                    full_pivot = pd.concat([pivot_curr, pivot_hist])
-                else: full_pivot = pivot_hist
-
-                full_pivot.columns = [month_names[c-1] for c in full_pivot.columns]
-                for m in month_names:
-                    if m not in full_pivot.columns: full_pivot[m] = np.nan
-                full_pivot = full_pivot[month_names].sort_index(ascending=False)
-                
-                full_pivot["Year Total"] = full_pivot.sum(axis=1, min_count=1)
-                avg_row = full_pivot[month_names].mean(axis=0)
-                avg_row["Year Total"] = full_pivot["Year Total"].mean()
-                avg_row.name = "Month Average"
-                
-                full_pivot = pd.concat([full_pivot, avg_row.to_frame().T])
-
-                def color_map(val):
-                    if pd.isna(val): return ""
-                    if val == 0: return "color: #888;"
-                    color = "#1f7a1f" if val > 0 else "#a11f1f"
-                    bg_color = "rgba(113, 210, 138, 0.2)" if val > 0 else "rgba(242, 156, 160, 0.2)"
-                    return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
-                
-                st.dataframe(full_pivot.style.format(fmt_finance).applymap(color_map), use_container_width=True, height=(len(full_pivot)+1)*35+3)
-
-    # ==============================================================================
-    # TAB 2: OPPORTUNITY SCANNER
-    # ==============================================================================
-    with tab_scan:
-        with st.expander("ℹ️ Page Notes: Methodology & Metrics"):
-            st.markdown("""
-            **🚀 Rolling Forward Returns**
-            * **Methodology**: Scans 10 years of history for dates matching the Start Date (+/- 3 days) and calculates performance for future periods.
-            * **Consistency (Sharpe)**: Calculated as `Average Return / Std Dev`. High score (>2.0) means consistent gains. Low score (<1.0) means volatile/hit-or-miss.
-            * **Mean Reversion**: Looks for tickers with **Positive Seasonality** (Green Historic EV) but **Negative Recent Performance** (Red Last 21d). These may be "coiled" springs.
-            """)
-
-        st.subheader("🚀 High-EV Seasonality Scanner")
-        
-        sc1, sc2, sc3 = st.columns([1, 1, 1])
-        with sc1:
-            scan_date = st.date_input("Start Date for Scan", value=date.today(), key="seas_scan_date")
-            sector_input = st.selectbox("Sector Filter", ["All", "Technology", "Consumer Cyclical", "Communication Services", "Financial", "Healthcare", "Energy", "Industrials", "Consumer Defensive", "Real Estate", "Utilities", "Basic Materials"], key="seas_scan_sector")
-        with sc2:
-            min_mc_scan = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="seas_scan_mc")
-            mc_thresh_val = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mc_scan, 1e10)
-        with sc3:
-            scan_lookback = st.number_input("Lookback Years", min_value=5, max_value=20, value=10, key="seas_scan_lb")
+            # We need to fetch data for ALL tickers to scan. This can be slow.
+            # Let's use ThreadPool
+            status_text = st.empty()
+            status_text.write(f"Scanning {len(all_tickers)} tickers...")
             
-        start_scan = st.button("Run Scanner")
-        
-        if start_scan:
-            ticker_map = load_ticker_map()
-            if not ticker_map:
-                st.error("No TICKER_MAP found in secrets.")
-            else:
-                all_tickers = [k for k in ticker_map.keys() if not k.upper().endswith('_PARQUET')]
-                results = []
+            progress_bar = st.progress(0)
+            
+            scan_results = []
+            
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                # We'll submit tasks. 
+                # Note: 'check_vol' returns (ticker, df)
+                future_to_ticker = {executor.submit(check_vol, t): t for t in all_tickers}
                 
-                # --- Filter Tickers ---
-                status_text = st.empty()
-                status_text.text(f"Filtering {len(all_tickers)} tickers by Market Cap & Sector...")
-                
-                valid_tickers = []
-                
-                # We can't easily thread yfinance info calls perfectly without rate limits, 
-                # so we do a simplified check.
-                
-                # Pre-fetch cached sectors if "All" is not selected
-                if sector_input != "All":
-                    with ThreadPoolExecutor(max_workers=10) as executor:
-                        future_to_t = {executor.submit(get_sector_lazy, t, {}): t for t in all_tickers}
-                        sector_cache = {}
-                        for future in as_completed(future_to_t):
-                            t = future_to_t[future]
-                            sector_cache[t] = future.result()
-                
-                def check_filters(t):
-                    # 1. Cap Check (Fastest)
-                    mc = get_market_cap(t)
-                    if mc < mc_thresh_val: return None
-                    
-                    # 2. Sector Check (Slower)
-                    if sector_input != "All":
-                        sec = sector_cache.get(t, 'Unknown')
-                        # Simple fuzzy match
-                        if sector_input.lower() not in sec.lower(): return None
-                        
-                    return t
-
-                with ThreadPoolExecutor(max_workers=20) as executor:
-                    futures = {executor.submit(check_filters, t): t for t in all_tickers}
-                    for future in as_completed(futures):
-                        res = future.result()
-                        if res: valid_tickers.append(res)
-                
-                status_text.text(f"Scanning {len(valid_tickers)} tickers for opportunities...")
-                progress_bar = st.progress(0)
-                
-                def calc_forward_returns(ticker_sym):
+                completed = 0
+                for future in as_completed(future_to_ticker):
+                    ticker = future_to_ticker[future]
                     try:
-                        d_df = fetch_history_optimized(ticker_sym, ticker_map)
-                        if d_df is None or d_df.empty: return None
-                        
-                        d_df.columns = [c.strip().upper() for c in d_df.columns]
-                        date_c = next((c for c in d_df.columns if 'DATE' in c), None)
-                        close_c = next((c for c in d_df.columns if 'CLOSE' in c), None)
-                        if not date_c or not close_c: return None
-                        
-                        d_df[date_c] = pd.to_datetime(d_df[date_c])
-                        d_df = d_df.sort_values(date_c).reset_index(drop=True)
-                        
-                        cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
-                        d_df_hist = d_df[d_df[date_c] >= cutoff].copy()
-                        if len(d_df_hist) < 252: return None 
-                        
-                        # Calculate Recent Performance (Last 21 days from TODAY/Last Data)
-                        # Used for Mean Reversion logic
-                        recent_perf = 0.0
-                        if len(d_df) > 21:
-                            last_p = d_df[close_c].iloc[-1]
-                            prev_p = d_df[close_c].iloc[-22] # approx 1 month
-                            recent_perf = ((last_p - prev_p) / prev_p) * 100
-                        
-                        target_doy = scan_date.timetuple().tm_yday
-                        d_df_hist['DOY'] = d_df_hist[date_c].dt.dayofyear
-                        
-                        matches = d_df_hist[(d_df_hist['DOY'] >= target_doy - 3) & (d_df_hist['DOY'] <= target_doy + 3)].copy() # Was originally 3 days
-                        matches['Year'] = matches[date_c].dt.year
-                        matches = matches.drop_duplicates(subset=['Year'])
-                        curr_y = date.today().year
-                        matches = matches[matches['Year'] < curr_y]
-                        
-                        if len(matches) < 3: return None
-                        
-                        stats_row = {'Ticker': ticker_sym, 'N': len(matches), 'Recent_21d': recent_perf}
-                        periods = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
-                        
-                        for p_name, trading_days in periods.items():
-                            returns = []
-                            for idx in matches.index:
-                                entry_p = d_df_hist.loc[idx, close_c]
-                                exit_idx = idx + trading_days
-                                if exit_idx < len(d_df_hist):
-                                    exit_p = d_df_hist.loc[exit_idx, close_c]
-                                    ret = (exit_p - entry_p) / entry_p
-                                    returns.append(ret)
+                        t_sym, df_hist = future.result()
+                        if t_sym and df_hist is not None:
+                            # Perform Analysis based on mode
+                            df_hist = df_hist.sort_values('Date').reset_index(drop=True)
                             
-                            if returns:
-                                returns_arr = np.array(returns)
-                                avg_ret = np.mean(returns_arr) * 100
-                                win_r = np.mean(returns_arr > 0) * 100
-                                std_dev = np.std(returns_arr) * 100
-                                # Sharpe-ish Metric: EV / StdDev
-                                sharpe = avg_ret / std_dev if std_dev > 0.1 else 0.0
-                            else:
-                                avg_ret = 0.0; win_r = 0.0; sharpe = 0.0
+                            # Calculate RSI (14) if not present
+                            if 'RSI' not in df_hist.columns:
+                                delta = df_hist['Close'].diff()
+                                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                                rs = gain / loss
+                                df_hist['RSI'] = 100 - (100 / (1 + rs))
+                            
+                            current_rsi = df_hist['RSI'].iloc[-1]
+                            last_close = df_hist['Close'].iloc[-1]
+                            
+                            # --- LOGIC PER MODE ---
+                            
+                            # A. STANDARD RSI
+                            if scan_mode == "Standard RSI Levels":
+                                # Oversold < 30, Overbought > 70
+                                if current_rsi < 30:
+                                    scan_results.append({
+                                        "Ticker": t_sym, "Signal": "Oversold", "RSI": current_rsi, "Price": last_close, "Context": "RSI < 30"
+                                    })
+                                elif current_rsi > 70:
+                                    scan_results.append({
+                                        "Ticker": t_sym, "Signal": "Overbought", "RSI": current_rsi, "Price": last_close, "Context": "RSI > 70"
+                                    })
+                                    
+                            # B. DIVERGENCE (Simplified)
+                            elif scan_mode == "RSI Divergence":
+                                # Look at last 30 days
+                                # Bullish Div: Price Low < Prev Low AND RSI Low > Prev Low
+                                # Bearish Div: Price High > Prev High AND RSI High < Prev High
+                                # This requires peak/trough detection. 
+                                # Let's do a simple check of min/max in recent window vs previous window
                                 
-                            stats_row[f"{p_name}_EV"] = avg_ret
-                            stats_row[f"{p_name}_WR"] = win_r
-                            stats_row[f"{p_name}_Sharpe"] = sharpe
-                            
-                        return stats_row
-                    except Exception:
-                        return None
+                                # Split data into Recent (0-15 days ago) and Previous (15-45 days ago)
+                                if len(df_hist) > 50:
+                                    recent = df_hist.iloc[-15:]
+                                    previous = df_hist.iloc[-45:-15]
+                                    
+                                    # Bullish
+                                    rec_low_p = recent['Close'].min()
+                                    prev_low_p = previous['Close'].min()
+                                    
+                                    # Find the RSI value at those specific dates (approximate)
+                                    rec_low_idx = recent['Close'].idxmin()
+                                    prev_low_idx = previous['Close'].idxmin()
+                                    
+                                    rec_rsi_at_low = df_hist.loc[rec_low_idx, 'RSI']
+                                    prev_rsi_at_low = df_hist.loc[prev_low_idx, 'RSI']
+                                    
+                                    if rec_low_p < prev_low_p and rec_rsi_at_low > prev_rsi_at_low:
+                                         scan_results.append({
+                                            "Ticker": t_sym, "Signal": "Bullish Div", "RSI": current_rsi, "Price": last_close, "Context": f"Price New Low ({rec_low_p:.2f}) / RSI Higher ({rec_rsi_at_low:.1f})"
+                                        })
 
-                with ThreadPoolExecutor(max_workers=20) as executor: 
-                    futures = {executor.submit(calc_forward_returns, t): t for t in valid_tickers}
-                    completed = 0
-                    for future in as_completed(futures):
-                        res = future.result()
-                        if res: results.append(res)
-                        completed += 1
-                        if completed % 5 == 0: progress_bar.progress(completed / len(valid_tickers))
-                
-                progress_bar.empty()
-                status_text.empty()
-                
-                if not results:
-                    st.warning("No opportunities found.")
-                else:
-                    res_df = pd.DataFrame(results)
-                    st.write("---")
+                                    # Bearish
+                                    rec_high_p = recent['Close'].max()
+                                    prev_high_p = previous['Close'].max()
+                                    
+                                    rec_high_idx = recent['Close'].idxmax()
+                                    prev_high_idx = previous['Close'].idxmax()
+                                    
+                                    rec_rsi_at_high = df_hist.loc[rec_high_idx, 'RSI']
+                                    prev_rsi_at_high = df_hist.loc[prev_high_idx, 'RSI']
+                                    
+                                    if rec_high_p > prev_high_p and rec_rsi_at_high < prev_rsi_at_high:
+                                         scan_results.append({
+                                            "Ticker": t_sym, "Signal": "Bearish Div", "RSI": current_rsi, "Price": last_close, "Context": f"Price New High ({rec_high_p:.2f}) / RSI Lower ({rec_rsi_at_high:.1f})"
+                                        })
+
+                            # C. PERCENTILE EXTREMES
+                            elif scan_mode == "RSI Percentile Extremes":
+                                # Calculate rank of current RSI vs last 252 days
+                                lookback_slice = df_hist['RSI'].iloc[-lookback_days:]
+                                if len(lookback_slice) > 100:
+                                    # Rank
+                                    rank = (lookback_slice < current_rsi).mean() * 100 # Percentile (0-100)
+                                    
+                                    if rank < 5:
+                                        scan_results.append({
+                                            "Ticker": t_sym, "Signal": "Extremely Low", "RSI": current_rsi, "Price": last_close, "Context": f"{rank:.1f}th Percentile (Low)"
+                                        })
+                                    elif rank > 95:
+                                        scan_results.append({
+                                            "Ticker": t_sym, "Signal": "Extremely High", "RSI": current_rsi, "Price": last_close, "Context": f"{rank:.1f}th Percentile (High)"
+                                        })
+
+                    except Exception as e:
+                        # Fail silently for individual ticker errors
+                        pass
                     
-                    def highlight_ev(val):
-                        if pd.isna(val): return ""
-                        color = "#1f7a1f" if val > 0 else "#a11f1f"
-                        bg = "rgba(113, 210, 138, 0.25)" if val > 0 else "rgba(242, 156, 160, 0.25)"
-                        return f'background-color: {bg}; color: {color}; font-weight: bold;'
-
-                    # --- ARBITRAGE / MEAN REVERSION TABLE ---
-                    # Logic: 21d EV > 3% (Good Seasonality) AND Recent_21d < -3% (Beaten Down)
-                    arb_df = res_df[
-                        (res_df['21d_EV'] > 3.0) & 
-                        (res_df['Recent_21d'] < -3.0)
-                    ].copy()
-                    
-                    if not arb_df.empty:
-                        st.subheader("💎 Arbitrage / Catch-Up Candidates")
-                        st.caption("Stocks with strong historical seasonality (EV > 3%) that are currently beaten down (Last 21d < -3%).")
-                        
-                        arb_df['Gap'] = arb_df['21d_EV'] - arb_df['Recent_21d']
-                        arb_display = arb_df.sort_values(by='Gap', ascending=False).head(15)
-                        
-                        st.dataframe(
-                            arb_display[['Ticker', 'Recent_21d', '21d_EV', '21d_WR', 'Gap']].style
-                            .format({'Recent_21d': fmt_finance, '21d_EV': fmt_finance, '21d_WR': "{:.1f}%", 'Gap': "{:.1f}%"})
-                            .applymap(lambda x: 'color: #d32f2f; font-weight:bold;', subset=['Recent_21d'])
-                            .applymap(lambda x: 'color: #2e7d32; font-weight:bold;', subset=['21d_EV'])
-                            .background_gradient(cmap='Greens', subset=['Gap']),
-                            use_container_width=True, hide_index=True
-                        )
-                        st.write("---")
-
-                    # --- STANDARD TABLES ---
-                    st.subheader(f"🗓️ Forward Returns (from {scan_date.strftime('%d %b')})")
-                    
-                    c_scan1, c_scan2 = st.columns(2)
-                    c_scan3, c_scan4 = st.columns(2)
-                    fixed_height = 738
-
-                    for col_obj, p_label, sort_col, sharpe_col in [
-                        (c_scan1, "**+21 Trading Days**", "21d_EV", "21d_Sharpe"),
-                        (c_scan2, "**+42 Trading Days**", "42d_EV", "42d_Sharpe"),
-                        (c_scan3, "**+63 Trading Days**", "63d_EV", "63d_Sharpe"),
-                        (c_scan4, "**+126 Trading Days**", "126d_EV", "126d_Sharpe")
-                    ]:
-                        with col_obj:
-                            st.markdown(p_label)
-                            # Sort by Sharpe/Consistency if desired, or just show it? 
-                            # Let's keep sorting by EV but show Sharpe.
-                            top_df = res_df.sort_values(by=sort_col, ascending=False).head(20)
-                            
-                            st.dataframe(
-                                top_df[['Ticker', sort_col, sort_col.replace('EV','WR'), sharpe_col]].style
-                                .format({
-                                    sort_col: fmt_finance, 
-                                    sort_col.replace('EV','WR'): "{:.1f}%",
-                                    sharpe_col: "{:.2f}"
-                                })
-                                .applymap(highlight_ev, subset=[sort_col])
-                                .background_gradient(cmap='RdYlGn', subset=[sharpe_col], vmin=0.5, vmax=3.0),
-                                use_container_width=True, hide_index=True, height=fixed_height,
-                                column_config={
-                                    sharpe_col: st.column_config.NumberColumn("Sharpe", help="Consistency Score (EV / StdDev). >2 is very consistent.")
-                                }
-                            )
-
-    st.title("📅 Seasonality")
-    
-    # --- Helper: Optimized Data Fetching (Parquet > CSV > Yahoo) ---
-    def fetch_history_optimized(ticker_sym, t_map):
-        pq_key = f"{ticker_sym}_PARQUET"
-        if pq_key in t_map:
-            try:
-                file_id = t_map[pq_key]
-                url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                buffer = get_gdrive_binary_data(url)
-                if buffer:
-                    df = pd.read_parquet(buffer, engine='pyarrow')
-                    if isinstance(df.index, pd.DatetimeIndex):
-                        df = df.reset_index()
-                    elif df.index.name and 'DATE' in df.index.name.upper():
-                        df = df.reset_index()
-                    elif 'Date' not in df.columns and 'DATE' not in df.columns:
-                        df = df.reset_index()
-                    return df
-            except Exception:
-                pass 
-        if ticker_sym in t_map:
-            return get_ticker_technicals(ticker_sym, t_map)
-        return fetch_yahoo_data(ticker_sym)
-
-    # --- Helper: Finance Formatting ---
-    def fmt_finance(val):
-        if pd.isna(val): return ""
-        if isinstance(val, str): return val
-        if val < 0: return f"({abs(val):.1f}%)"
-        return f"{val:.1f}%"
-
-    # Create Tabs
-    tab_single, tab_scan = st.tabs(["🔎 Single Ticker Analysis", "🚀 Opportunity Scanner"])
-    
-    # ==============================================================================
-    # TAB 1: SINGLE TICKER ANALYSIS
-    # ==============================================================================
-    with tab_single:
-        with st.expander("ℹ️ Page Notes: Methodology"):
-            st.markdown("""
-            **📊 Calendar Month Performance**
-            * **Year Total:** The **SUM** of monthly returns for that year.
-            * **Month Average:** The **AVERAGE** return for that specific month across the selected history.
-            """)
-
-        c1, c2, c3 = st.columns([1, 1, 1])
-        with c1:
-            ticker = st.text_input("Ticker", value="SPY", key="seas_ticker").strip().upper()
+                    completed += 1
+                    if completed % 5 == 0:
+                        progress_bar.progress(completed / len(all_tickers))
             
-        if not ticker:
-            st.info("Please enter a ticker symbol.")
-            return
-
-        ticker_map = load_ticker_map()
-        df = None
-        
-        with st.spinner(f"Fetching history for {ticker}..."):
-            df = fetch_history_optimized(ticker, ticker_map)
-
-        if df is None or df.empty:
-            st.error(f"Could not load data for {ticker}. Check the ticker symbol or your TICKER_MAP.")
-            return
-
-        df.columns = [c.strip().upper() for c in df.columns]
-        date_col = next((c for c in df.columns if 'DATE' in c), None)
-        close_col = next((c for c in df.columns if 'CLOSE' in c), None)
-        
-        if not date_col or not close_col:
-            st.error("Data source format error: Missing Date or Close columns.")
-            return
+            progress_bar.empty()
+            status_text.empty()
             
-        df[date_col] = pd.to_datetime(df[date_col])
-        df = df.set_index(date_col).sort_index()
-        
-        # Resample to Monthly Returns
-        df_monthly = df[close_col].resample('M').last()
-        df_pct = df_monthly.pct_change() * 100
-        
-        season_df = pd.DataFrame({
-            'Pct': df_pct,
-            'Year': df_pct.index.year,
-            'Month': df_pct.index.month
-        }).dropna()
-
-        today = date.today()
-        current_year = today.year
-        current_month = today.month
-        
-        hist_df = season_df[season_df['Year'] < current_year].copy()
-        curr_df = season_df[season_df['Year'] == current_year].copy()
-        
-        if hist_df.empty:
-            st.warning("Not enough historical full-year data available.")
-        else:
-            min_avail_year = int(hist_df['Year'].min())
-            max_avail_year = int(hist_df['Year'].max())
-            
-            with c2:
-                start_year = st.number_input("Start Year (History)", min_value=min_avail_year, max_value=max_avail_year, value=max_avail_year-10 if max_avail_year-10 >= min_avail_year else min_avail_year, key="seas_start")
-            with c3:
-                end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_avail_year, value=max_avail_year, key="seas_end")
-
-            mask = (hist_df['Year'] >= start_year) & (hist_df['Year'] <= end_year)
-            hist_filtered = hist_df[mask].copy()
-            
-            if hist_filtered.empty:
-                st.warning("No data in selected date range.")
+            # DISPLAY RESULTS
+            if not scan_results:
+                st.info("No tickers matched the criteria.")
             else:
-                month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                
-                avg_stats = hist_filtered.groupby('Month')['Pct'].mean().reindex(range(1, 13), fill_value=0)
-                win_rates = hist_filtered.groupby('Month')['Pct'].apply(lambda x: (x > 0).mean() * 100).reindex(range(1, 13), fill_value=0)
-
-                hist_cumsum = avg_stats.cumsum()
-                line_data_hist = pd.DataFrame({
-                    'Month': range(1, 13),
-                    'MonthName': month_names,
-                    'Value': hist_cumsum.values,
-                    'Type': f'Avg ({start_year}-{end_year})'
-                })
-
-                curr_monthly_stats = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)) 
-                curr_cumsum = curr_monthly_stats.cumsum()
-                valid_curr_indices = curr_monthly_stats.dropna().index
-                
-                line_data_curr = pd.DataFrame({
-                    'Month': valid_curr_indices,
-                    'MonthName': [month_names[i-1] for i in valid_curr_indices],
-                    'Value': curr_cumsum.loc[valid_curr_indices].values,
-                    'Type': f'Current Year ({current_year})'
-                })
-                combined_line_data = pd.concat([line_data_hist, line_data_curr])
-                combined_line_data['Label'] = combined_line_data['Value'].apply(fmt_finance)
-
-                # Outlook Logic
-                cur_val = curr_monthly_stats.get(current_month, 0.0)
-                if pd.isna(cur_val): cur_val = 0.0
-                cur_color = "#71d28a" if cur_val > 0 else "#f29ca0"
-                
-                hist_avg = avg_stats.get(current_month, 0.0)
-                diff = cur_val - hist_avg
-                if diff > 0: context_str = f"Outperforming Hist Avg of {fmt_finance(hist_avg)}"
-                else: context_str = f"Underperforming Hist Avg of {fmt_finance(hist_avg)}"
-
-                idx_next = (current_month % 12) + 1
-                idx_next_2 = ((current_month + 1) % 12) + 1
-                nm_name = month_names[idx_next-1]
-                nnm_name = month_names[idx_next_2-1]
-                nm_avg = avg_stats.get(idx_next, 0.0)
-                nm_wr = win_rates.get(idx_next, 0.0)
-                nnm_avg = avg_stats.get(idx_next_2, 0.0)
-
-                if nm_avg >= 1.5 and nm_wr >= 65:
-                    positioning = "🚀 <b>Strong Bullish.</b> Historically a standout month."
-                elif nm_avg > 0 and nm_wr >= 50:
-                    positioning = "↗️ <b>Mildly Bullish.</b> Positive bias, moderate conviction."
-                elif nm_avg < 0 and nm_avg > -1.0:
-                    positioning = "⚠️ <b>Choppy/Weak.</b> Historically drags or trends flat."
-                else:
-                    positioning = "🐻 <b>Bearish.</b> Historically a weak month."
-
-                trend_vs = "improves" if nnm_avg > nm_avg else "weakens"
-                
-                st.markdown(f"""
-                <div style="background-color: rgba(128,128,128,0.05); border-left: 5px solid #66b7ff; padding: 15px; border-radius: 4px; margin-bottom: 25px;">
-                    <div style="font-weight: bold; font-size: 1.1em; margin-bottom: 8px; color: #444;">🤖 Seasonal Outlook</div>
-                    <div style="margin-bottom: 4px;">• <b>Current ({month_names[current_month-1]}):</b> <span style="color:{cur_color}; font-weight:bold;">{fmt_finance(cur_val)}</span>. {context_str}.</div>
-                    <div style="margin-bottom: 4px;">• <b>Next Month ({nm_name}):</b> {positioning} (Avg: {fmt_finance(nm_avg)}, Win Rate: {nm_wr:.1f}%)</div>
-                    <div>• <b>Following ({nnm_name}):</b> Seasonality {trend_vs} to an average of <b>{fmt_finance(nnm_avg)}</b>.</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                col_chart1, col_chart2 = st.columns(2, gap="medium")
-
-                # --- CHART 1: Performance Tracking (Line) ---
-                with col_chart1:
-                    st.subheader(f"📈 Performance Tracking")
-                    line_base = alt.Chart(combined_line_data).encode(
-                        x=alt.X('MonthName', sort=month_names, title='Month'),
-                        y=alt.Y('Value', title='Cumulative Return (%)'),
-                        color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None))
-                    )
-                    st.altair_chart(
-                        (line_base.mark_line(point=True) + line_base.mark_text(dy=-10, fontSize=12, fontWeight='bold').encode(text='Label'))
-                        .properties(height=350)
-                        .configure_axis(labelFontSize=11, titleFontSize=13), 
-                        use_container_width=True
-                    )
-
-                # --- CHART 2: Monthly Returns (Bar) ---
-                with col_chart2:
-                    st.subheader(f"📊 Monthly Returns")
-                    
-                    hist_bar_data = pd.DataFrame({
-                        'Month': range(1, 13), 'MonthName': month_names,
-                        'Value': avg_stats.values, 'Type': 'Historical Avg'
-                    })
-
-                    completed_curr_df = curr_df[curr_df['Month'] < current_month].copy()
-                    curr_bar_data = pd.DataFrame()
-                    if not completed_curr_df.empty:
-                        curr_vals = completed_curr_df.groupby('Month')['Pct'].mean()
-                        curr_bar_data = pd.DataFrame({
-                            'Month': curr_vals.index,
-                            'MonthName': [month_names[i-1] for i in curr_vals.index],
-                            'Value': curr_vals.values,
-                            'Type': f'{current_year} Actual'
-                        })
-                    
-                    combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
-                    combined_bar_data['Label'] = combined_bar_data['Value'].apply(fmt_finance)
-                    
-                    # Ensure label is always "above" the zero line visually
-                    combined_bar_data['LabelY'] = combined_bar_data['Value'].apply(lambda x: max(0, x))
-
-                    base = alt.Chart(combined_bar_data).encode(
-                        x=alt.X('MonthName', sort=month_names, title=None)
-                    )
-
-                    bars = base.mark_bar().encode(
-                        y=alt.Y('Value', title='Return (%)'),
-                        xOffset='Type',
-                        color=alt.condition(
-                            alt.datum.Value > 0,
-                            alt.value("#71d28a"),
-                            alt.value("#f29ca0")
-                        )
-                    )
-
-                    text = base.mark_text(
-                        dy=-10,
-                        fontSize=11, 
-                        fontWeight='bold',
-                        color='black'
-                    ).encode(
-                        y=alt.Y('LabelY'), 
-                        xOffset='Type', 
-                        text='Label'
-                    )
-
-                    st.altair_chart(
-                        (bars + text).properties(height=350).configure_axis(labelFontSize=11, titleFontSize=13),
-                        use_container_width=True
-                    )
-
-                # --- CARDS: Win Rates ---
-                st.markdown("##### 🎯 Historical Win Rate & Expectancy")
-                cols = st.columns(6) 
-                cols2 = st.columns(6)
-                
-                for i in range(12):
-                    mn = month_names[i]
-                    wr = win_rates.loc[i+1]
-                    avg = avg_stats.loc[i+1]
-                    border_color = "#71d28a" if avg > 0 else "#f29ca0"
-                    target_col = cols[i] if i < 6 else cols2[i-6]
-                    target_col.markdown(
-                        f"""
-                        <div style="background-color: rgba(128,128,128,0.05); border-radius: 8px; padding: 8px 5px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {border_color};">
-                            <div style="font-size: 0.85rem; font-weight: bold; color: #555;">{mn}</div>
-                            <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Win Rate</div>
-                            <div style="font-size: 1.0rem; font-weight: 700;">{wr:.1f}%</div>
-                            <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Avg Rtn</div>
-                            <div style="font-size: 0.9rem; font-weight: 600; color: {'#1f7a1f' if avg > 0 else '#a11f1f'};">{fmt_finance(avg)}</div>
-                        </div>
-                        """, unsafe_allow_html=True
-                    )
-
-                # --- HEATMAP ---
-                st.markdown("---")
-                st.subheader("🗓️ Monthly Returns Heatmap")
-                
-                pivot_hist = hist_filtered.pivot(index='Year', columns='Month', values='Pct')
-                if not completed_curr_df.empty:
-                    pivot_curr = completed_curr_df.pivot(index='Year', columns='Month', values='Pct')
-                    full_pivot = pd.concat([pivot_curr, pivot_hist])
-                else:
-                    full_pivot = pivot_hist
-
-                full_pivot.columns = [month_names[c-1] for c in full_pivot.columns]
-                for m in month_names:
-                    if m not in full_pivot.columns: full_pivot[m] = np.nan
-                
-                full_pivot = full_pivot[month_names].sort_index(ascending=False)
-                
-                full_pivot["Year Total"] = full_pivot.sum(axis=1, min_count=1)
-                
-                avg_row = full_pivot[month_names].mean(axis=0)
-                avg_row["Year Total"] = full_pivot["Year Total"].mean()
-                avg_row.name = "Month Average"
-                
-                full_pivot = pd.concat([full_pivot, avg_row.to_frame().T])
-
-                def color_map(val):
-                    if pd.isna(val): return ""
-                    if val == 0: return "color: #888;"
-                    color = "#1f7a1f" if val > 0 else "#a11f1f"
-                    bg_color = "rgba(113, 210, 138, 0.2)" if val > 0 else "rgba(242, 156, 160, 0.2)"
-                    return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
+                res_df = pd.DataFrame(scan_results)
+                st.success(f"Found {len(res_df)} matches!")
                 
                 st.dataframe(
-                    full_pivot.style.format(fmt_finance).applymap(color_map), 
-                    use_container_width=True, 
-                    height=(len(full_pivot)+1)*35+3
+                    res_df.style.format({"RSI": "{:.1f}", "Price": "${:.2f}"})
+                    .applymap(lambda v: 'color: red' if v == 'Overbought' or v == 'Bearish Div' or 'High' in str(v) else 'color: green', subset=['Signal']),
+                    use_container_width=True,
+                    hide_index=True
                 )
-
-    # ==============================================================================
-    # TAB 2: OPPORTUNITY SCANNER
-    # ==============================================================================
-    with tab_scan:
-        with st.expander("ℹ️ Page Notes: Methodology & Metrics"):
-            st.markdown("""
-            **🚀 Rolling Forward Returns**
-            * **Methodology**: Scans 10 years of history for dates matching the Start Date (+/- 3 days) and calculates performance for future periods.
-            * **Consistency (Sharpe)**: Calculated as `Average Return / Std Dev`. High score (>2.0) means consistent gains. Low score (<1.0) means volatile/hit-or-miss.
-            * **Mean Reversion**: Looks for tickers with **Positive Seasonality** (Green Historic EV) but **Negative Recent Performance** (Red Last 21d). These may be "coiled" springs.
-            """)
-
-        st.subheader("🚀 High-EV Seasonality Scanner")
-        
-        sc1, sc2, sc3 = st.columns([1, 1, 1])
-        with sc1:
-            scan_date = st.date_input("Start Date for Scan", value=date.today(), key="seas_scan_date")
-        with sc2:
-            min_mc_scan = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="seas_scan_mc")
-            mc_thresh_val = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mc_scan, 1e10)
-        with sc3:
-            scan_lookback = st.number_input("Lookback Years", min_value=5, max_value=20, value=10, key="seas_scan_lb")
-            
-        start_scan = st.button("Run Scanner")
-        
-        if start_scan:
-            ticker_map = load_ticker_map()
-            if not ticker_map:
-                st.error("No TICKER_MAP found in secrets.")
-            else:
-                all_tickers = [k for k in ticker_map.keys() if not k.upper().endswith('_PARQUET')]
-                results = []
-                all_csv_rows = { "21d": [], "42d": [], "63d": [], "126d": [] }
                 
-                st.write(f"Filtering {len(all_tickers)} tickers by Market Cap > {min_mc_scan}...")
-                
-                valid_tickers = []
-                def check_mc(t):
-                    mc = get_market_cap(t)
-                    return t if mc >= mc_thresh_val else None
-
-                with ThreadPoolExecutor(max_workers=20) as executor:
-                    futures = {executor.submit(check_mc, t): t for t in all_tickers}
-                    for future in as_completed(futures):
-                        res = future.result()
-                        if res: valid_tickers.append(res)
-                
-                st.write(f"Scanning {len(valid_tickers)} tickers for high EV opportunities...")
-                progress_bar = st.progress(0)
-                
-                def calc_forward_returns(ticker_sym):
-                    try:
-                        d_df = fetch_history_optimized(ticker_sym, ticker_map)
-                        if d_df is None or d_df.empty: return None, None
-                        
-                        d_df.columns = [c.strip().upper() for c in d_df.columns]
-                        date_c = next((c for c in d_df.columns if 'DATE' in c), None)
-                        close_c = next((c for c in d_df.columns if 'CLOSE' in c), None)
-                        if not date_c or not close_c: return None, None
-                        
-                        d_df[date_c] = pd.to_datetime(d_df[date_c])
-                        d_df = d_df.sort_values(date_c).reset_index(drop=True)
-                        
-                        cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
-                        d_df_hist = d_df[d_df[date_c] >= cutoff].copy()
-                        d_df_hist = d_df_hist.reset_index(drop=True)
-                        if len(d_df_hist) < 252: return None, None
-                        
-                        # --- Calculate Recent Performance (Last 21 days) for Arbitrage Scan ---
-                        recent_perf = 0.0
-                        if len(d_df) > 21:
-                            # Calculate simple % return over last 21 trading days available in DB
-                            last_p = d_df[close_c].iloc[-1]
-                            prev_p = d_df[close_c].iloc[-22] 
-                            recent_perf = ((last_p - prev_p) / prev_p) * 100
-                        
-                        target_doy = scan_date.timetuple().tm_yday
-                        d_df_hist['DOY'] = d_df_hist[date_c].dt.dayofyear
-                        
-                        # +/- 3 Day Window
-                        matches = d_df_hist[(d_df_hist['DOY'] >= target_doy - 3) & (d_df_hist['DOY'] <= target_doy + 3)].copy()
-                        matches['Year'] = matches[date_c].dt.year
-                        matches = matches.drop_duplicates(subset=['Year'])
-                        curr_y = date.today().year
-                        matches = matches[matches['Year'] < curr_y]
-                        
-                        if len(matches) < 3: return None, None
-                        
-                        stats_row = {'Ticker': ticker_sym, 'N': len(matches), 'Recent_21d': recent_perf}
-                        periods = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
-                        
-                        ticker_csv_rows = {k: [] for k in periods.keys()}
-                        
-                        for p_name, trading_days in periods.items():
-                            returns = []
-                            for idx in matches.index:
-                                entry_p = d_df_hist.loc[idx, close_c]
-                                exit_idx = idx + trading_days
-                                if exit_idx < len(d_df_hist):
-                                    exit_p = d_df_hist.loc[exit_idx, close_c]
-                                    ret = (exit_p - entry_p) / entry_p
-                                    returns.append(ret)
-                                    
-                                    ticker_csv_rows[p_name].append({
-                                        "Ticker": ticker_sym,
-                                        "Start Date": d_df_hist.loc[idx, date_c].date(),
-                                        "Entry Price": entry_p,
-                                        "Exit Date": d_df_hist.loc[exit_idx, date_c].date(),
-                                        "Exit Price": exit_p,
-                                        "Return (%)": ret * 100
-                                    })
-                                        
-                            if returns:
-                                returns_arr = np.array(returns)
-                                avg_ret = np.mean(returns_arr) * 100
-                                win_r = np.mean(returns_arr > 0) * 100
-                                std_dev = np.std(returns_arr) * 100
-                                # --- Consistency Metric (Sharpe-like) ---
-                                sharpe = avg_ret / std_dev if std_dev > 0.1 else 0.0
-                            else:
-                                avg_ret = 0.0; win_r = 0.0; sharpe = 0.0
-                                
-                            stats_row[f"{p_name}_EV"] = avg_ret
-                            stats_row[f"{p_name}_WR"] = win_r
-                            stats_row[f"{p_name}_Sharpe"] = sharpe
-                            
-                        return stats_row, ticker_csv_rows
-                    except Exception:
-                        return None, None
-
-                with ThreadPoolExecutor(max_workers=20) as executor: 
-                    futures = {executor.submit(calc_forward_returns, t): t for t in valid_tickers}
-                    completed = 0
-                    for future in as_completed(futures):
-                        res_stats, res_details = future.result()
-                        if res_stats:
-                            results.append(res_stats)
-                        if res_details:
-                            for k in all_csv_rows.keys():
-                                if res_details[k]:
-                                    all_csv_rows[k].extend(res_details[k])
-                        completed += 1
-                        if completed % 5 == 0: progress_bar.progress(completed / len(valid_tickers))
-                
-                progress_bar.empty()
-                
-                if not results:
-                    st.warning("No opportunities found.")
-                else:
-                    res_df = pd.DataFrame(results)
-                    st.write("---")
-                    
-                    def highlight_ev(val):
-                        if pd.isna(val): return ""
-                        color = "#1f7a1f" if val > 0 else "#a11f1f"
-                        bg = "rgba(113, 210, 138, 0.25)" if val > 0 else "rgba(242, 156, 160, 0.25)"
-                        return f'background-color: {bg}; color: {color}; font-weight: bold;'
-
-                    # --- 1. ARBITRAGE / MEAN REVERSION TABLE ---
-                    # Logic: 21d EV > 3% (Good Seasonality) AND Recent_21d < -3% (Beaten Down)
-                    arb_df = res_df[
-                        (res_df['21d_EV'] > 3.0) & 
-                        (res_df['Recent_21d'] < -3.0)
-                    ].copy()
-                    
-                    if not arb_df.empty:
-                        st.subheader("💎 Arbitrage / Catch-Up Candidates")
-                        st.caption("Stocks with strong historical seasonality (EV > 3%) that are currently beaten down (Last 21d < -3%).")
-                        
-                        arb_df['Gap'] = arb_df['21d_EV'] - arb_df['Recent_21d']
-                        arb_display = arb_df.sort_values(by='Gap', ascending=False).head(15)
-                        
-                        st.dataframe(
-                            arb_display[['Ticker', 'Recent_21d', '21d_EV', '21d_WR', 'Gap']].style
-                            .format({'Recent_21d': fmt_finance, '21d_EV': fmt_finance, '21d_WR': "{:.1f}%", 'Gap': "{:.1f}%"})
-                            .applymap(lambda x: 'color: #d32f2f; font-weight:bold;', subset=['Recent_21d'])
-                            .applymap(lambda x: 'color: #2e7d32; font-weight:bold;', subset=['21d_EV'])
-                            .background_gradient(cmap='Greens', subset=['Gap']),
-                            use_container_width=True, hide_index=True
-                        )
-                        st.write("---")
-
-                    # --- 2. STANDARD TABLES ---
-                    st.subheader(f"🗓️ Forward Returns (from {scan_date.strftime('%d %b')})")
-                    
-                    c_scan1, c_scan2 = st.columns(2)
-                    c_scan3, c_scan4 = st.columns(2)
-                    fixed_height = 738
-
-                    for col_obj, p_label, sort_col, sharpe_col, p_key in [
-                        (c_scan1, "**+21 Trading Days**", "21d_EV", "21d_Sharpe", "21d"),
-                        (c_scan2, "**+42 Trading Days**", "42d_EV", "42d_Sharpe", "42d"),
-                        (c_scan3, "**+63 Trading Days**", "63d_EV", "63d_Sharpe", "63d"),
-                        (c_scan4, "**+126 Trading Days**", "126d_EV", "126d_Sharpe", "126d")
-                    ]:
-                        with col_obj:
-                            st.markdown(p_label)
-                            
-                            # CSV Download
-                            if all_csv_rows[p_key]:
-                                df_details = pd.DataFrame(all_csv_rows[p_key])
-                                df_details = df_details.sort_values(by=["Ticker", "Start Date"])
-                                csv_data = df_details.to_csv(index=False).encode('utf-8')
-                                st.download_button(
-                                    label=f"💾 Download CSV",
-                                    data=csv_data,
-                                    file_name=f"seasonality_{p_key}_inputs_{scan_date.strftime('%Y%m%d')}.csv",
-                                    mime="text/csv",
-                                    key=f"dl_btn_{p_key}"
-                                )
-
-                            top_df = res_df.sort_values(by=sort_col, ascending=False).head(20)
-                            
-                            st.dataframe(
-                                top_df[['Ticker', sort_col, sort_col.replace('EV','WR'), sharpe_col]].style
-                                .format({
-                                    sort_col: fmt_finance, 
-                                    sort_col.replace('EV','WR'): "{:.1f}%",
-                                    sharpe_col: "{:.2f}"
-                                })
-                                .applymap(highlight_ev, subset=[sort_col])
-                                .background_gradient(cmap='RdYlGn', subset=[sharpe_col], vmin=0.5, vmax=3.0),
-                                use_container_width=True, hide_index=True, height=fixed_height,
-                                column_config={
-                                    sharpe_col: st.column_config.NumberColumn("Sharpe", help="Consistency Score (EV / StdDev). >2 is very consistent.")
-                                }
-                            )    st.title("📅 Seasonality")
-    
-    # --- Helper: Optimized Data Fetching (Parquet > CSV > Yahoo) ---
-    def fetch_history_optimized(ticker_sym, t_map):
-        pq_key = f"{ticker_sym}_PARQUET"
-        if pq_key in t_map:
-            try:
-                file_id = t_map[pq_key]
-                url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                buffer = get_gdrive_binary_data(url)
-                if buffer:
-                    df = pd.read_parquet(buffer, engine='pyarrow')
-                    if isinstance(df.index, pd.DatetimeIndex):
-                        df = df.reset_index()
-                    elif df.index.name and 'DATE' in df.index.name.upper():
-                        df = df.reset_index()
-                    elif 'Date' not in df.columns and 'DATE' not in df.columns:
-                        df = df.reset_index()
-                    return df
-            except Exception:
-                pass 
-        if ticker_sym in t_map:
-            return get_ticker_technicals(ticker_sym, t_map)
-        return fetch_yahoo_data(ticker_sym)
-
-    # --- Helper: Finance Formatting ---
-    def fmt_finance(val):
-        if pd.isna(val): return ""
-        if isinstance(val, str): return val
-        if val < 0: return f"({abs(val):.1f}%)"
-        return f"{val:.1f}%"
-
-    # Create Tabs
-    tab_single, tab_scan = st.tabs(["🔎 Single Ticker Analysis", "🚀 Opportunity Scanner"])
-    
-    # ==============================================================================
-    # TAB 1: SINGLE TICKER ANALYSIS
-    # ==============================================================================
-    with tab_single:
-        with st.expander("ℹ️ Page Notes: Methodology"):
-            st.markdown("""
-            **📊 Calendar Month Performance**
-            * **Year Total:** The **SUM** of monthly returns for that year.
-            * **Month Average:** The **AVERAGE** return for that specific month across the selected history.
-            """)
-
-        c1, c2, c3 = st.columns([1, 1, 1])
-        with c1:
-            ticker = st.text_input("Ticker", value="SPY", key="seas_ticker").strip().upper()
-            
-        if not ticker:
-            st.info("Please enter a ticker symbol.")
-            return
-
-        ticker_map = load_ticker_map()
-        df = None
-        
-        with st.spinner(f"Fetching history for {ticker}..."):
-            df = fetch_history_optimized(ticker, ticker_map)
-
-        if df is None or df.empty:
-            st.error(f"Could not load data for {ticker}. Check the ticker symbol or your TICKER_MAP.")
-            return
-
-        df.columns = [c.strip().upper() for c in df.columns]
-        date_col = next((c for c in df.columns if 'DATE' in c), None)
-        close_col = next((c for c in df.columns if 'CLOSE' in c), None)
-        
-        if not date_col or not close_col:
-            st.error("Data source format error: Missing Date or Close columns.")
-            return
-            
-        df[date_col] = pd.to_datetime(df[date_col])
-        df = df.set_index(date_col).sort_index()
-        
-        # Resample to Monthly Returns
-        df_monthly = df[close_col].resample('M').last()
-        df_pct = df_monthly.pct_change() * 100
-        
-        season_df = pd.DataFrame({
-            'Pct': df_pct,
-            'Year': df_pct.index.year,
-            'Month': df_pct.index.month
-        }).dropna()
-
-        today = date.today()
-        current_year = today.year
-        current_month = today.month
-        
-        hist_df = season_df[season_df['Year'] < current_year].copy()
-        curr_df = season_df[season_df['Year'] == current_year].copy()
-        
-        if hist_df.empty:
-            st.warning("Not enough historical full-year data available.")
-        else:
-            min_avail_year = int(hist_df['Year'].min())
-            max_avail_year = int(hist_df['Year'].max())
-            
-            with c2:
-                start_year = st.number_input("Start Year (History)", min_value=min_avail_year, max_value=max_avail_year, value=max_avail_year-10 if max_avail_year-10 >= min_avail_year else min_avail_year, key="seas_start")
-            with c3:
-                end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_avail_year, value=max_avail_year, key="seas_end")
-
-            mask = (hist_df['Year'] >= start_year) & (hist_df['Year'] <= end_year)
-            hist_filtered = hist_df[mask].copy()
-            
-            if hist_filtered.empty:
-                st.warning("No data in selected date range.")
-            else:
-                month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                
-                avg_stats = hist_filtered.groupby('Month')['Pct'].mean().reindex(range(1, 13), fill_value=0)
-                win_rates = hist_filtered.groupby('Month')['Pct'].apply(lambda x: (x > 0).mean() * 100).reindex(range(1, 13), fill_value=0)
-
-                hist_cumsum = avg_stats.cumsum()
-                line_data_hist = pd.DataFrame({
-                    'Month': range(1, 13),
-                    'MonthName': month_names,
-                    'Value': hist_cumsum.values,
-                    'Type': f'Avg ({start_year}-{end_year})'
-                })
-
-                curr_monthly_stats = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)) 
-                curr_cumsum = curr_monthly_stats.cumsum()
-                valid_curr_indices = curr_monthly_stats.dropna().index
-                
-                line_data_curr = pd.DataFrame({
-                    'Month': valid_curr_indices,
-                    'MonthName': [month_names[i-1] for i in valid_curr_indices],
-                    'Value': curr_cumsum.loc[valid_curr_indices].values,
-                    'Type': f'Current Year ({current_year})'
-                })
-                combined_line_data = pd.concat([line_data_hist, line_data_curr])
-                combined_line_data['Label'] = combined_line_data['Value'].apply(fmt_finance)
-
-                # Outlook Logic
-                cur_val = curr_monthly_stats.get(current_month, 0.0)
-                if pd.isna(cur_val): cur_val = 0.0
-                cur_color = "#71d28a" if cur_val > 0 else "#f29ca0"
-                
-                hist_avg = avg_stats.get(current_month, 0.0)
-                diff = cur_val - hist_avg
-                if diff > 0: context_str = f"Outperforming Hist Avg of {fmt_finance(hist_avg)}"
-                else: context_str = f"Underperforming Hist Avg of {fmt_finance(hist_avg)}"
-
-                idx_next = (current_month % 12) + 1
-                idx_next_2 = ((current_month + 1) % 12) + 1
-                nm_name = month_names[idx_next-1]
-                nnm_name = month_names[idx_next_2-1]
-                nm_avg = avg_stats.get(idx_next, 0.0)
-                nm_wr = win_rates.get(idx_next, 0.0)
-                nnm_avg = avg_stats.get(idx_next_2, 0.0)
-
-                if nm_avg >= 1.5 and nm_wr >= 65:
-                    positioning = "🚀 <b>Strong Bullish.</b> Historically a standout month."
-                elif nm_avg > 0 and nm_wr >= 50:
-                    positioning = "↗️ <b>Mildly Bullish.</b> Positive bias, moderate conviction."
-                elif nm_avg < 0 and nm_avg > -1.0:
-                    positioning = "⚠️ <b>Choppy/Weak.</b> Historically drags or trends flat."
-                else:
-                    positioning = "🐻 <b>Bearish.</b> Historically a weak month."
-
-                trend_vs = "improves" if nnm_avg > nm_avg else "weakens"
-                
-                st.markdown(f"""
-                <div style="background-color: rgba(128,128,128,0.05); border-left: 5px solid #66b7ff; padding: 15px; border-radius: 4px; margin-bottom: 25px;">
-                    <div style="font-weight: bold; font-size: 1.1em; margin-bottom: 8px; color: #444;">🤖 Seasonal Outlook</div>
-                    <div style="margin-bottom: 4px;">• <b>Current ({month_names[current_month-1]}):</b> <span style="color:{cur_color}; font-weight:bold;">{fmt_finance(cur_val)}</span>. {context_str}.</div>
-                    <div style="margin-bottom: 4px;">• <b>Next Month ({nm_name}):</b> {positioning} (Avg: {fmt_finance(nm_avg)}, Win Rate: {nm_wr:.1f}%)</div>
-                    <div>• <b>Following ({nnm_name}):</b> Seasonality {trend_vs} to an average of <b>{fmt_finance(nnm_avg)}</b>.</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                col_chart1, col_chart2 = st.columns(2, gap="medium")
-
-                # --- CHART 1: Performance Tracking (Line) ---
-                with col_chart1:
-                    st.subheader(f"📈 Performance Tracking")
-                    line_base = alt.Chart(combined_line_data).encode(
-                        x=alt.X('MonthName', sort=month_names, title='Month'),
-                        y=alt.Y('Value', title='Cumulative Return (%)'),
-                        color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None))
-                    )
-                    st.altair_chart(
-                        (line_base.mark_line(point=True) + line_base.mark_text(dy=-10, fontSize=12, fontWeight='bold').encode(text='Label'))
-                        .properties(height=350)
-                        .configure_axis(labelFontSize=11, titleFontSize=13), 
-                        use_container_width=True
-                    )
-
-                # --- CHART 2: Monthly Returns (Bar) ---
-                with col_chart2:
-                    st.subheader(f"📊 Monthly Returns")
-                    
-                    hist_bar_data = pd.DataFrame({
-                        'Month': range(1, 13), 'MonthName': month_names,
-                        'Value': avg_stats.values, 'Type': 'Historical Avg'
-                    })
-
-                    completed_curr_df = curr_df[curr_df['Month'] < current_month].copy()
-                    curr_bar_data = pd.DataFrame()
-                    if not completed_curr_df.empty:
-                        curr_vals = completed_curr_df.groupby('Month')['Pct'].mean()
-                        curr_bar_data = pd.DataFrame({
-                            'Month': curr_vals.index,
-                            'MonthName': [month_names[i-1] for i in curr_vals.index],
-                            'Value': curr_vals.values,
-                            'Type': f'{current_year} Actual'
-                        })
-                    
-                    combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
-                    combined_bar_data['Label'] = combined_bar_data['Value'].apply(fmt_finance)
-                    
-                    # Ensure label is always "above" the zero line visually
-                    combined_bar_data['LabelY'] = combined_bar_data['Value'].apply(lambda x: max(0, x))
-
-                    base = alt.Chart(combined_bar_data).encode(
-                        x=alt.X('MonthName', sort=month_names, title=None)
-                    )
-
-                    bars = base.mark_bar().encode(
-                        y=alt.Y('Value', title='Return (%)'),
-                        xOffset='Type',
-                        color=alt.condition(
-                            alt.datum.Value > 0,
-                            alt.value("#71d28a"),
-                            alt.value("#f29ca0")
-                        )
-                    )
-
-                    text = base.mark_text(
-                        dy=-10,
-                        fontSize=11, 
-                        fontWeight='bold',
-                        color='black'
-                    ).encode(
-                        y=alt.Y('LabelY'), 
-                        xOffset='Type', 
-                        text='Label'
-                    )
-
-                    st.altair_chart(
-                        (bars + text).properties(height=350).configure_axis(labelFontSize=11, titleFontSize=13),
-                        use_container_width=True
-                    )
-
-                # --- CARDS: Win Rates ---
-                st.markdown("##### 🎯 Historical Win Rate & Expectancy")
-                cols = st.columns(6) 
-                cols2 = st.columns(6)
-                
-                for i in range(12):
-                    mn = month_names[i]
-                    wr = win_rates.loc[i+1]
-                    avg = avg_stats.loc[i+1]
-                    border_color = "#71d28a" if avg > 0 else "#f29ca0"
-                    target_col = cols[i] if i < 6 else cols2[i-6]
-                    target_col.markdown(
-                        f"""
-                        <div style="background-color: rgba(128,128,128,0.05); border-radius: 8px; padding: 8px 5px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {border_color};">
-                            <div style="font-size: 0.85rem; font-weight: bold; color: #555;">{mn}</div>
-                            <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Win Rate</div>
-                            <div style="font-size: 1.0rem; font-weight: 700;">{wr:.1f}%</div>
-                            <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Avg Rtn</div>
-                            <div style="font-size: 0.9rem; font-weight: 600; color: {'#1f7a1f' if avg > 0 else '#a11f1f'};">{fmt_finance(avg)}</div>
-                        </div>
-                        """, unsafe_allow_html=True
-                    )
-
-                # --- HEATMAP ---
+                # --- BACKTEST VISUALIZER FOR SELECTED RESULT ---
                 st.markdown("---")
-                st.subheader("🗓️ Monthly Returns Heatmap")
+                st.subheader("🔎 Signal Analysis")
+                selected_ticker = st.selectbox("Select Ticker to Analyze", res_df['Ticker'].unique())
                 
-                pivot_hist = hist_filtered.pivot(index='Year', columns='Month', values='Pct')
-                if not completed_curr_df.empty:
-                    pivot_curr = completed_curr_df.pivot(index='Year', columns='Month', values='Pct')
-                    full_pivot = pd.concat([pivot_curr, pivot_hist])
-                else:
-                    full_pivot = pivot_hist
+                if selected_ticker:
+                    # Re-fetch or pass data? Let's just re-fetch for simplicity/safety of this snippet
+                    df_viz = fetch_yahoo_data(selected_ticker)
+                    if df_viz is not None:
+                        df_viz = df_viz.sort_values('Date').reset_index(drop=True)
+                        # Recalc RSI
+                        delta = df_viz['Close'].diff()
+                        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                        rs = gain / loss
+                        df_viz['RSI'] = 100 - (100 / (1 + rs))
+                        
+                        # Plot
+                        base = alt.Chart(df_viz.iloc[-150:]).encode(x='Date:T')
+                        
+                        line = base.mark_line(color='#66b7ff').encode(y=alt.Y('Close', scale=alt.Scale(zero=False)))
+                        
+                        rsi_chart = base.mark_line(color='purple').encode(y=alt.Y('RSI', scale=alt.Scale(domain=[0, 100])))
+                        rsi_band_upper = base.mark_rule(color='red', strokeDash=[4,4]).encode(y=alt.datum(70))
+                        rsi_band_lower = base.mark_rule(color='green', strokeDash=[4,4]).encode(y=alt.datum(30))
+                        
+                        c_final = (line.properties(height=200, title=f"{selected_ticker} Price") & 
+                                  (rsi_chart + rsi_band_upper + rsi_band_lower).properties(height=150, title="RSI (14)"))
+                        
+                        st.altair_chart(c_final, use_container_width=True)
+                        
+                        # --- SIMPLE STATS ---
+                        # If scan mode is Percentile, let's show a histogram
+                        if scan_mode == "RSI Percentile Extremes":
+                            st.write("**RSI Distribution (Last 252 Days)**")
+                            hist_data = df_viz['RSI'].iloc[-252:]
+                            
+                            # Simple Histogram using Altair
+                            hist_df = pd.DataFrame({'RSI': hist_data})
+                            c_hist = alt.Chart(hist_df).mark_bar().encode(
+                                alt.X("RSI", bin=True),
+                                y='count()'
+                            ).properties(height=150)
+                            
+                            st.altair_chart(c_hist, use_container_width=True)
 
-                full_pivot.columns = [month_names[c-1] for c in full_pivot.columns]
-                for m in month_names:
-                    if m not in full_pivot.columns: full_pivot[m] = np.nan
-                
-                full_pivot = full_pivot[month_names].sort_index(ascending=False)
-                
-                full_pivot["Year Total"] = full_pivot.sum(axis=1, min_count=1)
-                
-                avg_row = full_pivot[month_names].mean(axis=0)
-                avg_row["Year Total"] = full_pivot["Year Total"].mean()
-                avg_row.name = "Month Average"
-                
-                full_pivot = pd.concat([full_pivot, avg_row.to_frame().T])
+                        # --- NEW FEATURE: RSI MEAN REVERSION BACKTEST (Mini) ---
+                        # If we found an Oversold signal, how often did it bounce?
+                        if scan_mode == "Standard RSI Levels":
+                            in_low = 30
+                            in_high = 70
+                            
+                            # Identify historical signals
+                            df_viz['Signal'] = 0
+                            df_viz.loc[df_viz['RSI'] < in_low, 'Signal'] = 1  # Buy
+                            df_viz.loc[df_viz['RSI'] > in_high, 'Signal'] = -1 # Sell
+                            
+                            # Only take the first signal of a cluster (simple approach: shift)
+                            df_viz['Prev_Signal'] = df_viz['Signal'].shift(1)
+                            # Valid Entry: Current is 1, Prev was not 1 (entered zone) 
+                            # OR better: Crossover? Let's stick to "In Zone" for now or "Crossed Below 30"
+                            # "Crossed Below 30": Prev >= 30, Curr < 30
+                            
+                            # Let's do "Crossed Into Zone"
+                            buy_signals = (df_viz['RSI'] < in_low) & (df_viz['RSI'].shift(1) >= in_low)
+                            sell_signals = (df_viz['RSI'] > in_high) & (df_viz['RSI'].shift(1) <= in_high)
+                            
+                            sigs = []
+                            for idx in df_viz[buy_signals].index:
+                                if idx < len(df_viz) - 10:
+                                    entry_p = df_viz.loc[idx, 'Close']
+                                    # Forward returns 5d, 10d
+                                    ret_5d = (df_viz.loc[idx+5, 'Close'] - entry_p)/entry_p if idx+5 < len(df_viz) else 0
+                                    ret_10d = (df_viz.loc[idx+10, 'Close'] - entry_p)/entry_p if idx+10 < len(df_viz) else 0
+                                    sigs.append({'Type': 'Oversold Buy', 'Date': df_viz.loc[idx, 'Date'], 'Price': entry_p, '5d %': ret_5d*100, '10d %': ret_10d*100})
+                            
+                            for idx in df_viz[sell_signals].index:
+                                if idx < len(df_viz) - 10:
+                                    entry_p = df_viz.loc[idx, 'Close']
+                                    # For Sell, return is inverse? Or just show price drop
+                                    # Let's show raw return. Negative is good for short, bad for long.
+                                    ret_5d = (df_viz.loc[idx+5, 'Close'] - entry_p)/entry_p if idx+5 < len(df_viz) else 0
+                                    ret_10d = (df_viz.loc[idx+10, 'Close'] - entry_p)/entry_p if idx+10 < len(df_viz) else 0
+                                    sigs.append({'Type': 'Overbought Sell', 'Date': df_viz.loc[idx, 'Date'], 'Price': entry_p, '5d %': ret_5d*100, '10d %': ret_10d*100})
 
-                def color_map(val):
-                    if pd.isna(val): return ""
-                    if val == 0: return "color: #888;"
-                    color = "#1f7a1f" if val > 0 else "#a11f1f"
-                    bg_color = "rgba(113, 210, 138, 0.2)" if val > 0 else "rgba(242, 156, 160, 0.2)"
-                    return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
-                
-                st.dataframe(
-                    full_pivot.style.format(fmt_finance).applymap(color_map), 
-                    use_container_width=True, 
-                    height=(len(full_pivot)+1)*35+3
-                )
-
-    # ==============================================================================
-    # TAB 2: OPPORTUNITY SCANNER
-    # ==============================================================================
-    with tab_scan:
-        with st.expander("ℹ️ Page Notes: Methodology & Metrics"):
-            st.markdown("""
-            **🚀 Rolling Forward Returns**
-            * **Methodology**: Scans 10 years of history for dates matching the Start Date (+/- 3 days) and calculates performance for future periods.
-            * **Consistency (Sharpe)**: Calculated as `Average Return / Std Dev`. High score (>2.0) means consistent gains. Low score (<1.0) means volatile/hit-or-miss.
-            * **Mean Reversion**: Looks for tickers with **Positive Seasonality** (Green Historic EV) but **Negative Recent Performance** (Red Last 21d). These may be "coiled" springs.
-            """)
-
-        st.subheader("🚀 High-EV Seasonality Scanner")
-        
-        sc1, sc2, sc3 = st.columns([1, 1, 1])
-        with sc1:
-            scan_date = st.date_input("Start Date for Scan", value=date.today(), key="seas_scan_date")
-        with sc2:
-            min_mc_scan = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="seas_scan_mc")
-            mc_thresh_val = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mc_scan, 1e10)
-        with sc3:
-            scan_lookback = st.number_input("Lookback Years", min_value=5, max_value=20, value=10, key="seas_scan_lb")
-            
-        start_scan = st.button("Run Scanner")
-        
-        if start_scan:
-            ticker_map = load_ticker_map()
-            if not ticker_map:
-                st.error("No TICKER_MAP found in secrets.")
-            else:
-                all_tickers = [k for k in ticker_map.keys() if not k.upper().endswith('_PARQUET')]
-                results = []
-                all_csv_rows = { "21d": [], "42d": [], "63d": [], "126d": [] }
-                
-                st.write(f"Filtering {len(all_tickers)} tickers by Market Cap > {min_mc_scan}...")
-                
-                valid_tickers = []
-                def check_mc(t):
-                    mc = get_market_cap(t)
-                    return t if mc >= mc_thresh_val else None
-
-                with ThreadPoolExecutor(max_workers=20) as executor:
-                    futures = {executor.submit(check_mc, t): t for t in all_tickers}
-                    for future in as_completed(futures):
-                        res = future.result()
-                        if res: valid_tickers.append(res)
-                
-                st.write(f"Scanning {len(valid_tickers)} tickers for high EV opportunities...")
-                progress_bar = st.progress(0)
-                
-                def calc_forward_returns(ticker_sym):
-                    try:
-                        d_df = fetch_history_optimized(ticker_sym, ticker_map)
-                        if d_df is None or d_df.empty: return None, None
-                        
-                        d_df.columns = [c.strip().upper() for c in d_df.columns]
-                        date_c = next((c for c in d_df.columns if 'DATE' in c), None)
-                        close_c = next((c for c in d_df.columns if 'CLOSE' in c), None)
-                        if not date_c or not close_c: return None, None
-                        
-                        d_df[date_c] = pd.to_datetime(d_df[date_c])
-                        d_df = d_df.sort_values(date_c).reset_index(drop=True)
-                        
-                        cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
-                        d_df_hist = d_df[d_df[date_c] >= cutoff].copy()
-                        d_df_hist = d_df_hist.reset_index(drop=True)
-                        if len(d_df_hist) < 252: return None, None
-                        
-                        # --- Calculate Recent Performance (Last 21 days) for Arbitrage Scan ---
-                        recent_perf = 0.0
-                        if len(d_df) > 21:
-                            # Calculate simple % return over last 21 trading days available in DB
-                            last_p = d_df[close_c].iloc[-1]
-                            prev_p = d_df[close_c].iloc[-22] 
-                            recent_perf = ((last_p - prev_p) / prev_p) * 100
-                        
-                        target_doy = scan_date.timetuple().tm_yday
-                        d_df_hist['DOY'] = d_df_hist[date_c].dt.dayofyear
-                        
-                        # +/- 3 Day Window
-                        matches = d_df_hist[(d_df_hist['DOY'] >= target_doy - 3) & (d_df_hist['DOY'] <= target_doy + 3)].copy()
-                        matches['Year'] = matches[date_c].dt.year
-                        matches = matches.drop_duplicates(subset=['Year'])
-                        curr_y = date.today().year
-                        matches = matches[matches['Year'] < curr_y]
-                        
-                        if len(matches) < 3: return None, None
-                        
-                        stats_row = {'Ticker': ticker_sym, 'N': len(matches), 'Recent_21d': recent_perf}
-                        periods = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
-                        
-                        ticker_csv_rows = {k: [] for k in periods.keys()}
-                        
-                        for p_name, trading_days in periods.items():
-                            returns = []
-                            for idx in matches.index:
-                                entry_p = d_df_hist.loc[idx, close_c]
-                                exit_idx = idx + trading_days
-                                if exit_idx < len(d_df_hist):
-                                    exit_p = d_df_hist.loc[exit_idx, close_c]
-                                    ret = (exit_p - entry_p) / entry_p
-                                    returns.append(ret)
-                                    
-                                    ticker_csv_rows[p_name].append({
-                                        "Ticker": ticker_sym,
-                                        "Start Date": d_df_hist.loc[idx, date_c].date(),
-                                        "Entry Price": entry_p,
-                                        "Exit Date": d_df_hist.loc[exit_idx, date_c].date(),
-                                        "Exit Price": exit_p,
-                                        "Return (%)": ret * 100
-                                    })
-                                        
-                            if returns:
-                                returns_arr = np.array(returns)
-                                avg_ret = np.mean(returns_arr) * 100
-                                win_r = np.mean(returns_arr > 0) * 100
-                                std_dev = np.std(returns_arr) * 100
-                                # --- Consistency Metric (Sharpe-like) ---
-                                sharpe = avg_ret / std_dev if std_dev > 0.1 else 0.0
+                            if sigs:
+                                st.write("**Historical Signal Performance (Last 3 Years)**")
+                                sig_df = pd.DataFrame(sigs)
+                                st.dataframe(sig_df.style.format({'5d %': '{:.2f}%', '10d %': '{:.2f}%', 'Price': '{:.2f}'}), use_container_width=True)
                             else:
-                                avg_ret = 0.0; win_r = 0.0; sharpe = 0.0
+                                st.info("No historical signals of this type found in loaded data.")
+
+                        # --- NEW FEATURE: RSI PERCENTILE BACKTEST (Mini) ---
+                        if scan_mode == "RSI Percentile Extremes":
+                             in_low = 5
+                             in_high = 95
+                             # Calculate historical Rolling Percentile Rank
+                             # This is computationally heavy for a loop, so let's use a rolling window
+                             # Rolling Rank: 
+                             df_viz['RSI_Rank'] = df_viz['RSI'].rolling(252).apply(lambda x: (x < x.iloc[-1]).mean() * 100, raw=False) 
+                             # The above is slow. Optimized approach:
+                             # Just skip full history backtest for this snippet to keep app fast.
+                             # Or just check simple RSI thresholds that "approximate" these percentiles for this ticker
+                             
+                             # Alternative: Just show the current stats
+                             curr_rank = (df_viz['RSI'].iloc[-252:] < current_rsi).mean() * 100
+                             st.metric("Current RSI Percentile (1y)", f"{curr_rank:.1f}%")
+                             
+                             if curr_rank < 10:
+                                 st.success("RSI is in the bottom 10% of its yearly range. Historically a potential bounce area.")
+                             elif curr_rank > 90:
+                                 st.warning("RSI is in the top 10% of its yearly range. Historically a potential pullback area.")
+                             else:
+                                 st.info("RSI is in a neutral percentile zone.")
+
+                        # --- RSI STATS TABLE ---
+                        # Calculate Win Rate of "Buying when RSI < 30"
+                        # Simple vectorized backtest
+                        if len(df_viz) > 200:
+                            # Shifted Returns
+                            df_viz['Fwd_5d'] = df_viz['Close'].shift(-5) / df_viz['Close'] - 1
+                            
+                            # Condition
+                            mask = df_viz['RSI'] < 30
+                            trades = df_viz[mask]
+                            
+                            if len(trades) > 0:
+                                win_rate = (trades['Fwd_5d'] > 0).mean()
+                                avg_ret = trades['Fwd_5d'].mean()
                                 
-                            stats_row[f"{p_name}_EV"] = avg_ret
-                            stats_row[f"{p_name}_WR"] = win_r
-                            stats_row[f"{p_name}_Sharpe"] = sharpe
-                            
-                        return stats_row, ticker_csv_rows
-                    except Exception:
-                        return None, None
-
-                with ThreadPoolExecutor(max_workers=20) as executor: 
-                    futures = {executor.submit(calc_forward_returns, t): t for t in valid_tickers}
-                    completed = 0
-                    for future in as_completed(futures):
-                        res_stats, res_details = future.result()
-                        if res_stats:
-                            results.append(res_stats)
-                        if res_details:
-                            for k in all_csv_rows.keys():
-                                if res_details[k]:
-                                    all_csv_rows[k].extend(res_details[k])
-                        completed += 1
-                        if completed % 5 == 0: progress_bar.progress(completed / len(valid_tickers))
-                
-                progress_bar.empty()
-                
-                if not results:
-                    st.warning("No opportunities found.")
-                else:
-                    res_df = pd.DataFrame(results)
-                    st.write("---")
-                    
-                    def highlight_ev(val):
-                        if pd.isna(val): return ""
-                        color = "#1f7a1f" if val > 0 else "#a11f1f"
-                        bg = "rgba(113, 210, 138, 0.25)" if val > 0 else "rgba(242, 156, 160, 0.25)"
-                        return f'background-color: {bg}; color: {color}; font-weight: bold;'
-
-                    # --- 1. ARBITRAGE / MEAN REVERSION TABLE ---
-                    # Logic: 21d EV > 3% (Good Seasonality) AND Recent_21d < -3% (Beaten Down)
-                    arb_df = res_df[
-                        (res_df['21d_EV'] > 3.0) & 
-                        (res_df['Recent_21d'] < -3.0)
-                    ].copy()
-                    
-                    if not arb_df.empty:
-                        st.subheader("💎 Arbitrage / Catch-Up Candidates")
-                        st.caption("Stocks with strong historical seasonality (EV > 3%) that are currently beaten down (Last 21d < -3%).")
-                        
-                        arb_df['Gap'] = arb_df['21d_EV'] - arb_df['Recent_21d']
-                        arb_display = arb_df.sort_values(by='Gap', ascending=False).head(15)
-                        
-                        st.dataframe(
-                            arb_display[['Ticker', 'Recent_21d', '21d_EV', '21d_WR', 'Gap']].style
-                            .format({'Recent_21d': fmt_finance, '21d_EV': fmt_finance, '21d_WR': "{:.1f}%", 'Gap': "{:.1f}%"})
-                            .applymap(lambda x: 'color: #d32f2f; font-weight:bold;', subset=['Recent_21d'])
-                            .applymap(lambda x: 'color: #2e7d32; font-weight:bold;', subset=['21d_EV'])
-                            .background_gradient(cmap='Greens', subset=['Gap']),
-                            use_container_width=True, hide_index=True
-                        )
-                        st.write("---")
-
-                    # --- 2. STANDARD TABLES ---
-                    st.subheader(f"🗓️ Forward Returns (from {scan_date.strftime('%d %b')})")
-                    
-                    c_scan1, c_scan2 = st.columns(2)
-                    c_scan3, c_scan4 = st.columns(2)
-                    fixed_height = 738
-
-                    for col_obj, p_label, sort_col, sharpe_col, p_key in [
-                        (c_scan1, "**+21 Trading Days**", "21d_EV", "21d_Sharpe", "21d"),
-                        (c_scan2, "**+42 Trading Days**", "42d_EV", "42d_Sharpe", "42d"),
-                        (c_scan3, "**+63 Trading Days**", "63d_EV", "63d_Sharpe", "63d"),
-                        (c_scan4, "**+126 Trading Days**", "126d_EV", "126d_Sharpe", "126d")
-                    ]:
-                        with col_obj:
-                            st.markdown(p_label)
-                            
-                            # CSV Download
-                            if all_csv_rows[p_key]:
-                                df_details = pd.DataFrame(all_csv_rows[p_key])
-                                df_details = df_details.sort_values(by=["Ticker", "Start Date"])
-                                csv_data = df_details.to_csv(index=False).encode('utf-8')
-                                st.download_button(
-                                    label=f"💾 Download CSV",
-                                    data=csv_data,
-                                    file_name=f"seasonality_{p_key}_inputs_{scan_date.strftime('%Y%m%d')}.csv",
-                                    mime="text/csv",
-                                    key=f"dl_btn_{p_key}"
-                                )
-
-                            top_df = res_df.sort_values(by=sort_col, ascending=False).head(20)
-                            
-                            st.dataframe(
-                                top_df[['Ticker', sort_col, sort_col.replace('EV','WR'), sharpe_col]].style
-                                .format({
-                                    sort_col: fmt_finance, 
-                                    sort_col.replace('EV','WR'): "{:.1f}%",
-                                    sharpe_col: "{:.2f}"
-                                })
-                                .applymap(highlight_ev, subset=[sort_col])
-                                .background_gradient(cmap='RdYlGn', subset=[sharpe_col], vmin=0.5, vmax=3.0),
-                                use_container_width=True, hide_index=True, height=fixed_height,
-                                column_config={
-                                    sharpe_col: st.column_config.NumberColumn("Sharpe", help="Consistency Score (EV / StdDev). >2 is very consistent.")
-                                }
-                            )
-
-    st.title("📅 Seasonality")
-    
-    # --- Helper: Optimized Data Fetching (Parquet > CSV > Yahoo) ---
-    def fetch_history_optimized(ticker_sym, t_map):
-        pq_key = f"{ticker_sym}_PARQUET"
-        if pq_key in t_map:
-            try:
-                file_id = t_map[pq_key]
-                url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                buffer = get_gdrive_binary_data(url)
-                if buffer:
-                    df = pd.read_parquet(buffer, engine='pyarrow')
-                    if isinstance(df.index, pd.DatetimeIndex):
-                        df = df.reset_index()
-                    elif df.index.name and 'DATE' in df.index.name.upper():
-                        df = df.reset_index()
-                    elif 'Date' not in df.columns and 'DATE' not in df.columns:
-                        df = df.reset_index()
-                    return df
-            except Exception:
-                pass 
-        if ticker_sym in t_map:
-            return get_ticker_technicals(ticker_sym, t_map)
-        return fetch_yahoo_data(ticker_sym)
-
-    # --- Helper: Finance Formatting ---
-    def fmt_finance(val):
-        if pd.isna(val): return ""
-        if isinstance(val, str): return val
-        if val < 0: return f"({abs(val):.1f}%)"
-        return f"{val:.1f}%"
-
-    # Create Tabs
-    tab_single, tab_scan = st.tabs(["🔎 Single Ticker Analysis", "🚀 Opportunity Scanner"])
-    
-    # ==============================================================================
-    # TAB 1: SINGLE TICKER ANALYSIS
-    # ==============================================================================
-    with tab_single:
-        with st.expander("ℹ️ Page Notes: Methodology"):
-            st.markdown("""
-            **📊 Calendar Month Performance**
-            * **Year Total:** The **SUM** of monthly returns for that year.
-            * **Month Average:** The **AVERAGE** return for that specific month across the selected history.
-            """)
-
-        c1, c2, c3 = st.columns([1, 1, 1])
-        with c1:
-            ticker = st.text_input("Ticker", value="SPY", key="seas_ticker").strip().upper()
-            
-        if not ticker:
-            st.info("Please enter a ticker symbol.")
-            return
-
-        ticker_map = load_ticker_map()
-        df = None
-        
-        with st.spinner(f"Fetching history for {ticker}..."):
-            df = fetch_history_optimized(ticker, ticker_map)
-
-        if df is None or df.empty:
-            st.error(f"Could not load data for {ticker}. Check the ticker symbol or your TICKER_MAP.")
-            return
-
-        df.columns = [c.strip().upper() for c in df.columns]
-        date_col = next((c for c in df.columns if 'DATE' in c), None)
-        close_col = next((c for c in df.columns if 'CLOSE' in c), None)
-        
-        if not date_col or not close_col:
-            st.error("Data source format error: Missing Date or Close columns.")
-            return
-            
-        df[date_col] = pd.to_datetime(df[date_col])
-        df = df.set_index(date_col).sort_index()
-        
-        # Resample to Monthly Returns
-        df_monthly = df[close_col].resample('M').last()
-        df_pct = df_monthly.pct_change() * 100
-        
-        season_df = pd.DataFrame({
-            'Pct': df_pct,
-            'Year': df_pct.index.year,
-            'Month': df_pct.index.month
-        }).dropna()
-
-        today = date.today()
-        current_year = today.year
-        current_month = today.month
-        
-        hist_df = season_df[season_df['Year'] < current_year].copy()
-        curr_df = season_df[season_df['Year'] == current_year].copy()
-        
-        if hist_df.empty:
-            st.warning("Not enough historical full-year data available.")
-        else:
-            min_avail_year = int(hist_df['Year'].min())
-            max_avail_year = int(hist_df['Year'].max())
-            
-            with c2:
-                start_year = st.number_input("Start Year (History)", min_value=min_avail_year, max_value=max_avail_year, value=max_avail_year-10 if max_avail_year-10 >= min_avail_year else min_avail_year, key="seas_start")
-            with c3:
-                end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_avail_year, value=max_avail_year, key="seas_end")
-
-            mask = (hist_df['Year'] >= start_year) & (hist_df['Year'] <= end_year)
-            hist_filtered = hist_df[mask].copy()
-            
-            if hist_filtered.empty:
-                st.warning("No data in selected date range.")
-            else:
-                month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                
-                avg_stats = hist_filtered.groupby('Month')['Pct'].mean().reindex(range(1, 13), fill_value=0)
-                win_rates = hist_filtered.groupby('Month')['Pct'].apply(lambda x: (x > 0).mean() * 100).reindex(range(1, 13), fill_value=0)
-
-                hist_cumsum = avg_stats.cumsum()
-                line_data_hist = pd.DataFrame({
-                    'Month': range(1, 13),
-                    'MonthName': month_names,
-                    'Value': hist_cumsum.values,
-                    'Type': f'Avg ({start_year}-{end_year})'
-                })
-
-                curr_monthly_stats = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)) 
-                curr_cumsum = curr_monthly_stats.cumsum()
-                valid_curr_indices = curr_monthly_stats.dropna().index
-                
-                line_data_curr = pd.DataFrame({
-                    'Month': valid_curr_indices,
-                    'MonthName': [month_names[i-1] for i in valid_curr_indices],
-                    'Value': curr_cumsum.loc[valid_curr_indices].values,
-                    'Type': f'Current Year ({current_year})'
-                })
-                combined_line_data = pd.concat([line_data_hist, line_data_curr])
-                combined_line_data['Label'] = combined_line_data['Value'].apply(fmt_finance)
-
-                # Outlook Logic
-                cur_val = curr_monthly_stats.get(current_month, 0.0)
-                if pd.isna(cur_val): cur_val = 0.0
-                cur_color = "#71d28a" if cur_val > 0 else "#f29ca0"
-                
-                hist_avg = avg_stats.get(current_month, 0.0)
-                diff = cur_val - hist_avg
-                if diff > 0: context_str = f"Outperforming Hist Avg of {fmt_finance(hist_avg)}"
-                else: context_str = f"Underperforming Hist Avg of {fmt_finance(hist_avg)}"
-
-                idx_next = (current_month % 12) + 1
-                idx_next_2 = ((current_month + 1) % 12) + 1
-                nm_name = month_names[idx_next-1]
-                nnm_name = month_names[idx_next_2-1]
-                nm_avg = avg_stats.get(idx_next, 0.0)
-                nm_wr = win_rates.get(idx_next, 0.0)
-                nnm_avg = avg_stats.get(idx_next_2, 0.0)
-
-                if nm_avg >= 1.5 and nm_wr >= 65:
-                    positioning = "🚀 <b>Strong Bullish.</b> Historically a standout month."
-                elif nm_avg > 0 and nm_wr >= 50:
-                    positioning = "↗️ <b>Mildly Bullish.</b> Positive bias, moderate conviction."
-                elif nm_avg < 0 and nm_avg > -1.0:
-                    positioning = "⚠️ <b>Choppy/Weak.</b> Historically drags or trends flat."
-                else:
-                    positioning = "🐻 <b>Bearish.</b> Historically a weak month."
-
-                trend_vs = "improves" if nnm_avg > nm_avg else "weakens"
-                
-                st.markdown(f"""
-                <div style="background-color: rgba(128,128,128,0.05); border-left: 5px solid #66b7ff; padding: 15px; border-radius: 4px; margin-bottom: 25px;">
-                    <div style="font-weight: bold; font-size: 1.1em; margin-bottom: 8px; color: #444;">🤖 Seasonal Outlook</div>
-                    <div style="margin-bottom: 4px;">• <b>Current ({month_names[current_month-1]}):</b> <span style="color:{cur_color}; font-weight:bold;">{fmt_finance(cur_val)}</span>. {context_str}.</div>
-                    <div style="margin-bottom: 4px;">• <b>Next Month ({nm_name}):</b> {positioning} (Avg: {fmt_finance(nm_avg)}, Win Rate: {nm_wr:.1f}%)</div>
-                    <div>• <b>Following ({nnm_name}):</b> Seasonality {trend_vs} to an average of <b>{fmt_finance(nnm_avg)}</b>.</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                col_chart1, col_chart2 = st.columns(2, gap="medium")
-
-                # --- CHART 1: Performance Tracking (Line) ---
-                with col_chart1:
-                    st.subheader(f"📈 Performance Tracking")
-                    line_base = alt.Chart(combined_line_data).encode(
-                        x=alt.X('MonthName', sort=month_names, title='Month'),
-                        y=alt.Y('Value', title='Cumulative Return (%)'),
-                        color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None))
-                    )
-                    st.altair_chart(
-                        (line_base.mark_line(point=True) + line_base.mark_text(dy=-10, fontSize=12, fontWeight='bold').encode(text='Label'))
-                        .properties(height=350)
-                        .configure_axis(labelFontSize=11, titleFontSize=13), 
-                        use_container_width=True
-                    )
-
-                # --- CHART 2: Monthly Returns (Bar) ---
-                with col_chart2:
-                    st.subheader(f"📊 Monthly Returns")
-                    
-                    hist_bar_data = pd.DataFrame({
-                        'Month': range(1, 13), 'MonthName': month_names,
-                        'Value': avg_stats.values, 'Type': 'Historical Avg'
-                    })
-
-                    completed_curr_df = curr_df[curr_df['Month'] < current_month].copy()
-                    curr_bar_data = pd.DataFrame()
-                    if not completed_curr_df.empty:
-                        curr_vals = completed_curr_df.groupby('Month')['Pct'].mean()
-                        curr_bar_data = pd.DataFrame({
-                            'Month': curr_vals.index,
-                            'MonthName': [month_names[i-1] for i in curr_vals.index],
-                            'Value': curr_vals.values,
-                            'Type': f'{current_year} Actual'
-                        })
-                    
-                    combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
-                    combined_bar_data['Label'] = combined_bar_data['Value'].apply(fmt_finance)
-                    
-                    # Ensure label is always "above" the zero line visually
-                    combined_bar_data['LabelY'] = combined_bar_data['Value'].apply(lambda x: max(0, x))
-
-                    base = alt.Chart(combined_bar_data).encode(
-                        x=alt.X('MonthName', sort=month_names, title=None)
-                    )
-
-                    bars = base.mark_bar().encode(
-                        y=alt.Y('Value', title='Return (%)'),
-                        xOffset='Type',
-                        color=alt.condition(
-                            alt.datum.Value > 0,
-                            alt.value("#71d28a"),
-                            alt.value("#f29ca0")
-                        )
-                    )
-
-                    text = base.mark_text(
-                        dy=-10,
-                        fontSize=11, 
-                        fontWeight='bold',
-                        color='black'
-                    ).encode(
-                        y=alt.Y('LabelY'), 
-                        xOffset='Type', 
-                        text='Label'
-                    )
-
-                    st.altair_chart(
-                        (bars + text).properties(height=350).configure_axis(labelFontSize=11, titleFontSize=13),
-                        use_container_width=True
-                    )
-
-                # --- CARDS: Win Rates ---
-                st.markdown("##### 🎯 Historical Win Rate & Expectancy")
-                cols = st.columns(6) 
-                cols2 = st.columns(6)
-                
-                for i in range(12):
-                    mn = month_names[i]
-                    wr = win_rates.loc[i+1]
-                    avg = avg_stats.loc[i+1]
-                    border_color = "#71d28a" if avg > 0 else "#f29ca0"
-                    target_col = cols[i] if i < 6 else cols2[i-6]
-                    target_col.markdown(
-                        f"""
-                        <div style="background-color: rgba(128,128,128,0.05); border-radius: 8px; padding: 8px 5px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {border_color};">
-                            <div style="font-size: 0.85rem; font-weight: bold; color: #555;">{mn}</div>
-                            <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Win Rate</div>
-                            <div style="font-size: 1.0rem; font-weight: 700;">{wr:.1f}%</div>
-                            <div style="font-size: 0.75rem; color: #888; margin-top:2px;">Avg Rtn</div>
-                            <div style="font-size: 0.9rem; font-weight: 600; color: {'#1f7a1f' if avg > 0 else '#a11f1f'};">{fmt_finance(avg)}</div>
-                        </div>
-                        """, unsafe_allow_html=True
-                    )
-
-                # --- HEATMAP ---
-                st.markdown("---")
-                st.subheader("🗓️ Monthly Returns Heatmap")
-                
-                pivot_hist = hist_filtered.pivot(index='Year', columns='Month', values='Pct')
-                if not completed_curr_df.empty:
-                    pivot_curr = completed_curr_df.pivot(index='Year', columns='Month', values='Pct')
-                    full_pivot = pd.concat([pivot_curr, pivot_hist])
-                else:
-                    full_pivot = pivot_hist
-
-                full_pivot.columns = [month_names[c-1] for c in full_pivot.columns]
-                for m in month_names:
-                    if m not in full_pivot.columns: full_pivot[m] = np.nan
-                
-                full_pivot = full_pivot[month_names].sort_index(ascending=False)
-                
-                full_pivot["Year Total"] = full_pivot.sum(axis=1, min_count=1)
-                
-                avg_row = full_pivot[month_names].mean(axis=0)
-                avg_row["Year Total"] = full_pivot["Year Total"].mean()
-                avg_row.name = "Month Average"
-                
-                full_pivot = pd.concat([full_pivot, avg_row.to_frame().T])
-
-                def color_map(val):
-                    if pd.isna(val): return ""
-                    if val == 0: return "color: #888;"
-                    color = "#1f7a1f" if val > 0 else "#a11f1f"
-                    bg_color = "rgba(113, 210, 138, 0.2)" if val > 0 else "rgba(242, 156, 160, 0.2)"
-                    return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
-                
-                st.dataframe(
-                    full_pivot.style.format(fmt_finance).applymap(color_map), 
-                    use_container_width=True, 
-                    height=(len(full_pivot)+1)*35+3
-                )
-
-    # ==============================================================================
-    # TAB 2: OPPORTUNITY SCANNER
-    # ==============================================================================
-    with tab_scan:
-        with st.expander("ℹ️ Page Notes: Methodology & Metrics"):
-            st.markdown("""
-            **🚀 Rolling Forward Returns**
-            * **Methodology**: Scans 10 years of history for dates matching the Start Date (+/- 3 days) and calculates performance for future periods.
-            * **Consistency (Sharpe)**: Calculated as `Average Return / Std Dev`. High score (>2.0) means consistent gains. Low score (<1.0) means volatile/hit-or-miss.
-            * **Mean Reversion**: Looks for tickers with **Positive Seasonality** (Green Historic EV) but **Negative Recent Performance** (Red Last 21d). These may be "coiled" springs.
-            """)
-
-        st.subheader("🚀 High-EV Seasonality Scanner")
-        
-        sc1, sc2, sc3 = st.columns([1, 1, 1])
-        with sc1:
-            scan_date = st.date_input("Start Date for Scan", value=date.today(), key="seas_scan_date")
-        with sc2:
-            min_mc_scan = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="seas_scan_mc")
-            mc_thresh_val = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mc_scan, 1e10)
-        with sc3:
-            scan_lookback = st.number_input("Lookback Years", min_value=5, max_value=20, value=10, key="seas_scan_lb")
-            
-        start_scan = st.button("Run Scanner")
-        
-        if start_scan:
-            ticker_map = load_ticker_map()
-            if not ticker_map:
-                st.error("No TICKER_MAP found in secrets.")
-            else:
-                all_tickers = [k for k in ticker_map.keys() if not k.upper().endswith('_PARQUET')]
-                results = []
-                all_csv_rows = { "21d": [], "42d": [], "63d": [], "126d": [] }
-                
-                st.write(f"Filtering {len(all_tickers)} tickers by Market Cap > {min_mc_scan}...")
-                
-                valid_tickers = []
-                def check_mc(t):
-                    mc = get_market_cap(t)
-                    return t if mc >= mc_thresh_val else None
-
-                with ThreadPoolExecutor(max_workers=20) as executor:
-                    futures = {executor.submit(check_mc, t): t for t in all_tickers}
-                    for future in as_completed(futures):
-                        res = future.result()
-                        if res: valid_tickers.append(res)
-                
-                st.write(f"Scanning {len(valid_tickers)} tickers for high EV opportunities...")
-                progress_bar = st.progress(0)
-                
-                def calc_forward_returns(ticker_sym):
-                    try:
-                        d_df = fetch_history_optimized(ticker_sym, ticker_map)
-                        if d_df is None or d_df.empty: return None, None
-                        
-                        d_df.columns = [c.strip().upper() for c in d_df.columns]
-                        date_c = next((c for c in d_df.columns if 'DATE' in c), None)
-                        close_c = next((c for c in d_df.columns if 'CLOSE' in c), None)
-                        if not date_c or not close_c: return None, None
-                        
-                        d_df[date_c] = pd.to_datetime(d_df[date_c])
-                        d_df = d_df.sort_values(date_c).reset_index(drop=True)
-                        
-                        cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
-                        d_df_hist = d_df[d_df[date_c] >= cutoff].copy()
-                        d_df_hist = d_df_hist.reset_index(drop=True)
-                        if len(d_df_hist) < 252: return None, None
-                        
-                        # --- Calculate Recent Performance (Last 21 days) for Arbitrage Scan ---
-                        recent_perf = 0.0
-                        if len(d_df) > 21:
-                            # Calculate simple % return over last 21 trading days available in DB
-                            last_p = d_df[close_c].iloc[-1]
-                            prev_p = d_df[close_c].iloc[-22] 
-                            recent_perf = ((last_p - prev_p) / prev_p) * 100
-                        
-                        target_doy = scan_date.timetuple().tm_yday
-                        d_df_hist['DOY'] = d_df_hist[date_c].dt.dayofyear
-                        
-                        # +/- 3 Day Window
-                        matches = d_df_hist[(d_df_hist['DOY'] >= target_doy - 3) & (d_df_hist['DOY'] <= target_doy + 3)].copy()
-                        matches['Year'] = matches[date_c].dt.year
-                        matches = matches.drop_duplicates(subset=['Year'])
-                        curr_y = date.today().year
-                        matches = matches[matches['Year'] < curr_y]
-                        
-                        if len(matches) < 3: return None, None
-                        
-                        stats_row = {'Ticker': ticker_sym, 'N': len(matches), 'Recent_21d': recent_perf}
-                        periods = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
-                        
-                        ticker_csv_rows = {k: [] for k in periods.keys()}
-                        
-                        for p_name, trading_days in periods.items():
-                            returns = []
-                            for idx in matches.index:
-                                entry_p = d_df_hist.loc[idx, close_c]
-                                exit_idx = idx + trading_days
-                                if exit_idx < len(d_df_hist):
-                                    exit_p = d_df_hist.loc[exit_idx, close_c]
-                                    ret = (exit_p - entry_p) / entry_p
-                                    returns.append(ret)
-                                    
-                                    ticker_csv_rows[p_name].append({
-                                        "Ticker": ticker_sym,
-                                        "Start Date": d_df_hist.loc[idx, date_c].date(),
-                                        "Entry Price": entry_p,
-                                        "Exit Date": d_df_hist.loc[exit_idx, date_c].date(),
-                                        "Exit Price": exit_p,
-                                        "Return (%)": ret * 100
-                                    })
-                                        
-                            if returns:
-                                returns_arr = np.array(returns)
-                                avg_ret = np.mean(returns_arr) * 100
-                                win_r = np.mean(returns_arr > 0) * 100
-                                std_dev = np.std(returns_arr) * 100
-                                # --- Consistency Metric (Sharpe-like) ---
-                                sharpe = avg_ret / std_dev if std_dev > 0.1 else 0.0
+                                c1, c2 = st.columns(2)
+                                c1.metric("Win Rate (Buy RSI<30 -> 5d Hold)", f"{win_rate*100:.1f}%")
+                                c2.metric("Avg Return", f"{avg_ret*100:.2f}%")
                             else:
-                                avg_ret = 0.0; win_r = 0.0; sharpe = 0.0
-                                
-                            stats_row[f"{p_name}_EV"] = avg_ret
-                            stats_row[f"{p_name}_WR"] = win_r
-                            stats_row[f"{p_name}_Sharpe"] = sharpe
-                            
-                        return stats_row, ticker_csv_rows
-                    except Exception:
-                        return None, None
+                                st.write("No historical RSI < 30 events to analyze.")
 
-                with ThreadPoolExecutor(max_workers=20) as executor: 
-                    futures = {executor.submit(calc_forward_returns, t): t for t in valid_tickers}
-                    completed = 0
-                    for future in as_completed(futures):
-                        res_stats, res_details = future.result()
-                        if res_stats:
-                            results.append(res_stats)
-                        if res_details:
-                            for k in all_csv_rows.keys():
-                                if res_details[k]:
-                                    all_csv_rows[k].extend(res_details[k])
-                        completed += 1
-                        if completed % 5 == 0: progress_bar.progress(completed / len(valid_tickers))
-                
-                progress_bar.empty()
-                
-                if not results:
-                    st.warning("No opportunities found.")
-                else:
-                    res_df = pd.DataFrame(results)
-                    st.write("---")
-                    
-                    def highlight_ev(val):
-                        if pd.isna(val): return ""
-                        color = "#1f7a1f" if val > 0 else "#a11f1f"
-                        bg = "rgba(113, 210, 138, 0.25)" if val > 0 else "rgba(242, 156, 160, 0.25)"
-                        return f'background-color: {bg}; color: {color}; font-weight: bold;'
+                        # --- ADD "SEND TO SEASONALITY" BUTTON ---
+                        if st.button(f"🚀 Analyze {selected_ticker} in Seasonality App"):
+                            # Start Seasonality App logic directly?
+                            # We can't easily jump tabs programmatically in this structure without session state hacks.
+                            # Best to just tell user to go there.
+                            st.info(f"Please switch to the 'Seasonality' tab and enter {selected_ticker}.")
 
-                    # --- 1. ARBITRAGE / MEAN REVERSION TABLE ---
-                    # Logic: 21d EV > 3% (Good Seasonality) AND Recent_21d < -3% (Beaten Down)
-                    arb_df = res_df[
-                        (res_df['21d_EV'] > 3.0) & 
-                        (res_df['Recent_21d'] < -3.0)
-                    ].copy()
-                    
-                    if not arb_df.empty:
-                        st.subheader("💎 Arbitrage / Catch-Up Candidates")
-                        st.caption("Stocks with strong historical seasonality (EV > 3%) that are currently beaten down (Last 21d < -3%).")
-                        
-                        arb_df['Gap'] = arb_df['21d_EV'] - arb_df['Recent_21d']
-                        arb_display = arb_df.sort_values(by='Gap', ascending=False).head(15)
-                        
-                        st.dataframe(
-                            arb_display[['Ticker', 'Recent_21d', '21d_EV', '21d_WR', 'Gap']].style
-                            .format({'Recent_21d': fmt_finance, '21d_EV': fmt_finance, '21d_WR': "{:.1f}%", 'Gap': "{:.1f}%"})
-                            .applymap(lambda x: 'color: #d32f2f; font-weight:bold;', subset=['Recent_21d'])
-                            .applymap(lambda x: 'color: #2e7d32; font-weight:bold;', subset=['21d_EV'])
-                            .background_gradient(cmap='Greens', subset=['Gap']),
-                            use_container_width=True, hide_index=True
-                        )
-                        st.write("---")
-
-                    # --- 2. STANDARD TABLES ---
-                    st.subheader(f"🗓️ Forward Returns (from {scan_date.strftime('%d %b')})")
-                    
-                    c_scan1, c_scan2 = st.columns(2)
-                    c_scan3, c_scan4 = st.columns(2)
-                    fixed_height = 738
-
-                    for col_obj, p_label, sort_col, sharpe_col, p_key in [
-                        (c_scan1, "**+21 Trading Days**", "21d_EV", "21d_Sharpe", "21d"),
-                        (c_scan2, "**+42 Trading Days**", "42d_EV", "42d_Sharpe", "42d"),
-                        (c_scan3, "**+63 Trading Days**", "63d_EV", "63d_Sharpe", "63d"),
-                        (c_scan4, "**+126 Trading Days**", "126d_EV", "126d_Sharpe", "126d")
-                    ]:
-                        with col_obj:
-                            st.markdown(p_label)
-                            
-                            # CSV Download
-                            if all_csv_rows[p_key]:
-                                df_details = pd.DataFrame(all_csv_rows[p_key])
-                                df_details = df_details.sort_values(by=["Ticker", "Start Date"])
-                                csv_data = df_details.to_csv(index=False).encode('utf-8')
-                                st.download_button(
-                                    label=f"💾 Download CSV",
-                                    data=csv_data,
-                                    file_name=f"seasonality_{p_key}_inputs_{scan_date.strftime('%Y%m%d')}.csv",
-                                    mime="text/csv",
-                                    key=f"dl_btn_{p_key}"
-                                )
-
-                            top_df = res_df.sort_values(by=sort_col, ascending=False).head(20)
-                            
-                            st.dataframe(
-                                top_df[['Ticker', sort_col, sort_col.replace('EV','WR'), sharpe_col]].style
-                                .format({
-                                    sort_col: fmt_finance, 
-                                    sort_col.replace('EV','WR'): "{:.1f}%",
-                                    sharpe_col: "{:.2f}"
-                                })
-                                .applymap(highlight_ev, subset=[sort_col])
-                                .background_gradient(cmap='RdYlGn', subset=[sharpe_col], vmin=0.5, vmax=3.0),
-                                use_container_width=True, hide_index=True, height=fixed_height,
-                                column_config={
-                                    sharpe_col: st.column_config.NumberColumn("Sharpe", help="Consistency Score (EV / StdDev). >2 is very consistent.")
-                                }
-                            )
+    except Exception as e: st.error(f"Analysis failed: {e}")
 
 def run_seasonality_app(df_global):
     st.title("📅 Seasonality")
