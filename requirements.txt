@@ -9,3 +9,4 @@ plotly
 tqdm
 google-generativeai
 spicy
+pyarrow
