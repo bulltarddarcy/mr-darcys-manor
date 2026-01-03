@@ -3067,19 +3067,16 @@ def run_seasonality_app(df_global):
                         x=alt.X('MonthName', sort=month_names, title=None)
                     )
 
-                    # Colors: Green for Positive, Red for Negative
                     bars = base.mark_bar().encode(
                         y=alt.Y('Value', title='Return (%)'),
                         xOffset='Type',
                         color=alt.condition(
                             alt.datum.Value > 0,
-                            alt.value("#71d28a"),  # Green
-                            alt.value("#f29ca0")   # Red
+                            alt.value("#71d28a"),
+                            alt.value("#f29ca0")
                         )
                     )
 
-                    # Text: Always dy=-10 puts it "above" the data point relative to the axis direction
-                    # For positive, it's above the bar. For negative, it's inside/above the bottom.
                     text = base.mark_text(
                         dy=-10,
                         fontSize=11, 
@@ -3136,13 +3133,9 @@ def run_seasonality_app(df_global):
                 
                 full_pivot = full_pivot[month_names].sort_index(ascending=False)
                 
-                # 1. Year Total (Sum)
                 full_pivot["Year Total"] = full_pivot.sum(axis=1, min_count=1)
                 
-                # 2. Month Average (Mean of months)
                 avg_row = full_pivot[month_names].mean(axis=0)
-                
-                # Average of the Totals (for the corner cell)
                 avg_row["Year Total"] = full_pivot["Year Total"].mean()
                 avg_row.name = "Month Average"
                 
@@ -3192,6 +3185,7 @@ def run_seasonality_app(df_global):
             else:
                 all_tickers = [k for k in ticker_map.keys() if not k.upper().endswith('_PARQUET')]
                 results = []
+                all_csv_rows = [] # Accumulator for CSV details
                 
                 st.write(f"Filtering {len(all_tickers)} tickers by Market Cap > {min_mc_scan}...")
                 
@@ -3212,19 +3206,19 @@ def run_seasonality_app(df_global):
                 def calc_forward_returns(ticker_sym):
                     try:
                         d_df = fetch_history_optimized(ticker_sym, ticker_map)
-                        if d_df is None or d_df.empty: return None
+                        if d_df is None or d_df.empty: return None, None
                         
                         d_df.columns = [c.strip().upper() for c in d_df.columns]
                         date_c = next((c for c in d_df.columns if 'DATE' in c), None)
                         close_c = next((c for c in d_df.columns if 'CLOSE' in c), None)
-                        if not date_c or not close_c: return None
+                        if not date_c or not close_c: return None, None
                         
                         d_df[date_c] = pd.to_datetime(d_df[date_c])
                         d_df = d_df.sort_values(date_c).reset_index(drop=True)
                         
                         cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
                         d_df = d_df[d_df[date_c] >= cutoff].copy()
-                        if len(d_df) < 252: return None 
+                        if len(d_df) < 252: return None, None 
                         
                         target_doy = scan_date.timetuple().tm_yday
                         d_df['DOY'] = d_df[date_c].dt.dayofyear
@@ -3235,10 +3229,12 @@ def run_seasonality_app(df_global):
                         curr_y = date.today().year
                         matches = matches[matches['Year'] < curr_y]
                         
-                        if len(matches) < 3: return None
+                        if len(matches) < 3: return None, None
                         
                         stats_row = {'Ticker': ticker_sym, 'N': len(matches)}
                         periods = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
+                        
+                        csv_rows_21d = [] # List to hold details for 21d CSV
                         
                         for p_name, trading_days in periods.items():
                             returns = []
@@ -3249,6 +3245,18 @@ def run_seasonality_app(df_global):
                                     exit_p = d_df.loc[exit_idx, close_c]
                                     ret = (exit_p - entry_p) / entry_p
                                     returns.append(ret)
+                                    
+                                    # Collect details specifically for the 21d table CSV
+                                    if p_name == "21d":
+                                        csv_rows_21d.append({
+                                            "Ticker": ticker_sym,
+                                            "Start Date": d_df.loc[idx, date_c].date(),
+                                            "Entry Price": entry_p,
+                                            "Exit Date": d_df.loc[exit_idx, date_c].date(),
+                                            "Exit Price": exit_p,
+                                            "Return (%)": ret * 100
+                                        })
+                                        
                             if returns:
                                 avg_ret = np.mean(returns) * 100
                                 win_r = np.mean(np.array(returns) > 0) * 100
@@ -3257,16 +3265,21 @@ def run_seasonality_app(df_global):
                                 win_r = 0.0
                             stats_row[f"{p_name}_EV"] = avg_ret
                             stats_row[f"{p_name}_WR"] = win_r
-                        return stats_row
+                            
+                        return stats_row, csv_rows_21d
                     except Exception:
-                        return None
+                        return None, None
 
                 with ThreadPoolExecutor(max_workers=20) as executor: 
                     futures = {executor.submit(calc_forward_returns, t): t for t in valid_tickers}
                     completed = 0
                     for future in as_completed(futures):
-                        res = future.result()
-                        if res: results.append(res)
+                        res_stats, res_details = future.result()
+                        if res_stats:
+                            results.append(res_stats)
+                        if res_details:
+                            all_csv_rows.extend(res_details)
+                            
                         completed += 1
                         if completed % 5 == 0: progress_bar.progress(completed / len(valid_tickers))
                 
@@ -3277,6 +3290,19 @@ def run_seasonality_app(df_global):
                 else:
                     res_df = pd.DataFrame(results)
                     st.write("---")
+                    
+                    # --- CSV Download Section ---
+                    if all_csv_rows:
+                        df_details = pd.DataFrame(all_csv_rows)
+                        df_details = df_details.sort_values(by=["Ticker", "Start Date"])
+                        csv_data = df_details.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="💾 Download 21d Backtest Data (CSV)",
+                            data=csv_data,
+                            file_name=f"seasonality_21d_inputs_{scan_date.strftime('%Y%m%d')}.csv",
+                            mime="text/csv",
+                            help="Contains the specific historical trade start dates and returns used to calculate the 21d averages."
+                        )
                     
                     def highlight_ev(val):
                         if pd.isna(val): return ""
