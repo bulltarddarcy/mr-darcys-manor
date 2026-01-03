@@ -2907,13 +2907,21 @@ def run_seasonality_app(df_global):
 
 def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
+    
+    # --- NOTES ---
+    st.markdown("❗️ **Note:** The plan is to use this extension to scan the master_list of tickers to give the user a heads up of a good buying or selling zone based on this indicator.")
+    st.markdown("🚧 **Beta Warning:** I am trying to understand exactly how to use this data, so please don't use this page for actual numbers quite yet.")
 
-    # --- Page Notes ---
     with st.expander("ℹ️ Page Notes: How to Read This Table"):
         st.markdown("""
         **The "Rubber Band" Strategy (Long-Only)**
-        * **🟢 Buy Zone (Green):** When **Current** is near or below the **p50 (Median)**. This implies the price has reverted to the mean or is "on sale" relative to the trend.
-        * **🔴 Sell/Trim Zone (Red):** When **Current** is near **p90** or **p95**. This implies the price is statistically over-extended (2 standard deviations). The "rubber band" is stretched tight and likely to snap back.
+        * **🟢 Buy Zone (Green):** Price is > 8 EMA **AND** the Gap is near/below the historical median (p50).
+            * *Note:* We do not recommend buying if Price < 8 EMA (Trend is down).
+        * **🔴 Sell/Trim Zone (Red):** The Gap is near p90 or p95. The rubber band is stretched tight.
+        * **Columns:**
+            * **Price:** Current Stock Price.
+            * **MA Level:** The price of the specific Moving Average (e.g., the 21 EMA price).
+            * **Gap:** The % distance between Price and the MA Level.
         """)
 
     # 1. Input Section
@@ -2934,11 +2942,9 @@ def run_ema_distance_app(df_global):
         return
 
     # 3. Calculations
-    # Ensure correct column names
     close_col = 'CLOSE' if 'CLOSE' in df.columns else 'Close'
     date_col = 'DATE' if 'DATE' in df.columns else 'Date'
     
-    # Check if we have the date column, if not try to use index
     if date_col not in df.columns:
         df[date_col] = df.index
 
@@ -2949,7 +2955,6 @@ def run_ema_distance_app(df_global):
     df['SMA_100'] = df[close_col].rolling(window=100).mean()
     df['SMA_200'] = df[close_col].rolling(window=200).mean()
     
-    # Clean NaN values for accurate stats
     df_clean = df.dropna(subset=['EMA_8', 'EMA_21', 'SMA_50', 'SMA_100', 'SMA_200']).copy()
     
     if df_clean.empty:
@@ -2964,16 +2969,15 @@ def run_ema_distance_app(df_global):
         ("Close vs 200-SMA", df_clean['SMA_200']),
     ]
     
-    stats_summary = []
-    stats_percentiles = []
+    stats_data = []
     
     current_price = df_clean[close_col].iloc[-1]
+    current_ema8 = df_clean['EMA_8'].iloc[-1] # Key for Trend Filter
     
     for label, ma_series in metrics:
-        # Calculate Percentage Distance: (Price - MA) / MA * 100
+        # Distances
         dist_series = ((df_clean[close_col] - ma_series) / ma_series) * 100
         
-        # Current Distance
         current_ma_val = ma_series.iloc[-1]
         current_dist = ((current_price - current_ma_val) / current_ma_val) * 100
         
@@ -2985,93 +2989,84 @@ def run_ema_distance_app(df_global):
         p90 = np.percentile(dist_series, 90)
         p95 = np.percentile(dist_series, 95)
         
-        # Store raw numbers for styling, will format later
-        stats_summary.append({
+        stats_data.append({
             "Metric": label,
-            "Current": current_dist,
+            "Price": current_price,
+            "MA Level": current_ma_val,
+            "Gap": current_dist,
             "Avg": long_run_avg,
             "p50": p50,
+            "p70": p70,
+            "p80": p80,
             "p90": p90,
             "p95": p95
         })
-        
-        # Table 2 needs string formatting immediately as we won't color code it heavily
-        def fmt(x): return f"{x:.2f}%"
-        stats_percentiles.append({
-            "Metric": label,
-            "p50 (Median)": fmt(p50),
-            "p70": fmt(p70),
-            "p80": fmt(p80),
-            "p90": fmt(p90)
-        })
 
     # 4. Display & Coloring
-    df_summ = pd.DataFrame(stats_summary)
-    df_perc = pd.DataFrame(stats_percentiles)
+    df_stats = pd.DataFrame(stats_data)
 
-    # --- COLOR CODING LOGIC ---
-    def color_long_only(row):
-        # Default Style
+    def color_combined(row):
         styles = [''] * len(row)
         
-        curr = row['Current']
+        gap = row['Gap']
         p50 = row['p50']
         p90 = row['p90']
         
-        # Define Colors
-        color_sell = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;' # Red-ish
-        color_warn = 'background-color: #fff8e1; color: #d68f00;'                   # Yellow/Orange
-        color_buy  = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;' # Green-ish
+        # Trend Filter: Only buy if Price > 8 EMA
+        # We can check this by seeing if the Gap for 8-EMA is positive, 
+        # OR simply compare current_price > current_ema8 (globally available in this scope)
+        is_uptrend = (current_price > current_ema8)
         
-        idx_curr = df_summ.columns.get_loc("Current")
+        color_sell = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;' 
+        color_warn = 'background-color: #fff8e1; color: #d68f00;'                   
+        color_buy  = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;' 
         
-        if curr >= p90:
-            styles[idx_curr] = color_sell
-        elif curr <= p50:
-            styles[idx_curr] = color_buy
-        elif curr > p50 and curr < p90:
-            styles[idx_curr] = color_warn
+        idx_gap = df_stats.columns.get_loc("Gap")
+        
+        if gap >= p90:
+            styles[idx_gap] = color_sell
+        elif gap <= p50 and is_uptrend:
+            styles[idx_gap] = color_buy
+        elif gap > p50 and gap < p90:
+            styles[idx_gap] = color_warn
             
         return styles
 
     st.subheader(f"{ticker} vs. Moving Avgs")
     
-    st.markdown("##### 🚨 Over-Extension Thresholds")
+    # Configure Columns for nice display
+    col_config = {
+        "Metric": st.column_config.TextColumn("Distance Metric", width="medium"),
+        "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+        "MA Level": st.column_config.NumberColumn("MA Level", format="$%.2f"),
+        "Gap": st.column_config.NumberColumn("Current Gap", format="%.2f%%"),
+        "Avg": st.column_config.NumberColumn("Avg", format="%.2f%%"),
+        "p50": st.column_config.NumberColumn("p50", format="%.2f%%"),
+        "p70": st.column_config.NumberColumn("p70", format="%.2f%%"),
+        "p80": st.column_config.NumberColumn("p80", format="%.2f%%"),
+        "p90": st.column_config.NumberColumn("p90", format="%.2f%%"),
+        "p95": st.column_config.NumberColumn("p95 (Sell)", format="%.2f%%"),
+    }
     
-    # Format the numbers for display while keeping the underlying data for the styler
-    # We use format() inside st.dataframe to keep the floats accessible for the styling function
     st.dataframe(
-        df_summ.style.apply(color_long_only, axis=1)
-               .format("{:.2f}%", subset=["Current", "Avg", "p50", "p90", "p95"]),
+        df_stats.style.apply(color_combined, axis=1),
         use_container_width=True, 
         hide_index=True,
-        column_config={
-            "Metric": st.column_config.TextColumn("Distance Metric"),
-            "Current": st.column_config.TextColumn("Current Gap"),
-            "p95": st.column_config.TextColumn("Sell Line (p95)"),
-        }
+        column_config=col_config
     )
     
-    st.caption("🔴 **Red** = Over-extended (Sell/Trim). 🟢 **Green** = Mean Reversion (Buy/Hold).")
-    
-    st.markdown("##### 📊 Historical Percentiles")
-    st.dataframe(df_perc, use_container_width=True, hide_index=True)
-    
+    st.caption(f"Trend Filter: Price is {'ABOVE' if current_price > current_ema8 else 'BELOW'} the 8 EMA. (Buy signals hidden if Below)")
+
     # Visualization
     st.markdown("---")
     st.caption("Visualizing the Close Price vs the 21 EMA % Distance over time")
     
-    # --- FIX FOR THE 'INT - TIMEDELTA' ERROR ---
-    # We explicitly use the date column we identified earlier
     dist_21 = ((df_clean[close_col] - df_clean['EMA_21']) / df_clean['EMA_21']) * 100
     
     chart_data = pd.DataFrame({
-        'Date': df_clean[date_col],  # <--- FIX: Using the column, not the index
+        'Date': pd.to_datetime(df_clean[date_col]),
         'Distance (%)': dist_21,
     })
-    
-    # Ensure Date is datetime object for sure
-    chart_data['Date'] = pd.to_datetime(chart_data['Date'])
     
     cutoff_date = chart_data['Date'].max() - timedelta(days=730)
     chart_data = chart_data[chart_data['Date'] >= cutoff_date]
