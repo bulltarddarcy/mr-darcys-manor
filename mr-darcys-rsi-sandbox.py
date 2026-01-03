@@ -2918,10 +2918,7 @@ def run_ema_distance_app(df_global):
         * **🟢 Buy Zone (Green):** Price is > 8 EMA **AND** the Gap is near/below the historical median (p50).
             * *Note:* We do not recommend buying if Price < 8 EMA (Trend is down).
         * **🔴 Sell/Trim Zone (Red):** The Gap is near p90 or p95. The rubber band is stretched tight.
-        * **Columns:**
-            * **Price:** Current Stock Price.
-            * **MA Level:** The price of the specific Moving Average (e.g., the 21 EMA price).
-            * **Gap:** The % distance between Price and the MA Level.
+        * **Combo Signals:** The second table highlights rare "Stacked" over-extensions. When shorter-term (8/21) and medium-term (50) timeframes are ALL stretched simultaneously, the probability of a pullback increases significantly.
         """)
 
     # 1. Input Section
@@ -2962,19 +2959,22 @@ def run_ema_distance_app(df_global):
         return
 
     metrics = [
-        ("Close vs 8-EMA", df_clean['EMA_8']),
-        ("Close vs 21-EMA", df_clean['EMA_21']),
-        ("Close vs 50-SMA", df_clean['SMA_50']),
-        ("Close vs 100-SMA", df_clean['SMA_100']),
-        ("Close vs 200-SMA", df_clean['SMA_200']),
+        ("Close vs 8-EMA", df_clean['EMA_8'], "8-EMA"),
+        ("Close vs 21-EMA", df_clean['EMA_21'], "21-EMA"),
+        ("Close vs 50-SMA", df_clean['SMA_50'], "50-SMA"),
+        ("Close vs 100-SMA", df_clean['SMA_100'], "100-SMA"),
+        ("Close vs 200-SMA", df_clean['SMA_200'], "200-SMA"),
     ]
     
     stats_data = []
     
+    # Dictionary to hold specific threshold data for the Combo Logic
+    combo_lookup = {} 
+    
     current_price = df_clean[close_col].iloc[-1]
     current_ema8 = df_clean['EMA_8'].iloc[-1] 
     
-    for label, ma_series in metrics:
+    for label, ma_series, short_name in metrics:
         # Distances
         dist_series = ((df_clean[close_col] - ma_series) / ma_series) * 100
         
@@ -2989,6 +2989,13 @@ def run_ema_distance_app(df_global):
         p90 = np.percentile(dist_series, 90)
         p95 = np.percentile(dist_series, 95)
         
+        # Save for Combo Logic
+        combo_lookup[short_name] = {
+            "Gap": current_dist,
+            "p80": p80,
+            "p90": p90
+        }
+        
         stats_data.append({
             "Metric": label,
             "Price": current_price,
@@ -3002,12 +3009,11 @@ def run_ema_distance_app(df_global):
             "p95": p95
         })
 
-    # 4. Display & Coloring
+    # 4. Display & Coloring (Main Table)
     df_stats = pd.DataFrame(stats_data)
 
     def color_combined(row):
         styles = [''] * len(row)
-        
         gap = row['Gap']
         p50 = row['p50']
         p90 = row['p90']
@@ -3053,12 +3059,71 @@ def run_ema_distance_app(df_global):
     
     st.caption(f"Trend Filter: Price is {'ABOVE' if current_price > current_ema8 else 'BELOW'} the 8 EMA. (Buy signals hidden if Below)")
 
-    # Visualization
+    # ------------------------------------------------------------------
+    # 5. NEW: COMBO ANALYSIS TABLE
+    # ------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("🔥 Combo Over-Extension Signals")
+    
+    # Retrieve data for logic
+    c8 = combo_lookup["8-EMA"]
+    c21 = combo_lookup["21-EMA"]
+    c50 = combo_lookup["50-SMA"]
+    
+    # Logic Rules
+    # 1. Double EMA: 8EMA > p90 AND 21EMA > p80
+    is_double = (c8["Gap"] >= c8["p90"]) and (c21["Gap"] >= c21["p80"])
+    
+    # 2. Fast vs Swing: 8EMA > p90 AND 50SMA > p80
+    is_fast_swing = (c8["Gap"] >= c8["p90"]) and (c50["Gap"] >= c50["p80"])
+    
+    # 3. Triple Stack: All 3 (Double + 50SMA > p80)
+    is_triple = is_double and (c50["Gap"] >= c50["p80"])
+
+    combo_rows = [
+        {
+            "Combo Rule": "Double EMA",
+            "Thresholds (Dynamic)": f"8-EMA > p90 ({c8['p90']:.2f}%) & 21-EMA > p80 ({c21['p80']:.2f}%)",
+            "Current Status": f"8-EMA: {c8['Gap']:.2f}% | 21-EMA: {c21['Gap']:.2f}%",
+            "Triggered": is_double
+        },
+        {
+            "Combo Rule": "Fast vs Swing",
+            "Thresholds (Dynamic)": f"8-EMA > p90 ({c8['p90']:.2f}%) & 50-SMA > p80 ({c50['p80']:.2f}%)",
+            "Current Status": f"8-EMA: {c8['Gap']:.2f}% | 50-SMA: {c50['Gap']:.2f}%",
+            "Triggered": is_fast_swing
+        },
+        {
+            "Combo Rule": "Triple Stack",
+            "Thresholds (Dynamic)": f"8-EMA > p90, 21-EMA > p80, 50-SMA > p80",
+            "Current Status": "All 3 conditions met",
+            "Triggered": is_triple
+        }
+    ]
+    
+    df_combo = pd.DataFrame(combo_rows)
+
+    def color_combo(row):
+        styles = [''] * len(row)
+        if row['Triggered']:
+            return ['background-color: #fce8e6; color: #c5221f; font-weight: bold;'] * len(row)
+        return styles
+
+    st.dataframe(
+        df_combo.style.apply(color_combo, axis=1),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Triggered": st.column_config.CheckboxColumn("Active?", width="small")
+        }
+    )
+
+    # ------------------------------------------------------------------
+    # 6. Chart (Visualization)
+    # ------------------------------------------------------------------
     st.markdown("---")
     st.caption("Visualizing the $ Distance from 50 SMA (Green > 0, Red < 0)")
     
-    # --- UPDATED CHART LOGIC ---
-    # 1. Calculate Dollar Distance from 50 SMA
     dist_50_dollar = df_clean[close_col] - df_clean['SMA_50']
     
     chart_data = pd.DataFrame({
@@ -3066,11 +3131,9 @@ def run_ema_distance_app(df_global):
         'Distance ($)': dist_50_dollar,
     })
     
-    # 2. Filter last 2 years
     cutoff_date = chart_data['Date'].max() - timedelta(days=730)
     chart_data = chart_data[chart_data['Date'] >= cutoff_date]
 
-    # 3. Create Bar/Area Chart with Color Split
     c = alt.Chart(chart_data).mark_bar().encode(
         x='Date:T',
         y=alt.Y('Distance ($)', title='$ Dist from 50 SMA'),
