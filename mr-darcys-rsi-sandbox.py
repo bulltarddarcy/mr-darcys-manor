@@ -1826,309 +1826,206 @@ def run_rsi_scanner_app(df_global):
 
     # 2. RUN SCAN BUTTON
     if st.button("Run RSI Scan"):
-        ticker_map = load_ticker_map()
-        if not ticker_map:
-            st.error("No TICKER_MAP found.")
-        else:
-            all_tickers = [k for k in ticker_map.keys() if not k.endswith('_PARQUET')]
-            
-            # Filter by Volume first (rough pass to save time)
-            valid_tickers = []
-            
-            # Helper to get vol quickly
-            def check_vol(t):
-                try:
-                    # We can use get_ticker_technicals or fetch_yahoo_data
-                    # For speed, let's just fetch history and check
-                    # Or relying on the cached 'get_ticker_technicals' might be faster if recently used
-                    # But here, let's just use the robust fetch:
-                    df = fetch_yahoo_data(t) # or parquet if implemented
-                    if df is not None and not df.empty:
-                        avg_vol = df['Volume'].tail(30).mean()
-                        if avg_vol >= min_vol:
-                            return t, df
-                except:
-                    pass
-                return None, None
-
-            # We need to fetch data for ALL tickers to scan. This can be slow.
-            # Let's use ThreadPool
-            status_text = st.empty()
-            status_text.write(f"Scanning {len(all_tickers)} tickers...")
-            
-            progress_bar = st.progress(0)
-            
-            scan_results = []
-            
-            with ThreadPoolExecutor(max_workers=20) as executor:
-                # We'll submit tasks. 
-                # Note: 'check_vol' returns (ticker, df)
-                future_to_ticker = {executor.submit(check_vol, t): t for t in all_tickers}
-                
-                completed = 0
-                for future in as_completed(future_to_ticker):
-                    ticker = future_to_ticker[future]
-                    try:
-                        t_sym, df_hist = future.result()
-                        if t_sym and df_hist is not None:
-                            # Perform Analysis based on mode
-                            df_hist = df_hist.sort_values('Date').reset_index(drop=True)
-                            
-                            # Calculate RSI (14) if not present
-                            if 'RSI' not in df_hist.columns:
-                                delta = df_hist['Close'].diff()
-                                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                                rs = gain / loss
-                                df_hist['RSI'] = 100 - (100 / (1 + rs))
-                            
-                            current_rsi = df_hist['RSI'].iloc[-1]
-                            last_close = df_hist['Close'].iloc[-1]
-                            
-                            # --- LOGIC PER MODE ---
-                            
-                            # A. STANDARD RSI
-                            if scan_mode == "Standard RSI Levels":
-                                # Oversold < 30, Overbought > 70
-                                if current_rsi < 30:
-                                    scan_results.append({
-                                        "Ticker": t_sym, "Signal": "Oversold", "RSI": current_rsi, "Price": last_close, "Context": "RSI < 30"
-                                    })
-                                elif current_rsi > 70:
-                                    scan_results.append({
-                                        "Ticker": t_sym, "Signal": "Overbought", "RSI": current_rsi, "Price": last_close, "Context": "RSI > 70"
-                                    })
-                                    
-                            # B. DIVERGENCE (Simplified)
-                            elif scan_mode == "RSI Divergence":
-                                # Look at last 30 days
-                                # Bullish Div: Price Low < Prev Low AND RSI Low > Prev Low
-                                # Bearish Div: Price High > Prev High AND RSI High < Prev High
-                                # This requires peak/trough detection. 
-                                # Let's do a simple check of min/max in recent window vs previous window
-                                
-                                # Split data into Recent (0-15 days ago) and Previous (15-45 days ago)
-                                if len(df_hist) > 50:
-                                    recent = df_hist.iloc[-15:]
-                                    previous = df_hist.iloc[-45:-15]
-                                    
-                                    # Bullish
-                                    rec_low_p = recent['Close'].min()
-                                    prev_low_p = previous['Close'].min()
-                                    
-                                    # Find the RSI value at those specific dates (approximate)
-                                    rec_low_idx = recent['Close'].idxmin()
-                                    prev_low_idx = previous['Close'].idxmin()
-                                    
-                                    rec_rsi_at_low = df_hist.loc[rec_low_idx, 'RSI']
-                                    prev_rsi_at_low = df_hist.loc[prev_low_idx, 'RSI']
-                                    
-                                    if rec_low_p < prev_low_p and rec_rsi_at_low > prev_rsi_at_low:
-                                         scan_results.append({
-                                            "Ticker": t_sym, "Signal": "Bullish Div", "RSI": current_rsi, "Price": last_close, "Context": f"Price New Low ({rec_low_p:.2f}) / RSI Higher ({rec_rsi_at_low:.1f})"
-                                        })
-
-                                    # Bearish
-                                    rec_high_p = recent['Close'].max()
-                                    prev_high_p = previous['Close'].max()
-                                    
-                                    rec_high_idx = recent['Close'].idxmax()
-                                    prev_high_idx = previous['Close'].idxmax()
-                                    
-                                    rec_rsi_at_high = df_hist.loc[rec_high_idx, 'RSI']
-                                    prev_rsi_at_high = df_hist.loc[prev_high_idx, 'RSI']
-                                    
-                                    if rec_high_p > prev_high_p and rec_rsi_at_high < prev_rsi_at_high:
-                                         scan_results.append({
-                                            "Ticker": t_sym, "Signal": "Bearish Div", "RSI": current_rsi, "Price": last_close, "Context": f"Price New High ({rec_high_p:.2f}) / RSI Lower ({rec_rsi_at_high:.1f})"
-                                        })
-
-                            # C. PERCENTILE EXTREMES
-                            elif scan_mode == "RSI Percentile Extremes":
-                                # Calculate rank of current RSI vs last 252 days
-                                lookback_slice = df_hist['RSI'].iloc[-lookback_days:]
-                                if len(lookback_slice) > 100:
-                                    # Rank
-                                    rank = (lookback_slice < current_rsi).mean() * 100 # Percentile (0-100)
-                                    
-                                    if rank < 5:
-                                        scan_results.append({
-                                            "Ticker": t_sym, "Signal": "Extremely Low", "RSI": current_rsi, "Price": last_close, "Context": f"{rank:.1f}th Percentile (Low)"
-                                        })
-                                    elif rank > 95:
-                                        scan_results.append({
-                                            "Ticker": t_sym, "Signal": "Extremely High", "RSI": current_rsi, "Price": last_close, "Context": f"{rank:.1f}th Percentile (High)"
-                                        })
-
-                    except Exception as e:
-                        # Fail silently for individual ticker errors
-                        pass
-                    
-                    completed += 1
-                    if completed % 5 == 0:
-                        progress_bar.progress(completed / len(all_tickers))
-            
-            progress_bar.empty()
-            status_text.empty()
-            
-            # DISPLAY RESULTS
-            if not scan_results:
-                st.info("No tickers matched the criteria.")
+        try:
+            ticker_map = load_ticker_map()
+            if not ticker_map:
+                st.error("No TICKER_MAP found.")
             else:
-                res_df = pd.DataFrame(scan_results)
-                st.success(f"Found {len(res_df)} matches!")
+                all_tickers = [k for k in ticker_map.keys() if not k.endswith('_PARQUET')]
                 
-                st.dataframe(
-                    res_df.style.format({"RSI": "{:.1f}", "Price": "${:.2f}"})
-                    .applymap(lambda v: 'color: red' if v == 'Overbought' or v == 'Bearish Div' or 'High' in str(v) else 'color: green', subset=['Signal']),
-                    use_container_width=True,
-                    hide_index=True
-                )
+                valid_tickers = []
                 
-                # --- BACKTEST VISUALIZER FOR SELECTED RESULT ---
-                st.markdown("---")
-                st.subheader("🔎 Signal Analysis")
-                selected_ticker = st.selectbox("Select Ticker to Analyze", res_df['Ticker'].unique())
+                # Helper to get vol quickly
+                def check_vol(t):
+                    try:
+                        df = fetch_yahoo_data(t) 
+                        if df is not None and not df.empty:
+                            avg_vol = df['Volume'].tail(30).mean()
+                            if avg_vol >= min_vol:
+                                return t, df
+                    except:
+                        pass
+                    return None, None
+
+                status_text = st.empty()
+                status_text.write(f"Scanning {len(all_tickers)} tickers...")
                 
-                if selected_ticker:
-                    # Re-fetch or pass data? Let's just re-fetch for simplicity/safety of this snippet
-                    df_viz = fetch_yahoo_data(selected_ticker)
-                    if df_viz is not None:
-                        df_viz = df_viz.sort_values('Date').reset_index(drop=True)
-                        # Recalc RSI
-                        delta = df_viz['Close'].diff()
-                        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                        rs = gain / loss
-                        df_viz['RSI'] = 100 - (100 / (1 + rs))
-                        
-                        # Plot
-                        base = alt.Chart(df_viz.iloc[-150:]).encode(x='Date:T')
-                        
-                        line = base.mark_line(color='#66b7ff').encode(y=alt.Y('Close', scale=alt.Scale(zero=False)))
-                        
-                        rsi_chart = base.mark_line(color='purple').encode(y=alt.Y('RSI', scale=alt.Scale(domain=[0, 100])))
-                        rsi_band_upper = base.mark_rule(color='red', strokeDash=[4,4]).encode(y=alt.datum(70))
-                        rsi_band_lower = base.mark_rule(color='green', strokeDash=[4,4]).encode(y=alt.datum(30))
-                        
-                        c_final = (line.properties(height=200, title=f"{selected_ticker} Price") & 
-                                  (rsi_chart + rsi_band_upper + rsi_band_lower).properties(height=150, title="RSI (14)"))
-                        
-                        st.altair_chart(c_final, use_container_width=True)
-                        
-                        # --- SIMPLE STATS ---
-                        # If scan mode is Percentile, let's show a histogram
-                        if scan_mode == "RSI Percentile Extremes":
-                            st.write("**RSI Distribution (Last 252 Days)**")
-                            hist_data = df_viz['RSI'].iloc[-252:]
-                            
-                            # Simple Histogram using Altair
-                            hist_df = pd.DataFrame({'RSI': hist_data})
-                            c_hist = alt.Chart(hist_df).mark_bar().encode(
-                                alt.X("RSI", bin=True),
-                                y='count()'
-                            ).properties(height=150)
-                            
-                            st.altair_chart(c_hist, use_container_width=True)
-
-                        # --- NEW FEATURE: RSI MEAN REVERSION BACKTEST (Mini) ---
-                        # If we found an Oversold signal, how often did it bounce?
-                        if scan_mode == "Standard RSI Levels":
-                            in_low = 30
-                            in_high = 70
-                            
-                            # Identify historical signals
-                            df_viz['Signal'] = 0
-                            df_viz.loc[df_viz['RSI'] < in_low, 'Signal'] = 1  # Buy
-                            df_viz.loc[df_viz['RSI'] > in_high, 'Signal'] = -1 # Sell
-                            
-                            # Only take the first signal of a cluster (simple approach: shift)
-                            df_viz['Prev_Signal'] = df_viz['Signal'].shift(1)
-                            # Valid Entry: Current is 1, Prev was not 1 (entered zone) 
-                            # OR better: Crossover? Let's stick to "In Zone" for now or "Crossed Below 30"
-                            # "Crossed Below 30": Prev >= 30, Curr < 30
-                            
-                            # Let's do "Crossed Into Zone"
-                            buy_signals = (df_viz['RSI'] < in_low) & (df_viz['RSI'].shift(1) >= in_low)
-                            sell_signals = (df_viz['RSI'] > in_high) & (df_viz['RSI'].shift(1) <= in_high)
-                            
-                            sigs = []
-                            for idx in df_viz[buy_signals].index:
-                                if idx < len(df_viz) - 10:
-                                    entry_p = df_viz.loc[idx, 'Close']
-                                    # Forward returns 5d, 10d
-                                    ret_5d = (df_viz.loc[idx+5, 'Close'] - entry_p)/entry_p if idx+5 < len(df_viz) else 0
-                                    ret_10d = (df_viz.loc[idx+10, 'Close'] - entry_p)/entry_p if idx+10 < len(df_viz) else 0
-                                    sigs.append({'Type': 'Oversold Buy', 'Date': df_viz.loc[idx, 'Date'], 'Price': entry_p, '5d %': ret_5d*100, '10d %': ret_10d*100})
-                            
-                            for idx in df_viz[sell_signals].index:
-                                if idx < len(df_viz) - 10:
-                                    entry_p = df_viz.loc[idx, 'Close']
-                                    # For Sell, return is inverse? Or just show price drop
-                                    # Let's show raw return. Negative is good for short, bad for long.
-                                    ret_5d = (df_viz.loc[idx+5, 'Close'] - entry_p)/entry_p if idx+5 < len(df_viz) else 0
-                                    ret_10d = (df_viz.loc[idx+10, 'Close'] - entry_p)/entry_p if idx+10 < len(df_viz) else 0
-                                    sigs.append({'Type': 'Overbought Sell', 'Date': df_viz.loc[idx, 'Date'], 'Price': entry_p, '5d %': ret_5d*100, '10d %': ret_10d*100})
-
-                            if sigs:
-                                st.write("**Historical Signal Performance (Last 3 Years)**")
-                                sig_df = pd.DataFrame(sigs)
-                                st.dataframe(sig_df.style.format({'5d %': '{:.2f}%', '10d %': '{:.2f}%', 'Price': '{:.2f}'}), use_container_width=True)
-                            else:
-                                st.info("No historical signals of this type found in loaded data.")
-
-                        # --- NEW FEATURE: RSI PERCENTILE BACKTEST (Mini) ---
-                        if scan_mode == "RSI Percentile Extremes":
-                             in_low = 5
-                             in_high = 95
-                             # Calculate historical Rolling Percentile Rank
-                             # This is computationally heavy for a loop, so let's use a rolling window
-                             # Rolling Rank: 
-                             df_viz['RSI_Rank'] = df_viz['RSI'].rolling(252).apply(lambda x: (x < x.iloc[-1]).mean() * 100, raw=False) 
-                             # The above is slow. Optimized approach:
-                             # Just skip full history backtest for this snippet to keep app fast.
-                             # Or just check simple RSI thresholds that "approximate" these percentiles for this ticker
-                             
-                             # Alternative: Just show the current stats
-                             curr_rank = (df_viz['RSI'].iloc[-252:] < current_rsi).mean() * 100
-                             st.metric("Current RSI Percentile (1y)", f"{curr_rank:.1f}%")
-                             
-                             if curr_rank < 10:
-                                 st.success("RSI is in the bottom 10% of its yearly range. Historically a potential bounce area.")
-                             elif curr_rank > 90:
-                                 st.warning("RSI is in the top 10% of its yearly range. Historically a potential pullback area.")
-                             else:
-                                 st.info("RSI is in a neutral percentile zone.")
-
-                        # --- RSI STATS TABLE ---
-                        # Calculate Win Rate of "Buying when RSI < 30"
-                        # Simple vectorized backtest
-                        if len(df_viz) > 200:
-                            # Shifted Returns
-                            df_viz['Fwd_5d'] = df_viz['Close'].shift(-5) / df_viz['Close'] - 1
-                            
-                            # Condition
-                            mask = df_viz['RSI'] < 30
-                            trades = df_viz[mask]
-                            
-                            if len(trades) > 0:
-                                win_rate = (trades['Fwd_5d'] > 0).mean()
-                                avg_ret = trades['Fwd_5d'].mean()
+                progress_bar = st.progress(0)
+                
+                scan_results = []
+                
+                with ThreadPoolExecutor(max_workers=20) as executor:
+                    future_to_ticker = {executor.submit(check_vol, t): t for t in all_tickers}
+                    
+                    completed = 0
+                    for future in as_completed(future_to_ticker):
+                        ticker = future_to_ticker[future]
+                        try:
+                            t_sym, df_hist = future.result()
+                            if t_sym and df_hist is not None:
+                                # Perform Analysis based on mode
+                                df_hist = df_hist.sort_values('Date').reset_index(drop=True)
                                 
-                                c1, c2 = st.columns(2)
-                                c1.metric("Win Rate (Buy RSI<30 -> 5d Hold)", f"{win_rate*100:.1f}%")
-                                c2.metric("Avg Return", f"{avg_ret*100:.2f}%")
-                            else:
-                                st.write("No historical RSI < 30 events to analyze.")
+                                # Calculate RSI (14) if not present
+                                if 'RSI' not in df_hist.columns:
+                                    delta = df_hist['Close'].diff()
+                                    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                                    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                                    rs = gain / loss
+                                    df_hist['RSI'] = 100 - (100 / (1 + rs))
+                                
+                                current_rsi = df_hist['RSI'].iloc[-1]
+                                last_close = df_hist['Close'].iloc[-1]
+                                
+                                # --- LOGIC PER MODE ---
+                                
+                                # A. STANDARD RSI
+                                if scan_mode == "Standard RSI Levels":
+                                    if current_rsi < 30:
+                                        scan_results.append({
+                                            "Ticker": t_sym, "Signal": "Oversold", "RSI": current_rsi, "Price": last_close, "Context": "RSI < 30"
+                                        })
+                                    elif current_rsi > 70:
+                                        scan_results.append({
+                                            "Ticker": t_sym, "Signal": "Overbought", "RSI": current_rsi, "Price": last_close, "Context": "RSI > 70"
+                                        })
+                                        
+                                # B. DIVERGENCE (Simplified)
+                                elif scan_mode == "RSI Divergence":
+                                    if len(df_hist) > 50:
+                                        recent = df_hist.iloc[-15:]
+                                        previous = df_hist.iloc[-45:-15]
+                                        
+                                        # Bullish
+                                        rec_low_p = recent['Close'].min()
+                                        prev_low_p = previous['Close'].min()
+                                        
+                                        rec_low_idx = recent['Close'].idxmin()
+                                        prev_low_idx = previous['Close'].idxmin()
+                                        
+                                        rec_rsi_at_low = df_hist.loc[rec_low_idx, 'RSI']
+                                        prev_rsi_at_low = df_hist.loc[prev_low_idx, 'RSI']
+                                        
+                                        if rec_low_p < prev_low_p and rec_rsi_at_low > prev_rsi_at_low:
+                                             scan_results.append({
+                                                "Ticker": t_sym, "Signal": "Bullish Div", "RSI": current_rsi, "Price": last_close, "Context": f"Price New Low ({rec_low_p:.2f}) / RSI Higher ({rec_rsi_at_low:.1f})"
+                                            })
 
-                        # --- ADD "SEND TO SEASONALITY" BUTTON ---
-                        if st.button(f"🚀 Analyze {selected_ticker} in Seasonality App"):
-                            # Start Seasonality App logic directly?
-                            # We can't easily jump tabs programmatically in this structure without session state hacks.
-                            # Best to just tell user to go there.
-                            st.info(f"Please switch to the 'Seasonality' tab and enter {selected_ticker}.")
+                                        # Bearish
+                                        rec_high_p = recent['Close'].max()
+                                        prev_high_p = previous['Close'].max()
+                                        
+                                        rec_high_idx = recent['Close'].idxmax()
+                                        prev_high_idx = previous['Close'].idxmax()
+                                        
+                                        rec_rsi_at_high = df_hist.loc[rec_high_idx, 'RSI']
+                                        prev_rsi_at_high = df_hist.loc[prev_high_idx, 'RSI']
+                                        
+                                        if rec_high_p > prev_high_p and rec_rsi_at_high < prev_rsi_at_high:
+                                             scan_results.append({
+                                                "Ticker": t_sym, "Signal": "Bearish Div", "RSI": current_rsi, "Price": last_close, "Context": f"Price New High ({rec_high_p:.2f}) / RSI Lower ({rec_rsi_at_high:.1f})"
+                                            })
 
-    except Exception as e: st.error(f"Analysis failed: {e}")
+                                # C. PERCENTILE EXTREMES
+                                elif scan_mode == "RSI Percentile Extremes":
+                                    lookback_slice = df_hist['RSI'].iloc[-lookback_days:]
+                                    if len(lookback_slice) > 100:
+                                        rank = (lookback_slice < current_rsi).mean() * 100
+                                        
+                                        if rank < 5:
+                                            scan_results.append({
+                                                "Ticker": t_sym, "Signal": "Extremely Low", "RSI": current_rsi, "Price": last_close, "Context": f"{rank:.1f}th Percentile (Low)"
+                                            })
+                                        elif rank > 95:
+                                            scan_results.append({
+                                                "Ticker": t_sym, "Signal": "Extremely High", "RSI": current_rsi, "Price": last_close, "Context": f"{rank:.1f}th Percentile (High)"
+                                            })
+
+                        except Exception as e:
+                            pass
+                        
+                        completed += 1
+                        if completed % 5 == 0:
+                            progress_bar.progress(completed / len(all_tickers))
+                
+                progress_bar.empty()
+                status_text.empty()
+                
+                # DISPLAY RESULTS
+                if not scan_results:
+                    st.info("No tickers matched the criteria.")
+                else:
+                    res_df = pd.DataFrame(scan_results)
+                    st.success(f"Found {len(res_df)} matches!")
+                    
+                    st.dataframe(
+                        res_df.style.format({"RSI": "{:.1f}", "Price": "${:.2f}"})
+                        .applymap(lambda v: 'color: red' if v == 'Overbought' or v == 'Bearish Div' or 'High' in str(v) else 'color: green', subset=['Signal']),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # --- BACKTEST VISUALIZER FOR SELECTED RESULT ---
+                    st.markdown("---")
+                    st.subheader("🔎 Signal Analysis")
+                    selected_ticker = st.selectbox("Select Ticker to Analyze", res_df['Ticker'].unique())
+                    
+                    if selected_ticker:
+                        df_viz = fetch_yahoo_data(selected_ticker)
+                        if df_viz is not None:
+                            df_viz = df_viz.sort_values('Date').reset_index(drop=True)
+                            # Recalc RSI
+                            delta = df_viz['Close'].diff()
+                            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                            rs = gain / loss
+                            df_viz['RSI'] = 100 - (100 / (1 + rs))
+                            
+                            # Plot
+                            base = alt.Chart(df_viz.iloc[-150:]).encode(x='Date:T')
+                            
+                            line = base.mark_line(color='#66b7ff').encode(y=alt.Y('Close', scale=alt.Scale(zero=False)))
+                            
+                            rsi_chart = base.mark_line(color='purple').encode(y=alt.Y('RSI', scale=alt.Scale(domain=[0, 100])))
+                            rsi_band_upper = base.mark_rule(color='red', strokeDash=[4,4]).encode(y=alt.datum(70))
+                            rsi_band_lower = base.mark_rule(color='green', strokeDash=[4,4]).encode(y=alt.datum(30))
+                            
+                            c_final = (line.properties(height=200, title=f"{selected_ticker} Price") & 
+                                      (rsi_chart + rsi_band_upper + rsi_band_lower).properties(height=150, title="RSI (14)"))
+                            
+                            st.altair_chart(c_final, use_container_width=True)
+                            
+                            # --- SIMPLE STATS ---
+                            if scan_mode == "RSI Percentile Extremes":
+                                st.write("**RSI Distribution (Last 252 Days)**")
+                                hist_data = df_viz['RSI'].iloc[-252:]
+                                
+                                hist_df = pd.DataFrame({'RSI': hist_data})
+                                c_hist = alt.Chart(hist_df).mark_bar().encode(
+                                    alt.X("RSI", bin=True),
+                                    y='count()'
+                                ).properties(height=150)
+                                
+                                st.altair_chart(c_hist, use_container_width=True)
+
+                            # --- RSI STATS TABLE ---
+                            if len(df_viz) > 200:
+                                df_viz['Fwd_5d'] = df_viz['Close'].shift(-5) / df_viz['Close'] - 1
+                                
+                                mask = df_viz['RSI'] < 30
+                                trades = df_viz[mask]
+                                
+                                if len(trades) > 0:
+                                    win_rate = (trades['Fwd_5d'] > 0).mean()
+                                    avg_ret = trades['Fwd_5d'].mean()
+                                    
+                                    c1, c2 = st.columns(2)
+                                    c1.metric("Win Rate (Buy RSI<30 -> 5d Hold)", f"{win_rate*100:.1f}%")
+                                    c2.metric("Avg Return", f"{avg_ret*100:.2f}%")
+                                else:
+                                    st.write("No historical RSI < 30 events to analyze.")
+
+        except Exception as e: st.error(f"Analysis failed: {e}")
 
 def run_seasonality_app(df_global):
     st.title("📅 Seasonality")
