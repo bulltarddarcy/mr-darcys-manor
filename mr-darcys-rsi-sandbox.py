@@ -2947,13 +2947,18 @@ st.markdown("""<style>
 </style>""", unsafe_allow_html=True)
 
 try:
+    sheet_url = st.secrets["GSHEET_URL"]
+    df_global = load_and_clean_data(sheet_url)
+    
+    # 1. Database Date (from Google Sheet)
+    db_date = df_global["Trade Date"].max().strftime("%d %b %y")
+    
+    # 2. Price History Date (fetch AAPL as proxy for latest market data)
+    price_date = "Syncing..."
+    try:
         # We use AAPL as the standard "heartbeat" for the market data feed
         df_aapl = fetch_yahoo_data("AAPL")
         if df_aapl is not None and not df_aapl.empty:
-            # FIX: Use 'DATE' (uppercase) because fetch_yahoo_data capitalizes columns
-            price_date = pd.to_datetime(df_aapl['DATE']).max().strftime("%d %b %y")
-        else:
-            # FIX: If fetch fails (returns None), explicitly set to Offline
-            price_date = "Offline"
+            price_date = pd.to_datetime(df_aapl['Date']).max().strftime("%d %b %y")
     except Exception:
         price_date = "Offline"
