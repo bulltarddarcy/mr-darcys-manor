@@ -2579,7 +2579,6 @@ def run_seasonality_app(df_global):
                     combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
                     combined_bar_data['Label'] = combined_bar_data['Value'].apply(fmt_finance)
 
-                    # --- LABEL FIX: Force text to be above the bar (at 0 or max) ---
                     combined_bar_data['LabelY'] = combined_bar_data['Value'].apply(lambda x: max(0, x))
 
                     base = alt.Chart(combined_bar_data).encode(x=alt.X('MonthName', sort=month_names, title=None))
@@ -2591,7 +2590,7 @@ def run_seasonality_app(df_global):
                     text = base.mark_text(
                         dy=-10, fontSize=11, fontWeight='bold', color='black'
                     ).encode(
-                        y=alt.Y('LabelY'), # Anchor text to positive space
+                        y=alt.Y('LabelY'),
                         xOffset='Type', 
                         text='Label'
                     )
@@ -2622,8 +2621,6 @@ def run_seasonality_app(df_global):
                     if m not in full_pivot.columns: full_pivot[m] = np.nan
                 full_pivot = full_pivot[month_names].sort_index(ascending=False)
                 
-                # --- CHANGE: Calculate Compounded Annual Return for Year Total ---
-                # Formula: ((1 + r1) * (1 + r2) ... - 1)
                 full_pivot["Year Total"] = full_pivot.apply(
                     lambda x: ((1 + x/100).prod(skipna=True) - 1) * 100 if x.notna().any() else np.nan, 
                     axis=1
@@ -2642,7 +2639,6 @@ def run_seasonality_app(df_global):
                     bg_color = "rgba(113, 210, 138, 0.2)" if val > 0 else "rgba(242, 156, 160, 0.2)"
                     return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
                 
-                # Force equal width columns
                 heatmap_config = {c: st.column_config.Column(width="small") for c in full_pivot.columns}
                 
                 st.dataframe(
@@ -2659,10 +2655,10 @@ def run_seasonality_app(df_global):
         with st.expander("ℹ️ Page Notes: Methodology & Metrics"):
             st.markdown("""
             **🚀 Rolling Forward Returns**
-            * **Methodology**: Scans 10 years of history for dates matching the Start Date (+/- 3 days) and calculates performance for future periods.
-            * **Ranking Logic**: Tickers are excluded if they have insufficient history (<3 matching years) or fall below the Market Cap threshold. The remaining candidates are **ranked by EV** (High to Low), and the Top 20 are displayed.
-            * **Consistency (Sharpe)**: Calculated as `Average Return / Std Dev`. High score (>2.0) means consistent gains. Low score (<1.0) means volatile/hit-or-miss.
-            * **Mean Reversion**: Looks for tickers with **Positive Seasonality** (Green Historic EV) but **Negative Recent Performance** (Red Last 21d). These may be "coiled" springs.
+            * **Methodology**: Scans history for dates matching the Start Date (+/- 3 days) and calculates performance for future periods.
+            * **Ranking Logic**: Tickers ranked by **EV** (High to Low).
+            * **Mean Reversion (Arbitrage)**: Looks for tickers with **Positive Seasonality** (Forward 21d EV > 3%) but **Negative Recent Performance** (Trailing 21d < -3%).
+            * **Anomaly Detection**: Includes `Hist. Trailing 21d` to help you see if the recent drop is normal for this time of year or a true anomaly.
             """)
 
         st.subheader("🚀 High-EV Seasonality Scanner")
@@ -2692,7 +2688,6 @@ def run_seasonality_app(df_global):
                 valid_tickers = []
                 
                 def check_filters(t):
-                    # 1. Cap Check (Fastest)
                     mc = get_market_cap(t)
                     if mc < mc_thresh_val: return None
                     return t
@@ -2724,10 +2719,9 @@ def run_seasonality_app(df_global):
                         d_df_hist = d_df_hist.reset_index(drop=True)
                         if len(d_df_hist) < 252: return None, None
                         
-                        # --- Calculate Recent Performance (Last 21 days) for Arbitrage Scan ---
+                        # --- Calculate Recent Performance (Last 21 days) ---
                         recent_perf = 0.0
                         if len(d_df) > 21:
-                            # Calculate simple % return over last 21 trading days available in DB
                             last_p = d_df[close_c].iloc[-1]
                             prev_p = d_df[close_c].iloc[-22] 
                             recent_perf = ((last_p - prev_p) / prev_p) * 100
@@ -2745,6 +2739,17 @@ def run_seasonality_app(df_global):
                         if len(matches) < 3: return None, None
                         
                         stats_row = {'Ticker': ticker_sym, 'N': len(matches), 'Recent_21d': recent_perf}
+                        
+                        # --- CALC LAG RETURNS (HISTORICAL TRAILING 21D) ---
+                        hist_lag_returns = []
+                        for idx in matches.index:
+                            if idx >= 21:
+                                p_now = d_df_hist.loc[idx, close_c]
+                                p_prev = d_df_hist.loc[idx - 21, close_c]
+                                hist_lag_returns.append((p_now - p_prev) / p_prev)
+                        
+                        stats_row['Hist_Lag_21d'] = (np.mean(hist_lag_returns) * 100) if hist_lag_returns else 0.0
+                        
                         periods = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
                         
                         ticker_csv_rows = {k: [] for k in periods.keys()}
@@ -2773,7 +2778,6 @@ def run_seasonality_app(df_global):
                                 avg_ret = np.mean(returns_arr) * 100
                                 win_r = np.mean(returns_arr > 0) * 100
                                 std_dev = np.std(returns_arr) * 100
-                                # --- Consistency Metric (Sharpe-like) ---
                                 sharpe = avg_ret / std_dev if std_dev > 0.1 else 0.0
                             else:
                                 avg_ret = 0.0; win_r = 0.0; sharpe = 0.0
@@ -2814,14 +2818,6 @@ def run_seasonality_app(df_global):
                         bg = "rgba(113, 210, 138, 0.25)" if val > 0 else "rgba(242, 156, 160, 0.25)"
                         return f'background-color: {bg}; color: {color}; font-weight: bold;'
                         
-                    # Custom Styling Helpers
-                    def color_gap(val):
-                        if pd.isna(val): return ""
-                        if val < 5: return "background-color: #e8f5e9; color: black"
-                        if val < 10: return "background-color: #c8e6c9; color: black"
-                        if val < 15: return "background-color: #a5d6a7; color: black"
-                        return "background-color: #81c784; color: black"
-
                     def color_sharpe(val):
                         if pd.isna(val): return ""
                         if val < 1.0: return "background-color: #ffccbc; color: black"
@@ -2845,7 +2841,6 @@ def run_seasonality_app(df_global):
                         with col_obj:
                             st.markdown(p_label)
                             
-                            # CSV Download
                             if all_csv_rows[p_key]:
                                 df_details = pd.DataFrame(all_csv_rows[p_key])
                                 df_details = df_details.sort_values(by=["Ticker", "Start Date"])
@@ -2875,7 +2870,7 @@ def run_seasonality_app(df_global):
                                 }
                             )
 
-                    # --- 2. ARBITRAGE TABLE MOVED HERE ---
+                    # --- 2. UPDATED ARBITRAGE TABLE ---
                     st.write("---")
                     arb_df = res_df[
                         (res_df['21d_EV'] > 3.0) & 
@@ -2884,18 +2879,30 @@ def run_seasonality_app(df_global):
                     
                     if not arb_df.empty:
                         st.subheader("💎 Arbitrage / Catch-Up Candidates")
-                        st.caption("Stocks with strong historical seasonality (EV > 3%) that are currently beaten down (Last 21d < -3%).")
+                        st.caption("Stocks with strong historical seasonality (EV > 3%) that are currently beaten down (Recent < -3%).")
+                        st.caption("Use 'Hist. Trailing 21d' to determine if the recent drop is normal seasonality (e.g. usually drops) or an anomaly (usually rises).")
                         
-                        arb_df['Gap'] = arb_df['21d_EV'] - arb_df['Recent_21d']
-                        arb_display = arb_df.sort_values(by='Gap', ascending=False).head(15)
+                        arb_df['Anomaly_Score'] = arb_df['Hist_Lag_21d'] - arb_df['Recent_21d']
+                        arb_display = arb_df.sort_values(by='Anomaly_Score', ascending=False).head(15)
                         
                         st.dataframe(
-                            arb_display[['Ticker', 'Recent_21d', '21d_EV', '21d_WR', 'Gap']].style
-                            .format({'Recent_21d': fmt_finance, '21d_EV': fmt_finance, '21d_WR': "{:.1f}%", 'Gap': "{:.1f}%"})
+                            arb_display[['Ticker', 'Recent_21d', 'Hist_Lag_21d', '21d_EV', '21d_WR']].style
+                            .format({
+                                'Recent_21d': fmt_finance, 
+                                'Hist_Lag_21d': fmt_finance,
+                                '21d_EV': fmt_finance, 
+                                '21d_WR': "{:.1f}%"
+                            })
                             .applymap(lambda x: 'color: #d32f2f; font-weight:bold;', subset=['Recent_21d'])
-                            .applymap(lambda x: 'color: #2e7d32; font-weight:bold;', subset=['21d_EV'])
-                            .applymap(color_gap, subset=['Gap']),
-                            use_container_width=True, hide_index=True
+                            .applymap(lambda x: 'color: #2e7d32; font-weight:bold;', subset=['21d_EV']),
+                            use_container_width=True, hide_index=True,
+                            column_config={
+                                "Ticker": st.column_config.TextColumn("Ticker", width=None),
+                                "Recent_21d": st.column_config.TextColumn("Recent 21d (Actual)", help="How the stock performed in the last 21 days."),
+                                "Hist_Lag_21d": st.column_config.TextColumn("Hist. Trailing 21d (Avg)", help="How the stock USUALLY performs during this trailing 21 day period."),
+                                "21d_EV": st.column_config.TextColumn("Hist. Forward 21d (EV)", help="How the stock usually performs in the NEXT 21 days."),
+                                "21d_WR": st.column_config.TextColumn("Win Rate", help="Frequency of positive returns in the forward period.")
+                            }
                         )
 
 st.markdown("""<style>
