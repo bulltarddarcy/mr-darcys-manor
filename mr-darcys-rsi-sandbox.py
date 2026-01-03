@@ -2927,7 +2927,19 @@ st.markdown("""<style>
 try:
     sheet_url = st.secrets["GSHEET_URL"]
     df_global = load_and_clean_data(sheet_url)
-    last_updated_date = df_global["Trade Date"].max().strftime("%d %b %y")
+    
+    # 1. Database Date (from Google Sheet)
+    db_date = df_global["Trade Date"].max().strftime("%d %b %y")
+    
+    # 2. Price History Date (fetch AAPL as proxy for latest market data)
+    price_date = "Syncing..."
+    try:
+        # We use AAPL as the standard "heartbeat" for the market data feed
+        df_aapl = fetch_yahoo_data("AAPL")
+        if df_aapl is not None and not df_aapl.empty:
+            price_date = pd.to_datetime(df_aapl['Date']).max().strftime("%d %b %y")
+    except Exception:
+        price_date = "Offline"
 
     pg = st.navigation([
         st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
@@ -2939,7 +2951,10 @@ try:
     ])
 
     st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
-    st.sidebar.caption(f"📅 **Last Updated:** {last_updated_date}")
+    
+    # Updated Sidebar Dates
+    st.sidebar.caption(f"💾 **Database:** {db_date}")
+    st.sidebar.caption(f"📈 **Price History:** {price_date}")
     
     pg.run()
     
