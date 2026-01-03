@@ -2972,7 +2972,7 @@ def run_ema_distance_app(df_global):
     stats_data = []
     
     current_price = df_clean[close_col].iloc[-1]
-    current_ema8 = df_clean['EMA_8'].iloc[-1] # Key for Trend Filter
+    current_ema8 = df_clean['EMA_8'].iloc[-1] 
     
     for label, ma_series in metrics:
         # Distances
@@ -3012,9 +3012,6 @@ def run_ema_distance_app(df_global):
         p50 = row['p50']
         p90 = row['p90']
         
-        # Trend Filter: Only buy if Price > 8 EMA
-        # We can check this by seeing if the Gap for 8-EMA is positive, 
-        # OR simply compare current_price > current_ema8 (globally available in this scope)
         is_uptrend = (current_price > current_ema8)
         
         color_sell = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;' 
@@ -3034,7 +3031,6 @@ def run_ema_distance_app(df_global):
 
     st.subheader(f"{ticker} vs. Moving Avgs")
     
-    # Configure Columns for nice display
     col_config = {
         "Metric": st.column_config.TextColumn("Distance Metric", width="medium"),
         "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
@@ -3059,29 +3055,30 @@ def run_ema_distance_app(df_global):
 
     # Visualization
     st.markdown("---")
-    st.caption("Visualizing the Close Price vs the 21 EMA % Distance over time")
+    st.caption("Visualizing the $ Distance from 50 SMA (Green > 0, Red < 0)")
     
-    dist_21 = ((df_clean[close_col] - df_clean['EMA_21']) / df_clean['EMA_21']) * 100
+    # --- UPDATED CHART LOGIC ---
+    # 1. Calculate Dollar Distance from 50 SMA
+    dist_50_dollar = df_clean[close_col] - df_clean['SMA_50']
     
     chart_data = pd.DataFrame({
         'Date': pd.to_datetime(df_clean[date_col]),
-        'Distance (%)': dist_21,
+        'Distance ($)': dist_50_dollar,
     })
     
+    # 2. Filter last 2 years
     cutoff_date = chart_data['Date'].max() - timedelta(days=730)
     chart_data = chart_data[chart_data['Date'] >= cutoff_date]
 
-    c = alt.Chart(chart_data).mark_area(
-        line={'color':'darkblue'},
-        color=alt.Gradient(
-            gradient='linear',
-            stops=[alt.GradientStop(color='white', offset=0),
-                   alt.GradientStop(color='darkblue', offset=1)],
-            x1=1, x2=1, y1=1, y2=0
-        )
-    ).encode(
+    # 3. Create Bar/Area Chart with Color Split
+    c = alt.Chart(chart_data).mark_bar().encode(
         x='Date:T',
-        y=alt.Y('Distance (%)', title='% Dist from 21 EMA')
+        y=alt.Y('Distance ($)', title='$ Dist from 50 SMA'),
+        color=alt.condition(
+            alt.datum['Distance ($)'] > 0,
+            alt.value("#1e7e34"),  # Green for Above
+            alt.value("#c5221f")   # Red for Below
+        )
     ).properties(height=300)
     
     st.altair_chart(c, use_container_width=True)
