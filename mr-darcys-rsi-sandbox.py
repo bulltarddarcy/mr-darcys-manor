@@ -3134,6 +3134,7 @@ try:
         st.Page(lambda: run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
         st.Page(lambda: run_rsi_scanner_app(df_global), title="RSI Scanner", icon="📈", url_path="rsi_scanner"),
         st.Page(lambda: run_seasonality_app(df_global), title="Seasonality", icon="📅", url_path="seasonality"),
+        st.Page(lambda: run_ema_distance_app(df_global), title="EMA Distance", icon="📏", url_path="ema_distance"),
     ])
 
     st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
