@@ -1850,8 +1850,6 @@ def run_rsi_scanner_app(df_global):
     if 'saved_rsi_div_lookback' not in st.session_state: st.session_state.saved_rsi_div_lookback = 90
     if 'saved_rsi_div_source' not in st.session_state: st.session_state.saved_rsi_div_source = "High/Low"
     if 'saved_rsi_div_strict' not in st.session_state: st.session_state.saved_rsi_div_strict = "Yes"
-    
-    # NEW: Days Since Signal Input
     if 'saved_rsi_div_days_since' not in st.session_state: st.session_state.saved_rsi_div_days_since = 25
     
     if 'saved_rsi_pct_low' not in st.session_state: st.session_state.saved_rsi_pct_low = 10
@@ -2096,24 +2094,27 @@ def run_rsi_scanner_app(df_global):
                                 for t in subset:
                                     st.write(t)
                     
-                    # --- NEW LAYOUT: 8 Columns ---
+                    # --- REORDERED INPUTS (8 Columns) ---
+                    # 1. Max Candle, 2. Strict, 3. Pivot Source
+                    # 4. Min N, 5. Days Since
+                    # 6. Days, 7. Weeks, 8. Opt
                     c_d1, c_d2, c_d3, c_d4, c_d5, c_d6, c_d7, c_d8 = st.columns(8)
                     
                     with c_d1:
-                         min_n_div = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_div_min_n, step=1, key="rsi_div_min_n", on_change=save_rsi_state, args=("rsi_div_min_n", "saved_rsi_div_min_n"))
-                    with c_d2:
-                        days_since = st.number_input("Days Since Signal", min_value=1, value=st.session_state.saved_rsi_div_days_since, step=1, key="rsi_div_days_since", on_change=save_rsi_state, args=("rsi_div_days_since", "saved_rsi_div_days_since"))
-                    with c_d3:
                         div_lookback = st.number_input("Max Candle Δ", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
-                    with c_d4:
+                    with c_d2:
                          curr_strict = st.session_state.saved_rsi_div_strict
                          idx_strict = ["Yes", "No"].index(curr_strict) if curr_strict in ["Yes", "No"] else 0
                          strict_div_str = st.selectbox("Strict 50-Cross", ["Yes", "No"], index=idx_strict, key="rsi_div_strict", on_change=save_rsi_state, args=("rsi_div_strict", "saved_rsi_div_strict"))
                          strict_div = (strict_div_str == "Yes")
-                    with c_d5:
+                    with c_d3:
                          curr_source = st.session_state.saved_rsi_div_source
                          idx_source = ["High/Low", "Close"].index(curr_source) if curr_source in ["High/Low", "Close"] else 0
                          div_source = st.selectbox("Pivot Candle Signal", ["High/Low", "Close"], index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
+                    with c_d4:
+                         min_n_div = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_div_min_n, step=1, key="rsi_div_min_n", on_change=save_rsi_state, args=("rsi_div_min_n", "saved_rsi_div_min_n"))
+                    with c_d5:
+                        days_since = st.number_input("Days Since Signal", min_value=1, value=st.session_state.saved_rsi_div_days_since, step=1, key="rsi_div_days_since", on_change=save_rsi_state, args=("rsi_div_days_since", "saved_rsi_div_days_since"))
                     with c_d6:
                          periods_str_div_days = st.text_input("Periods (Days)", value=st.session_state.saved_rsi_div_periods_days, key="rsi_div_periods_days", on_change=save_rsi_state, args=("rsi_div_periods_days", "saved_rsi_div_periods_days"))
                     with c_d7:
@@ -2148,9 +2149,7 @@ def run_rsi_scanner_app(df_global):
                     if raw_results_div:
                         df_all_results = pd.DataFrame(raw_results_div)
                         
-                        # --- DOWNLOAD BUTTON ---
-                        st.caption("ℹ️ The download below provides the raw 10-year signal history (before any additional backtest processing is applied), allowing you to see every signal found with your current filter settings.")
-                        
+                        # --- DYNAMIC DOWNLOAD BUTTON ---
                         csv_export_df = df_all_results.rename(columns={
                             "Signal_Date_ISO": "Day2",
                             "P1_Date_ISO": "Day1"
@@ -2158,12 +2157,15 @@ def run_rsi_scanner_app(df_global):
                         csv_cols = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2"]
                         csv_data = csv_export_df[csv_cols].to_csv(index=False).encode('utf-8')
                         
+                        file_label = data_option_div.replace(" ", "_") if data_option_div else "dataset"
+                        
                         st.download_button(
                             label="📥 Download 10 Year Signal History",
                             data=csv_data,
-                            file_name="rsi_divergence_history_10y.csv",
+                            file_name=f"rsi_divergence_history_10y_{file_label}.csv",
                             mime="text/csv"
                         )
+                        st.caption("ℹ️ This CSV is the raw 10-year signal history only using the filters Max Candle Δ, Strict-50 Cross, and Pivot Candle Signal.")
 
                         # --- UI DISPLAY FILTERING (Is_Recent == True) ---
                         res_div_df = df_all_results[df_all_results["Is_Recent"] == True].copy()
