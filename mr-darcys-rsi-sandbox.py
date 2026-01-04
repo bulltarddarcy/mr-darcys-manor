@@ -2154,6 +2154,10 @@ def run_rsi_scanner_app(df_global):
                             "Signal_Date_ISO": "Day2",
                             "P1_Date_ISO": "Day1"
                         })
+                        
+                        # --- NEW: Combine Timeframe and Type for CSV Export ---
+                        csv_export_df["Type"] = csv_export_df["Timeframe"] + " " + csv_export_df["Type"]
+                        
                         csv_cols = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2"]
                         csv_data = csv_export_df[csv_cols].to_csv(index=False).encode('utf-8')
                         
