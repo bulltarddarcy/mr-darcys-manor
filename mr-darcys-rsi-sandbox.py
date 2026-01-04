@@ -957,11 +957,13 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         })
 
         # --- ADD FUTURE PRICES FOR DOWNLOADABLE CSV ---
+        # Naming Convention: Daily_Price_After_X or Weekly_Price_After_X
+        prefix = "Daily" if timeframe == "Daily" else "Weekly"
+        
         if periods_input is not None:
             for p in periods_input:
                 future_idx = i + p
-                # We prefix with "Price_After_" to avoid potential collision and make parsing easy
-                col_key = f"Price_After_{p}"
+                col_key = f"{prefix}_Price_After_{p}"
                 
                 if future_idx < n_rows:
                     div_obj[col_key] = close_vals[future_idx]
@@ -1295,26 +1297,37 @@ def run_rsi_scanner_app(df_global):
                         csv_export_df["Type"] = csv_export_df["Timeframe"] + " " + csv_export_df["Type"]
                         file_label = data_option_div.replace(" ", "_") if data_option_div else "dataset"
 
-                        # DYNAMICALLY FIND FUTURE PRICE COLUMNS
-                        # These keys were added in find_divergences (e.g., Price_After_5, Price_After_21)
-                        # We want to display them in numerical order if possible.
-                        future_price_cols = [c for c in csv_export_df.columns if c.startswith("Price_After_")]
+                        # DYNAMICALLY FIND AND ORDER FUTURE PRICE COLUMNS
+                        # We want Daily columns first, then Weekly columns.
+                        # And we want them sorted by the period integer.
+                        daily_price_cols = [c for c in csv_export_df.columns if c.startswith("Daily_Price_After_")]
+                        weekly_price_cols = [c for c in csv_export_df.columns if c.startswith("Weekly_Price_After_")]
+
                         try:
-                            # Sort by integer value of the period
-                            future_price_cols.sort(key=lambda x: int(x.split('_')[-1]))
-                        except:
-                            future_price_cols.sort()
+                            daily_price_cols.sort(key=lambda x: int(x.split('_')[-1]))
+                        except: daily_price_cols.sort()
+                        
+                        try:
+                            weekly_price_cols.sort(key=lambda x: int(x.split('_')[-1]))
+                        except: weekly_price_cols.sort()
+                        
+                        # IMPORTANT: Ensure the DataFrame has "n/a" for the missing cross-timeframe columns
+                        # (e.g., if a row is Daily, it might not have Weekly columns populated if they weren't in the raw dict)
+                        for c in daily_price_cols + weekly_price_cols:
+                            if c not in csv_export_df.columns:
+                                csv_export_df[c] = "n/a"
+                            else:
+                                csv_export_df[c] = csv_export_df[c].fillna("n/a")
+
+                        final_price_col_order = daily_price_cols + weekly_price_cols
 
                         # Button 1: Raw
-                        csv_cols_raw = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2"] + future_price_cols
-                        
-                        # Filter for columns that actually exist (pandas handles this but good to be explicit)
+                        csv_cols_raw = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2"] + final_price_col_order
                         valid_cols_raw = [c for c in csv_cols_raw if c in csv_export_df.columns]
                         csv_data_raw = csv_export_df[valid_cols_raw].to_csv(index=False).encode('utf-8')
                         
                         # Button 2: Processed (Includes Stats)
-                        csv_cols_proc = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2", "Best Period", "Profit Factor", "Win Rate", "EV", "SQN", "N"] + future_price_cols
-                        
+                        csv_cols_proc = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2", "Best Period", "Profit Factor", "Win Rate", "EV", "SQN", "N"] + final_price_col_order
                         valid_cols_proc = [c for c in csv_cols_proc if c in csv_export_df.columns]
                         csv_data_proc = csv_export_df[valid_cols_proc].to_csv(index=False).encode('utf-8')
 
