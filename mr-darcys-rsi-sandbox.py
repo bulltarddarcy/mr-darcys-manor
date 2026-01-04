@@ -883,85 +883,681 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         date_p1 = get_date_str(idx_p1_abs, '%Y-%m-%d')
         date_p2 = get_date_str(i, '%Y-%m-%d')
         
-        # Check if Recent
+        # Check if Recent (Flag for UI Display)
         is_recent = (i >= display_threshold_idx)
 
-        # Basic Object (Always created for CSV history)
+        # Basic Object
         div_obj = {
             'Ticker': ticker, 'Type': s_type, 'Timeframe': timeframe,
             'Signal_Date_ISO': date_p2, 
             'P1_Date_ISO': date_p1,
             'RSI1': rsi_p1, 'RSI2': rsi_p2,
             'Price1': price_p1, 'Price2': price_p2,
-            'Is_Recent': is_recent # Flag to filter for UI display
+            'Is_Recent': is_recent
         }
 
-        # Only perform heavy "Best Period" calc if it's recent (for UI display)
-        if is_recent:
-            tags = []
-            latest_row = df_tf.iloc[-1]
-            last_price = latest_row['Price']
-            last_ema8 = latest_row.get('EMA8') 
-            last_ema21 = latest_row.get('EMA21')
+        # --- CALCULATE STATS (For ALL signals now, to support Processed Download) ---
+        tags = []
+        latest_row = df_tf.iloc[-1]
+        last_price = latest_row['Price']
+        last_ema8 = latest_row.get('EMA8') 
+        last_ema21 = latest_row.get('EMA21')
 
-            def is_valid(val): return val is not None and not pd.isna(val)
+        def is_valid(val): return val is not None and not pd.isna(val)
 
-            if s_type == 'Bullish':
-                if is_valid(last_ema8) and last_price >= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
-                if is_valid(last_ema21) and last_price >= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
-            else: 
-                if is_valid(last_ema8) and last_price <= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
-                if is_valid(last_ema21) and last_price <= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
-                
-            if sig["vol_high"]: tags.append("V_HI")
-            if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("V_GROW")
+        # Tags are calculated based on CURRENT price state (mainly relevant for Is_Recent=True signals)
+        if s_type == 'Bullish':
+            if is_valid(last_ema8) and last_price >= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
+            if is_valid(last_ema21) and last_price >= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
+        else: 
+            if is_valid(last_ema8) and last_price <= last_ema8: tags.append(f"EMA{EMA8_PERIOD}")
+            if is_valid(last_ema21) and last_price <= last_ema21: tags.append(f"EMA{EMA21_PERIOD}")
             
-            date_display = f"{get_date_str(idx_p1_abs, '%b %d')} → {get_date_str(i, '%b %d')}"
-            rsi_display = f"{int(round(rsi_p1))} {'↗' if rsi_p2 > rsi_p1 else '↘'} {int(round(rsi_p2))}"
-            price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
+        if sig["vol_high"]: tags.append("V_HI")
+        if vol_vals[i] > vol_vals[idx_p1_abs]: tags.append("V_GROW")
+        
+        date_display = f"{get_date_str(idx_p1_abs, '%b %d')} → {get_date_str(i, '%b %d')}"
+        rsi_display = f"{int(round(rsi_p1))} {'↗' if rsi_p2 > rsi_p1 else '↘'} {int(round(rsi_p2))}"
+        price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
 
-            hist_list = bullish_signal_indices if s_type == 'Bullish' else bearish_signal_indices
-            best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input, optimize_for=optimize_for)
-            
-            if best_stats is None:
-                 best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
-            
-            # Apply N Filter only to the "Recent" displayable version
-            if best_stats["N"] < min_n: continue
+        hist_list = bullish_signal_indices if s_type == 'Bullish' else bearish_signal_indices
+        best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input, optimize_for=optimize_for)
+        
+        if best_stats is None:
+             best_stats = {"Best Period": "—", "Profit Factor": 0.0, "Win Rate": 0.0, "EV": 0.0, "N": 0}
+        
+        # Apply N Filter (Using user input 'min_n') to ALL signals
+        if best_stats["N"] < min_n: continue
 
-            ev_val = best_stats['EV']
-            sig_close = close_vals[i]
-            
-            if best_stats['N'] == 0:
-                ev_price = 0.0
-            else:
-                if s_type == 'Bullish':
-                    ev_price = sig_close * (1 + (ev_val / 100.0))
-                else:
-                    ev_price = sig_close * (1 - (ev_val / 100.0))
-            
-            # Enrich object for UI
-            div_obj.update({
-                'Tags': tags, 
-                'Date_Display': date_display,
-                'RSI_Display': rsi_display, 
-                'Price_Display': price_display, 
-                'Last_Close': f"${latest_row['Price']:,.2f}", 
-                'Best Period': best_stats['Best Period'], 
-                'Profit Factor': best_stats['Profit Factor'],
-                'Win Rate': best_stats['Win Rate'], 
-                'EV': best_stats['EV'], 
-                'EV Target': ev_price, 
-                'N': best_stats['N'],
-                'SQN': best_stats.get('SQN', 0.0)
-            })
-            
-            divergences.append(div_obj)
+        ev_val = best_stats['EV']
+        sig_close = close_vals[i]
+        
+        if best_stats['N'] == 0:
+            ev_price = 0.0
         else:
-            # Append older signals purely for the CSV history
-            divergences.append(div_obj)
+            if s_type == 'Bullish':
+                ev_price = sig_close * (1 + (ev_val / 100.0))
+            else:
+                ev_price = sig_close * (1 - (ev_val / 100.0))
+        
+        # Enrich object
+        div_obj.update({
+            'Tags': tags, 
+            'Date_Display': date_display,
+            'RSI_Display': rsi_display, 
+            'Price_Display': price_display, 
+            'Last_Close': f"${latest_row['Price']:,.2f}", 
+            'Best Period': best_stats['Best Period'], 
+            'Profit Factor': best_stats['Profit Factor'],
+            'Win Rate': best_stats['Win Rate'], 
+            'EV': best_stats['EV'], 
+            'EV Target': ev_price, 
+            'N': best_stats['N'],
+            'SQN': best_stats.get('SQN', 0.0)
+        })
+        
+        divergences.append(div_obj)
             
     return divergences
+
+def run_rsi_scanner_app(df_global):
+    st.title("📈 RSI Scanner")
+    
+    st.markdown("""
+        <style>
+        .top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; }
+        .footer-header { color: #31333f; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 5px; font-weight: bold; }
+        [data-testid="stDataFrame"] th { font-weight: 900 !important; }
+        </style>
+        """, unsafe_allow_html=True)
+    
+    # --- Session State Init ---
+    if 'saved_rsi_div_min_n' not in st.session_state: st.session_state.saved_rsi_div_min_n = 0
+    if 'saved_rsi_div_periods_days' not in st.session_state: st.session_state.saved_rsi_div_periods_days = "5, 21, 63, 126, 252"
+    if 'saved_rsi_div_periods_weeks' not in st.session_state: st.session_state.saved_rsi_div_periods_weeks = "4, 13, 26, 52"
+    if 'saved_rsi_div_opt' not in st.session_state: st.session_state.saved_rsi_div_opt = "Profit Factor"
+    if 'saved_rsi_div_lookback' not in st.session_state: st.session_state.saved_rsi_div_lookback = 90
+    if 'saved_rsi_div_source' not in st.session_state: st.session_state.saved_rsi_div_source = "High/Low"
+    if 'saved_rsi_div_strict' not in st.session_state: st.session_state.saved_rsi_div_strict = "Yes"
+    if 'saved_rsi_div_days_since' not in st.session_state: st.session_state.saved_rsi_div_days_since = 25
+    
+    if 'saved_rsi_pct_low' not in st.session_state: st.session_state.saved_rsi_pct_low = 10
+    if 'saved_rsi_pct_high' not in st.session_state: st.session_state.saved_rsi_pct_high = 90
+    if 'saved_rsi_pct_show' not in st.session_state: st.session_state.saved_rsi_pct_show = "Everything"
+    if 'saved_rsi_pct_opt' not in st.session_state: st.session_state.saved_rsi_pct_opt = "SQN" 
+    
+    if 'saved_rsi_pct_date' not in st.session_state: st.session_state.saved_rsi_pct_date = None
+    if 'saved_rsi_pct_min_n' not in st.session_state: st.session_state.saved_rsi_pct_min_n = 1
+    if 'saved_rsi_pct_periods' not in st.session_state: st.session_state.saved_rsi_pct_periods = "5, 21, 63, 126, 252"
+
+    def save_rsi_state(key, saved_key):
+        st.session_state[saved_key] = st.session_state[key]
+        
+    dataset_map = DATA_KEYS_PARQUET
+    options = list(dataset_map.keys())
+    
+    OPT_MAP = {"Profit Factor": "PF", "SQN": "SQN"}
+
+    tab_div, tab_pct, tab_bot = st.tabs(["📉 Divergences", "🔢 Percentiles", "🤖 Backtester"])
+
+    with tab_bot:
+        st.markdown('<div class="light-note" style="margin-bottom: 15px;">ℹ️ If this is buggy, just go back to the RSI Divergences tab and back here and it will work.</div>', unsafe_allow_html=True)
+        
+        with st.expander("ℹ️ Page Notes: Backtester Logic"):
+            st.markdown("""
+            * **Data Source**: Unlike the Divergences and Percentile tabs (which use limited ~10yr history files), this tab pulls **Complete Price History** via Yahoo Finance or the full Ticker Map file.
+            * **Methodology**: Calculates forward returns for all historical periods matching the criteria.
+            * **Metrics**:
+                * **Profit Factor**: Gross Wins / Gross Losses.
+                * **Win Rate**: Percentage of trades that closed positive.
+                * **EV**: Average Return % per trade.
+            """)
+
+        c_left, c_right = st.columns([1, 6])
+        
+        with c_left:
+            ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)", key="rsi_bt_ticker_input").strip().upper()
+            lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
+            rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
+            rsi_metric_container = st.empty()
+        
+        if ticker:
+            ticker_map = load_ticker_map()
+            
+            with st.spinner(f"Crunching numbers for {ticker}..."):
+                df = get_ticker_technicals(ticker, ticker_map)
+                
+                if df is None or df.empty:
+                    df = fetch_yahoo_data(ticker)
+                
+                if df is None or df.empty:
+                    st.error(f"Sorry, data could not be retrieved for {ticker} (neither via Drive nor Yahoo Finance).")
+                else:
+                    df.columns = [c.strip().upper() for c in df.columns]
+                    
+                    date_col = next((c for c in df.columns if 'DATE' in c), None)
+                    close_col = next((c for c in df.columns if 'CLOSE' in c), None)
+                    rsi_priority = ['RSI14', 'RSI', 'RSI_14']
+                    rsi_col = next((c for c in rsi_priority if c in df.columns), None)
+                    
+                    if not rsi_col:
+                        rsi_col = next((c for c in df.columns if 'RSI' in c and 'W_' not in c), None)
+
+                    if not all([date_col, close_col]):
+                        st.error("Data source missing Date or Close columns.")
+                    else:
+                        df[date_col] = pd.to_datetime(df[date_col])
+                        df = df.sort_values(by=date_col).reset_index(drop=True)
+
+                        if not rsi_col:
+                            delta = df[close_col].diff()
+                            gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+                            loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+                            rs = gain / loss
+                            df['RSI'] = 100 - (100 / (1 + rs))
+                            rsi_col = 'RSI'
+
+                        cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
+                        df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True) 
+
+                        current_row = df.iloc[-1]
+                        current_rsi = current_row[rsi_col]
+                        
+                        rsi_metric_container.markdown(f"""<div style="margin-top: 10px; font-size: 0.9rem; color: #666;">Current RSI</div><div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 15px;">{current_rsi:.2f}</div>""", unsafe_allow_html=True)
+                        
+                        rsi_min = current_rsi - rsi_tol
+                        rsi_max = current_rsi + rsi_tol
+                        
+                        hist_df = df.iloc[:-1].copy()
+                        matches = hist_df[(hist_df[rsi_col] >= rsi_min) & (hist_df[rsi_col] <= rsi_max)].copy()
+                        
+                        full_close = df[close_col].values
+                        match_indices = matches.index.values
+                        total_len = len(full_close)
+
+                        results = []
+                        periods = [1, 5, 10, 21, 42, 63, 126, 252]
+                        
+                        for p in periods:
+                            valid_indices = match_indices[match_indices + p < total_len]
+                            
+                            if len(valid_indices) == 0:
+                                results.append({"Days": p, "Win Rate": np.nan, "EV": np.nan, "Count": 0, "Profit Factor": np.nan})
+                                continue
+                                
+                            entry_prices = full_close[valid_indices]
+                            exit_prices = full_close[valid_indices + p]
+                            
+                            returns = (exit_prices - entry_prices) / entry_prices
+                            
+                            wins = returns[returns > 0]
+                            losses = returns[returns < 0]
+                            gross_win = np.sum(wins)
+                            gross_loss = np.abs(np.sum(losses))
+                            
+                            pf = gross_win / gross_loss if gross_loss > 0 else (999.0 if gross_win > 0 else 0.0)
+                            
+                            win_rate = np.mean(returns > 0) * 100
+                            avg_ret = np.mean(returns) * 100
+                            
+                            results.append({
+                                "Days": p, 
+                                "Profit Factor": pf, 
+                                "Win Rate": win_rate, 
+                                "EV": avg_ret, 
+                                "Count": len(valid_indices)
+                            })
+
+                        res_df = pd.DataFrame(results)
+
+                        with c_right:
+                            if matches.empty:
+                                st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
+                            else:
+                                def highlight_best(row):
+                                    days = row['Days']
+                                    if days <= 20: threshold = 30
+                                    elif days <= 60: threshold = 20
+                                    else: threshold = 10
+                                    
+                                    condition = (row['Count'] >= threshold) and (row['Win Rate'] > 75)
+                                    color = 'background-color: rgba(144, 238, 144, 0.2)' if condition else ''
+                                    return [color] * len(row)
+
+                                def highlight_ret(val):
+                                    if val is None or pd.isna(val): return ''
+                                    if not isinstance(val, (int, float)): return ''
+                                    color = '#71d28a' if val > 0 else '#f29ca0'
+                                    return f'color: {color}; font-weight: bold;'
+                                
+                                format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
+                                format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
+                                format_pf = lambda x: f"{x:.2f}" if pd.notnull(x) else "—"
+
+                                st.dataframe(
+                                    res_df.style
+                                    .format({"Win Rate": format_wr, "EV": format_func, "Profit Factor": format_pf})
+                                    .map(highlight_ret, subset=["EV"])
+                                    .apply(highlight_best, axis=1)
+                                    .set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),
+                                    use_container_width=False, 
+                                    column_config={
+                                        "Days": st.column_config.NumberColumn("Days"),
+                                        "Profit Factor": st.column_config.NumberColumn("Profit Factor"),
+                                        "Win Rate": st.column_config.TextColumn("Win Rate"),
+                                        "EV": st.column_config.TextColumn("EV"),
+                                        "Count": st.column_config.NumberColumn("Count")
+                                    },
+                                    hide_index=True,
+                                    height=get_table_height(res_df, max_rows=50)
+                                )
+
+                        st.markdown("<br><br><br>", unsafe_allow_html=True)
+
+    with tab_div:
+        data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
+        
+        with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
+            f_col1, f_col2, f_col3, f_col4 = st.columns(4)
+            with f_col1:
+                st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
+                st.markdown(f"""
+                * **Identification**: Scans for **True Pivots** over a variable lookback window.
+                * **Divergence**: 
+                    * **Bullish**: Price makes a Lower Low, but RSI makes a Higher Low.
+                    * **Bearish**: Price makes a Higher High, but RSI makes a Lower High.
+                * **Invalidation**: Controlled by "Strict 50-Cross Check". If Checked, signals are invalid if RSI crosses 50 between pivots.
+                """)
+            with f_col2:
+                st.markdown('<div class="footer-header">🔮 SIGNAL-BASED OPTIMIZATION</div>', unsafe_allow_html=True)
+                st.markdown(f"""
+                * **Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal.
+                * **Optimization Loop**: Calculates forward returns for each historical signal.
+                * **Selection**: Selects the **Optimal Time Period** based on the highest **Profit Factor** (or SQN).
+                """)
+            with f_col3:
+                st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
+                st.markdown("""
+                * <b>Day/Week Δ</b>: Date the Divergence was confirmed.
+                * <b>RSI Δ</b>: RSI value at Pivot 1 vs Pivot 2.
+                * <b>Price Δ</b>: Price at Pivot 1 vs Pivot 2.
+                * <b>Best Period</b>: Holding period producing best metrics.
+                * <b>Profit Factor</b>: Gross Wins / Gross Losses.
+                * <b>EV</b>: Expected Value per trade.
+                * <b>EV Target</b>: Signal Price CLOSE x (1+EV).
+                """, unsafe_allow_html=True)
+            with f_col4:
+                st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
+                st.markdown(f"""
+                * **EMA{EMA8_PERIOD}/{EMA21_PERIOD}**: Last Close relative to EMA.
+                * **V_HI**: Signal candle volume > 150% of 30d avg.
+                * **V_GROW**: Volume on P2 > P1.
+                """)
+        
+        if data_option_div:
+            try:
+                key = dataset_map[data_option_div]
+                master = load_parquet_and_clean(key)
+                
+                if master is not None and not master.empty:
+                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+                    
+                    date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
+                    if date_col_raw:
+                        max_dt_obj = pd.to_datetime(master[date_col_raw]).max()
+                        target_highlight_daily = max_dt_obj.strftime('%Y-%m-%d')
+                        days_to_subtract = max_dt_obj.weekday() + (7 if max_dt_obj.weekday() < 4 else 0)
+                        target_highlight_weekly = (max_dt_obj - timedelta(days=days_to_subtract)).strftime('%Y-%m-%d')
+                    
+                    all_tickers = sorted(master[t_col].unique())
+                    with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
+                        sq_div = st.text_input("Filter...", key="rsi_div_filter_ticker").upper()
+                        ft_div = [t for t in all_tickers if sq_div in t]
+                        cols = st.columns(6)
+                        rows_per_col = math.ceil(len(ft_div) / 6)
+                        for i in range(6):
+                            start = i * rows_per_col
+                            end = start + rows_per_col
+                            subset = ft_div[start:end]
+                            with cols[i]:
+                                for t in subset:
+                                    st.write(t)
+                    
+                    # --- REORDERED INPUTS (8 Columns) ---
+                    c_d1, c_d2, c_d3, c_d4, c_d5, c_d6, c_d7, c_d8 = st.columns(8)
+                    
+                    with c_d1:
+                        div_lookback = st.number_input("Max Candle Δ", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
+                    with c_d2:
+                         curr_strict = st.session_state.saved_rsi_div_strict
+                         idx_strict = ["Yes", "No"].index(curr_strict) if curr_strict in ["Yes", "No"] else 0
+                         strict_div_str = st.selectbox("Strict 50-Cross", ["Yes", "No"], index=idx_strict, key="rsi_div_strict", on_change=save_rsi_state, args=("rsi_div_strict", "saved_rsi_div_strict"))
+                         strict_div = (strict_div_str == "Yes")
+                    with c_d3:
+                         curr_source = st.session_state.saved_rsi_div_source
+                         idx_source = ["High/Low", "Close"].index(curr_source) if curr_source in ["High/Low", "Close"] else 0
+                         div_source = st.selectbox("Pivot Candle Signal", ["High/Low", "Close"], index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
+                    with c_d4:
+                         min_n_div = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_div_min_n, step=1, key="rsi_div_min_n", on_change=save_rsi_state, args=("rsi_div_min_n", "saved_rsi_div_min_n"))
+                    with c_d5:
+                        days_since = st.number_input("Days Since Signal", min_value=1, value=st.session_state.saved_rsi_div_days_since, step=1, key="rsi_div_days_since", on_change=save_rsi_state, args=("rsi_div_days_since", "saved_rsi_div_days_since"))
+                    with c_d6:
+                         periods_str_div_days = st.text_input("Periods (Days)", value=st.session_state.saved_rsi_div_periods_days, key="rsi_div_periods_days", on_change=save_rsi_state, args=("rsi_div_periods_days", "saved_rsi_div_periods_days"))
+                    with c_d7:
+                         periods_str_div_weeks = st.text_input("Periods (Weeks)", value=st.session_state.saved_rsi_div_periods_weeks, key="rsi_div_periods_weeks", on_change=save_rsi_state, args=("rsi_div_periods_weeks", "saved_rsi_div_periods_weeks"))
+                    with c_d8:
+                         curr_div_opt = st.session_state.saved_rsi_div_opt
+                         idx_div_opt = ["Profit Factor", "SQN"].index(curr_div_opt) if curr_div_opt in ["Profit Factor", "SQN"] else 0
+                         opt_mode_div = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_div_opt, key="rsi_div_opt", on_change=save_rsi_state, args=("rsi_div_opt", "saved_rsi_div_opt"))
+                    
+                    periods_div_days = parse_periods(periods_str_div_days)
+                    periods_div_weeks = parse_periods(periods_str_div_weeks)
+                    
+                    div_opt_code = OPT_MAP[opt_mode_div]
+
+                    raw_results_div = []
+                    progress_bar = st.progress(0, text="Scanning Divergences...")
+                    grouped = master.groupby(t_col)
+                    grouped_list = list(grouped)
+                    total_groups = len(grouped_list)
+                    
+                    for i, (ticker, group) in enumerate(grouped_list):
+                        d_d, d_w = prepare_data(group.copy())
+                        
+                        if d_d is not None: 
+                            raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div_days, optimize_for=div_opt_code, lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since))
+                        if d_w is not None: 
+                            raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div_weeks, optimize_for=div_opt_code, lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since))
+                        if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
+                    
+                    progress_bar.empty()
+                    
+                    if raw_results_div:
+                        df_all_results = pd.DataFrame(raw_results_div)
+                        
+                        # --- DOWNLOAD BUTTONS ---
+                        csv_export_df = df_all_results.rename(columns={
+                            "Signal_Date_ISO": "Day2",
+                            "P1_Date_ISO": "Day1"
+                        })
+                        csv_export_df["Type"] = csv_export_df["Timeframe"] + " " + csv_export_df["Type"]
+                        file_label = data_option_div.replace(" ", "_") if data_option_div else "dataset"
+
+                        # Button 1: Raw
+                        csv_cols_raw = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2"]
+                        csv_data_raw = csv_export_df[csv_cols_raw].to_csv(index=False).encode('utf-8')
+                        
+                        # Button 2: Processed (Includes Stats)
+                        csv_cols_proc = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2", "Best Period", "Profit Factor", "Win Rate", "EV", "SQN", "N"]
+                        csv_data_proc = csv_export_df[csv_cols_proc].to_csv(index=False).encode('utf-8')
+
+                        btn_col1, btn_col2 = st.columns(2)
+                        with btn_col1:
+                            st.download_button(
+                                label="📥 Download 10Y Signal History (Raw)",
+                                data=csv_data_raw,
+                                file_name=f"rsi_divergence_raw_10y_{file_label}.csv",
+                                mime="text/csv"
+                            )
+                        with btn_col2:
+                            st.download_button(
+                                label="📥 Download 10Y Processed History",
+                                data=csv_data_proc,
+                                file_name=f"rsi_divergence_processed_10y_{file_label}.csv",
+                                mime="text/csv"
+                            )
+                        
+                        st.caption("ℹ️ **Raw:** Basic signal definitions (Prices, RSI, Dates). **Processed:** Includes backtest logic (Profit Factor, EV, Best Period) for the entire 10-year history (ignoring 'Days Since Signal').")
+
+                        # --- UI DISPLAY FILTERING (Is_Recent == True) ---
+                        res_div_df = df_all_results[df_all_results["Is_Recent"] == True].copy()
+                        
+                        if res_div_df.empty:
+                            st.warning(f"No signals found in the last {days_since} days (though historical signals may exist in the download).")
+                        else:
+                            res_div_df = res_div_df.sort_values(by='Signal_Date_ISO', ascending=False)
+                            consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
+                            
+                            for tf in ['Daily', 'Weekly']:
+                                target_highlight = target_highlight_weekly if tf == 'Weekly' else target_highlight_daily
+                                date_header = "Week Δ" if tf == 'Weekly' else "Day Δ"
+                                
+                                for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
+                                    st.subheader(f"{emoji} {tf} {s_type} Signals")
+                                    tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
+                                    
+                                    # --- Header Logic ---
+                                    if div_source == 'Close':
+                                        price_header = "Close Price Δ"
+                                    else:
+                                        price_header = "Low Price Δ" if s_type == 'Bullish' else "High Price Δ"
+                                    
+                                    if not tbl_df.empty:
+                                        def style_div_df(df_in):
+                                            def highlight_row(row):
+                                                styles = [''] * len(row)
+                                                if row['Signal_Date_ISO'] == target_highlight:
+                                                    idx = df_in.columns.get_loc('Date_Display')
+                                                    styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
+                                                
+                                                if 'EV' in df_in.columns:
+                                                    val = row['EV']
+                                                    if pd.notnull(val) and val != 0:
+                                                        is_green = val > 0
+                                                        bg = 'background-color: #e6f4ea; color: #1e7e34;' if is_green else 'background-color: #fce8e6; color: #c5221f;'
+                                                        idx = df_in.columns.get_loc('EV')
+                                                        styles[idx] = f'{bg} font-weight: 500;'
+                                                return styles
+                                            return df_in.style.apply(highlight_row, axis=1)
+
+                                        st.dataframe(
+                                            style_div_df(tbl_df),
+                                            column_config={
+                                                "Ticker": st.column_config.TextColumn("Ticker"),
+                                                "Tags": st.column_config.ListColumn("Tags", width="medium"), 
+                                                "Date_Display": st.column_config.TextColumn(date_header),
+                                                "RSI_Display": st.column_config.TextColumn("RSI Δ"),
+                                                "Price_Display": st.column_config.TextColumn(price_header),
+                                                "Last_Close": st.column_config.TextColumn("Last Close"),
+                                                "Best Period": st.column_config.TextColumn("Best Period"),
+                                                "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
+                                                "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
+                                                "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
+                                                "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
+                                                "N": st.column_config.NumberColumn("N"),
+                                                "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="System Quality Number"),
+                                                "Signal_Date_ISO": None, "Type": None, "Timeframe": None, "Is_Recent": None,
+                                                "RSI1": None, "RSI2": None, "Price1": None, "Price2": None, "P1_Date_ISO": None 
+                                            },
+                                            hide_index=True,
+                                            use_container_width=True,
+                                            height=get_table_height(tbl_df, max_rows=50)
+                                        )
+                                        st.markdown("<br><br>", unsafe_allow_html=True)
+                                    else: st.info("No signals.")
+                    else: st.warning("No Divergence signals found.")
+                else:
+                    st.error(f"Failed to load dataset: {data_option_div}")
+            except Exception as e: st.error(f"Analysis failed: {e}")
+
+    with tab_pct:
+        data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
+        
+        with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                 st.markdown('<div class="footer-header">⚙️ STRATEGY</div>', unsafe_allow_html=True)
+                 st.markdown("""
+                * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
+                * **Optimization Loop**: Calculates returns for multiple days (or weeks) and selects the Winner based on **Profit Factor** (or SQN).
+                """)
+            with c2:
+                st.markdown('<div class="footer-header">🔢 PERCENTILE DEFINITION</div>', unsafe_allow_html=True)
+                st.markdown("""
+                * **Low/High Percentile**: Calculated based on the full history (up to 10 years). 
+                * **Example**: RSI < 10th Percentile means current RSI is lower than 90% of history.
+                """)
+            with c3:
+                st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
+                st.markdown("""
+                * **Date**: The date the signal fired.
+                * **RSI Δ**: RSI movement.
+                * **Best Period**: The historical holding period that produced the best result.
+                * **Profit Factor**: Gross Wins / Gross Losses. 
+                * **Win Rate**: % of historical trades that won.
+                * **EV**: Average return per trade.
+                * **SQN**: System Quality Number.
+                """)
+        
+        if data_option_pct:
+            try:
+                key = dataset_map[data_option_pct]
+                master = load_parquet_and_clean(key)
+                
+                if master is not None and not master.empty:
+                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+                    date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
+                    max_date_in_set = None
+                    if date_col_raw:
+                        max_dt_obj = pd.to_datetime(master[date_col_raw]).max()
+                        max_date_in_set = max_dt_obj.date()
+
+                    all_tickers = sorted(master[t_col].unique())
+                    with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
+                        sq_pct = st.text_input("Filter...", key="rsi_pct_filter_ticker").upper()
+                        ft_pct = [t for t in all_tickers if sq_pct in t]
+                        
+                        cols = st.columns(6)
+                        rows_per_col = math.ceil(len(ft_pct) / 6)
+                        for i in range(6):
+                            start = i * rows_per_col
+                            end = start + rows_per_col
+                            subset = ft_pct[start:end]
+                            with cols[i]:
+                                for t in subset:
+                                    st.write(t)
+
+                    pct_col1, pct_col2, pct_col3 = st.columns(3)
+                    with pct_col1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=st.session_state.saved_rsi_pct_low, step=1, key="rsi_pct_low", on_change=save_rsi_state, args=("rsi_pct_low", "saved_rsi_pct_low"))
+                    with pct_col2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=st.session_state.saved_rsi_pct_high, step=1, key="rsi_pct_high", on_change=save_rsi_state, args=("rsi_pct_high", "saved_rsi_pct_high"))
+                    
+                    show_opts = ["Everything", "Leaving High", "Leaving Low"]
+                    curr_show = st.session_state.saved_rsi_pct_show
+                    idx_show = show_opts.index(curr_show) if curr_show in show_opts else 0
+                    with pct_col3: show_filter = st.selectbox("Actions to Show", show_opts, index=idx_show, key="rsi_pct_show", on_change=save_rsi_state, args=("rsi_pct_show", "saved_rsi_pct_show"))
+                    
+                    if not df_global.empty and "Trade Date" in df_global.columns:
+                        ref_date = df_global["Trade Date"].max().date()
+                    else:
+                        ref_date = date.today()
+                    default_start = ref_date - timedelta(days=14)
+                    
+                    if st.session_state.saved_rsi_pct_date is None:
+                        st.session_state.saved_rsi_pct_date = default_start
+
+                    pct_col4, pct_col5, pct_col6, pct_col7 = st.columns(4)
+                    with pct_col4: filter_date = st.date_input("Latest Date", value=st.session_state.saved_rsi_pct_date, key="rsi_pct_date", on_change=save_rsi_state, args=("rsi_pct_date", "saved_rsi_pct_date"))
+                    with pct_col5: min_n_pct = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
+                    with pct_col6: 
+                        periods_str_pct = st.text_input("Test Periods (Trading Days only)", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
+                    with pct_col7:
+                         curr_pct_opt = st.session_state.saved_rsi_pct_opt
+                         idx_pct_opt = ["Profit Factor", "SQN"].index(curr_pct_opt) if curr_pct_opt in ["Profit Factor", "SQN"] else 1
+                         opt_mode_pct = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_pct_opt, key="rsi_pct_opt", on_change=save_rsi_state, args=("rsi_pct_opt", "saved_rsi_pct_opt"))
+
+                    periods_pct = parse_periods(periods_str_pct)
+                    pct_opt_code = OPT_MAP[opt_mode_pct]
+
+                    raw_results_pct = []
+                    progress_bar = st.progress(0, text="Scanning Percentiles...")
+                    grouped = master.groupby(t_col)
+                    grouped_list = list(grouped)
+                    total_groups = len(grouped_list)
+                    
+                    for i, (ticker, group) in enumerate(grouped_list):
+                        d_d, d_w = prepare_data(group.copy())
+                        
+                        if d_d is not None:
+                            raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Daily', periods_input=periods_pct, optimize_for=pct_opt_code))
+                        
+                        if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
+                    
+                    progress_bar.empty()
+
+                    if raw_results_pct:
+                        res_pct_df = pd.DataFrame(raw_results_pct).sort_values(by='Date_Obj', ascending=False)
+                        
+                        if show_filter == "Leaving High":
+                            res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bearish']
+                        elif show_filter == "Leaving Low":
+                            res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
+                            
+                        def style_pct_df(df_in):
+                            def highlight_row(row):
+                                styles = [''] * len(row)
+                                if row['Date_Obj'] == max_date_in_set:
+                                    idx = df_in.columns.get_loc('Date')
+                                    styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
+                                
+                                if 'EV' in df_in.columns:
+                                    val = row['EV']
+                                    if pd.notnull(val) and val != 0:
+                                        is_green = val > 0
+                                        bg = 'background-color: #e6f4ea; color: #1e7e34;' if is_green else 'background-color: #fce8e6; color: #c5221f;'
+                                        idx = df_in.columns.get_loc('EV')
+                                        styles[idx] = f'{bg} font-weight: 500;'
+                                
+                                if 'Action' in df_in.columns:
+                                    act = row['Action']
+                                    idx = df_in.columns.get_loc('Action')
+                                    if "Leaving Low" in str(act):
+                                        styles[idx] = 'color: #1e7e34;' 
+                                    elif "Leaving High" in str(act):
+                                        styles[idx] = 'color: #c5221f;' 
+                                
+                                if 'SQN' in df_in.columns:
+                                    val = row['SQN']
+                                    if pd.notnull(val):
+                                        idx = df_in.columns.get_loc('SQN')
+                                        color = ''
+                                        font_weight = 'normal'
+                                        if val < 1.6: color = '#d32f2f'
+                                        elif 1.6 <= val < 2.0: color = '#f57c00'
+                                        elif 2.0 <= val < 2.5: color = '#fbc02d'
+                                        elif 2.5 <= val < 3.0: color = '#388e3c'
+                                        elif 3.0 <= val <= 5.0: color = '#2e7d32'; font_weight = 'bold'
+                                        elif 5.0 < val <= 7.0: color = '#1b5e20'; font_weight = 'bold'
+                                        elif val > 7.0: color = '#6a1b9a'; font_weight = 'bold'
+                                        if color: styles[idx] = f'color: {color}; font-weight: {font_weight};'
+                                return styles
+                            return df_in.style.apply(highlight_row, axis=1)
+
+                        st.dataframe(
+                            style_pct_df(res_pct_df),
+                            column_config={
+                                "Ticker": st.column_config.TextColumn("Ticker"),
+                                "Date": st.column_config.TextColumn("Date"),
+                                "Action": st.column_config.TextColumn("Action"),
+                                "RSI_Display": st.column_config.TextColumn("RSI Δ"),
+                                "Signal_Price": st.column_config.TextColumn("Signal Close"),
+                                "Last_Close": st.column_config.TextColumn("Last Close"), 
+                                "Best Period": st.column_config.TextColumn("Best Period"),
+                                "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
+                                "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
+                                "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
+                                "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
+                                "N": st.column_config.NumberColumn("N"),
+                                "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="How to Read the Score:\n< 1.6: Poor\n1.6 – 1.9: Below Avg\n2.0 – 2.5: Avg\n2.5 – 3.0: Good\n3.0 – 5.0: Excellent\n> 5.0: Superb"),
+                                "Signal_Type": None, "Date_Obj": None
+                            },
+                            hide_index=True,
+                            use_container_width=True,
+                            height=get_table_height(res_pct_df, max_rows=50)
+                        )
+                        st.markdown("<br><br>", unsafe_allow_html=True)
+                    else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
+
+            except Exception as e: st.error(f"Analysis failed: {e}")
 
 def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1, filter_date=None, timeframe='Daily', periods_input=None, optimize_for='SQN'):
     signals = []
@@ -1830,596 +2426,6 @@ def run_pivot_tables_app(df):
         st.dataframe(tbl_rr.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl_rr, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
         st.markdown("<br><br>", unsafe_allow_html=True)
     else: st.caption("No matched RR pairs found.")
-
-def run_rsi_scanner_app(df_global):
-    st.title("📈 RSI Scanner")
-    
-    st.markdown("""
-        <style>
-        .top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; }
-        .footer-header { color: #31333f; margin-top: 1.5rem; border-bottom: 1px solid #ddd; padding-bottom: 5px; font-weight: bold; }
-        [data-testid="stDataFrame"] th { font-weight: 900 !important; }
-        </style>
-        """, unsafe_allow_html=True)
-    
-    # --- Session State Init ---
-    if 'saved_rsi_div_min_n' not in st.session_state: st.session_state.saved_rsi_div_min_n = 0
-    if 'saved_rsi_div_periods_days' not in st.session_state: st.session_state.saved_rsi_div_periods_days = "5, 21, 63, 126, 252"
-    if 'saved_rsi_div_periods_weeks' not in st.session_state: st.session_state.saved_rsi_div_periods_weeks = "4, 13, 26, 52"
-    if 'saved_rsi_div_opt' not in st.session_state: st.session_state.saved_rsi_div_opt = "Profit Factor"
-    if 'saved_rsi_div_lookback' not in st.session_state: st.session_state.saved_rsi_div_lookback = 90
-    if 'saved_rsi_div_source' not in st.session_state: st.session_state.saved_rsi_div_source = "High/Low"
-    if 'saved_rsi_div_strict' not in st.session_state: st.session_state.saved_rsi_div_strict = "Yes"
-    if 'saved_rsi_div_days_since' not in st.session_state: st.session_state.saved_rsi_div_days_since = 25
-    
-    if 'saved_rsi_pct_low' not in st.session_state: st.session_state.saved_rsi_pct_low = 10
-    if 'saved_rsi_pct_high' not in st.session_state: st.session_state.saved_rsi_pct_high = 90
-    if 'saved_rsi_pct_show' not in st.session_state: st.session_state.saved_rsi_pct_show = "Everything"
-    if 'saved_rsi_pct_opt' not in st.session_state: st.session_state.saved_rsi_pct_opt = "SQN" 
-    
-    if 'saved_rsi_pct_date' not in st.session_state: st.session_state.saved_rsi_pct_date = None
-    if 'saved_rsi_pct_min_n' not in st.session_state: st.session_state.saved_rsi_pct_min_n = 1
-    if 'saved_rsi_pct_periods' not in st.session_state: st.session_state.saved_rsi_pct_periods = "5, 21, 63, 126, 252"
-
-    def save_rsi_state(key, saved_key):
-        st.session_state[saved_key] = st.session_state[key]
-        
-    dataset_map = DATA_KEYS_PARQUET
-    options = list(dataset_map.keys())
-    
-    OPT_MAP = {"Profit Factor": "PF", "SQN": "SQN"}
-
-    tab_div, tab_pct, tab_bot = st.tabs(["📉 Divergences", "🔢 Percentiles", "🤖 Backtester"])
-
-    with tab_bot:
-        st.markdown('<div class="light-note" style="margin-bottom: 15px;">ℹ️ If this is buggy, just go back to the RSI Divergences tab and back here and it will work.</div>', unsafe_allow_html=True)
-        
-        with st.expander("ℹ️ Page Notes: Backtester Logic"):
-            st.markdown("""
-            * **Data Source**: Unlike the Divergences and Percentile tabs (which use limited ~10yr history files), this tab pulls **Complete Price History** via Yahoo Finance or the full Ticker Map file.
-            * **Methodology**: Calculates forward returns for all historical periods matching the criteria.
-            * **Metrics**:
-                * **Profit Factor**: Gross Wins / Gross Losses.
-                * **Win Rate**: Percentage of trades that closed positive.
-                * **EV**: Average Return % per trade.
-            """)
-
-        c_left, c_right = st.columns([1, 6])
-        
-        with c_left:
-            ticker = st.text_input("Ticker", value="NFLX", help="Enter a symbol (e.g., TSLA, NVDA)", key="rsi_bt_ticker_input").strip().upper()
-            lookback_years = st.number_input("Lookback Years", min_value=1, max_value=10, value=10)
-            rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
-            rsi_metric_container = st.empty()
-        
-        if ticker:
-            ticker_map = load_ticker_map()
-            
-            with st.spinner(f"Crunching numbers for {ticker}..."):
-                df = get_ticker_technicals(ticker, ticker_map)
-                
-                if df is None or df.empty:
-                    df = fetch_yahoo_data(ticker)
-                
-                if df is None or df.empty:
-                    st.error(f"Sorry, data could not be retrieved for {ticker} (neither via Drive nor Yahoo Finance).")
-                else:
-                    df.columns = [c.strip().upper() for c in df.columns]
-                    
-                    date_col = next((c for c in df.columns if 'DATE' in c), None)
-                    close_col = next((c for c in df.columns if 'CLOSE' in c), None)
-                    rsi_priority = ['RSI14', 'RSI', 'RSI_14']
-                    rsi_col = next((c for c in rsi_priority if c in df.columns), None)
-                    
-                    if not rsi_col:
-                        rsi_col = next((c for c in df.columns if 'RSI' in c and 'W_' not in c), None)
-
-                    if not all([date_col, close_col]):
-                        st.error("Data source missing Date or Close columns.")
-                    else:
-                        df[date_col] = pd.to_datetime(df[date_col])
-                        df = df.sort_values(by=date_col).reset_index(drop=True)
-
-                        if not rsi_col:
-                            delta = df[close_col].diff()
-                            gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-                            loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-                            rs = gain / loss
-                            df['RSI'] = 100 - (100 / (1 + rs))
-                            rsi_col = 'RSI'
-
-                        cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
-                        df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True) 
-
-                        current_row = df.iloc[-1]
-                        current_rsi = current_row[rsi_col]
-                        
-                        rsi_metric_container.markdown(f"""<div style="margin-top: 10px; font-size: 0.9rem; color: #666;">Current RSI</div><div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 15px;">{current_rsi:.2f}</div>""", unsafe_allow_html=True)
-                        
-                        rsi_min = current_rsi - rsi_tol
-                        rsi_max = current_rsi + rsi_tol
-                        
-                        hist_df = df.iloc[:-1].copy()
-                        matches = hist_df[(hist_df[rsi_col] >= rsi_min) & (hist_df[rsi_col] <= rsi_max)].copy()
-                        
-                        full_close = df[close_col].values
-                        match_indices = matches.index.values
-                        total_len = len(full_close)
-
-                        results = []
-                        periods = [1, 5, 10, 21, 42, 63, 126, 252]
-                        
-                        for p in periods:
-                            valid_indices = match_indices[match_indices + p < total_len]
-                            
-                            if len(valid_indices) == 0:
-                                results.append({"Days": p, "Win Rate": np.nan, "EV": np.nan, "Count": 0, "Profit Factor": np.nan})
-                                continue
-                                
-                            entry_prices = full_close[valid_indices]
-                            exit_prices = full_close[valid_indices + p]
-                            
-                            returns = (exit_prices - entry_prices) / entry_prices
-                            
-                            wins = returns[returns > 0]
-                            losses = returns[returns < 0]
-                            gross_win = np.sum(wins)
-                            gross_loss = np.abs(np.sum(losses))
-                            
-                            pf = gross_win / gross_loss if gross_loss > 0 else (999.0 if gross_win > 0 else 0.0)
-                            
-                            win_rate = np.mean(returns > 0) * 100
-                            avg_ret = np.mean(returns) * 100
-                            
-                            results.append({
-                                "Days": p, 
-                                "Profit Factor": pf, 
-                                "Win Rate": win_rate, 
-                                "EV": avg_ret, 
-                                "Count": len(valid_indices)
-                            })
-
-                        res_df = pd.DataFrame(results)
-
-                        with c_right:
-                            if matches.empty:
-                                st.warning(f"No historical periods found where RSI was between {rsi_min:.2f} and {rsi_max:.2f}.")
-                            else:
-                                def highlight_best(row):
-                                    days = row['Days']
-                                    if days <= 20: threshold = 30
-                                    elif days <= 60: threshold = 20
-                                    else: threshold = 10
-                                    
-                                    condition = (row['Count'] >= threshold) and (row['Win Rate'] > 75)
-                                    color = 'background-color: rgba(144, 238, 144, 0.2)' if condition else ''
-                                    return [color] * len(row)
-
-                                def highlight_ret(val):
-                                    if val is None or pd.isna(val): return ''
-                                    if not isinstance(val, (int, float)): return ''
-                                    color = '#71d28a' if val > 0 else '#f29ca0'
-                                    return f'color: {color}; font-weight: bold;'
-                                
-                                format_func = lambda x: f"{x:+.2f}%" if pd.notnull(x) else "—"
-                                format_wr = lambda x: f"{x:.1f}%" if pd.notnull(x) else "—"
-                                format_pf = lambda x: f"{x:.2f}" if pd.notnull(x) else "—"
-
-                                st.dataframe(
-                                    res_df.style
-                                    .format({"Win Rate": format_wr, "EV": format_func, "Profit Factor": format_pf})
-                                    .map(highlight_ret, subset=["EV"])
-                                    .apply(highlight_best, axis=1)
-                                    .set_table_styles([dict(selector="th", props=[("font-weight", "bold"), ("background-color", "#f0f2f6")])]),
-                                    use_container_width=False, 
-                                    column_config={
-                                        "Days": st.column_config.NumberColumn("Days"),
-                                        "Profit Factor": st.column_config.NumberColumn("Profit Factor"),
-                                        "Win Rate": st.column_config.TextColumn("Win Rate"),
-                                        "EV": st.column_config.TextColumn("EV"),
-                                        "Count": st.column_config.NumberColumn("Count")
-                                    },
-                                    hide_index=True,
-                                    height=get_table_height(res_df, max_rows=50)
-                                )
-
-                        st.markdown("<br><br><br>", unsafe_allow_html=True)
-
-    with tab_div:
-        data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
-        
-        with st.expander("ℹ️ Page Notes: Divergence Strategy Logic"):
-            f_col1, f_col2, f_col3, f_col4 = st.columns(4)
-            with f_col1:
-                st.markdown('<div class="footer-header">📉 SIGNAL LOGIC</div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                * **Identification**: Scans for **True Pivots** over a variable lookback window.
-                * **Divergence**: 
-                    * **Bullish**: Price makes a Lower Low, but RSI makes a Higher Low.
-                    * **Bearish**: Price makes a Higher High, but RSI makes a Lower High.
-                * **Invalidation**: Controlled by "Strict 50-Cross Check". If Checked, signals are invalid if RSI crosses 50 between pivots.
-                """)
-            with f_col2:
-                st.markdown('<div class="footer-header">🔮 SIGNAL-BASED OPTIMIZATION</div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                * **Methodology**: Instead of just looking at RSI levels, this tool looks back at **Every Historical Occurrence** of the specific signal.
-                * **Optimization Loop**: Calculates forward returns for each historical signal.
-                * **Selection**: Selects the **Optimal Time Period** based on the highest **Profit Factor** (or SQN).
-                """)
-            with f_col3:
-                st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
-                st.markdown("""
-                * <b>Day/Week Δ</b>: Date the Divergence was confirmed.
-                * <b>RSI Δ</b>: RSI value at Pivot 1 vs Pivot 2.
-                * <b>Price Δ</b>: Price at Pivot 1 vs Pivot 2.
-                * <b>Best Period</b>: Holding period producing best metrics.
-                * <b>Profit Factor</b>: Gross Wins / Gross Losses.
-                * <b>EV</b>: Expected Value per trade.
-                * <b>EV Target</b>: Signal Price CLOSE x (1+EV).
-                """, unsafe_allow_html=True)
-            with f_col4:
-                st.markdown('<div class="footer-header">🏷️ TAGS</div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                * **EMA{EMA8_PERIOD}/{EMA21_PERIOD}**: Last Close relative to EMA.
-                * **V_HI**: Signal candle volume > 150% of 30d avg.
-                * **V_GROW**: Volume on P2 > P1.
-                """)
-        
-        if data_option_div:
-            try:
-                key = dataset_map[data_option_div]
-                master = load_parquet_and_clean(key)
-                
-                if master is not None and not master.empty:
-                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                    
-                    date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
-                    if date_col_raw:
-                        max_dt_obj = pd.to_datetime(master[date_col_raw]).max()
-                        target_highlight_daily = max_dt_obj.strftime('%Y-%m-%d')
-                        days_to_subtract = max_dt_obj.weekday() + (7 if max_dt_obj.weekday() < 4 else 0)
-                        target_highlight_weekly = (max_dt_obj - timedelta(days=days_to_subtract)).strftime('%Y-%m-%d')
-                    
-                    all_tickers = sorted(master[t_col].unique())
-                    with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-                        sq_div = st.text_input("Filter...", key="rsi_div_filter_ticker").upper()
-                        ft_div = [t for t in all_tickers if sq_div in t]
-                        cols = st.columns(6)
-                        rows_per_col = math.ceil(len(ft_div) / 6)
-                        for i in range(6):
-                            start = i * rows_per_col
-                            end = start + rows_per_col
-                            subset = ft_div[start:end]
-                            with cols[i]:
-                                for t in subset:
-                                    st.write(t)
-                    
-                    # --- REORDERED INPUTS (8 Columns) ---
-                    # 1. Max Candle, 2. Strict, 3. Pivot Source
-                    # 4. Min N, 5. Days Since
-                    # 6. Days, 7. Weeks, 8. Opt
-                    c_d1, c_d2, c_d3, c_d4, c_d5, c_d6, c_d7, c_d8 = st.columns(8)
-                    
-                    with c_d1:
-                        div_lookback = st.number_input("Max Candle Δ", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
-                    with c_d2:
-                         curr_strict = st.session_state.saved_rsi_div_strict
-                         idx_strict = ["Yes", "No"].index(curr_strict) if curr_strict in ["Yes", "No"] else 0
-                         strict_div_str = st.selectbox("Strict 50-Cross", ["Yes", "No"], index=idx_strict, key="rsi_div_strict", on_change=save_rsi_state, args=("rsi_div_strict", "saved_rsi_div_strict"))
-                         strict_div = (strict_div_str == "Yes")
-                    with c_d3:
-                         curr_source = st.session_state.saved_rsi_div_source
-                         idx_source = ["High/Low", "Close"].index(curr_source) if curr_source in ["High/Low", "Close"] else 0
-                         div_source = st.selectbox("Pivot Candle Signal", ["High/Low", "Close"], index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
-                    with c_d4:
-                         min_n_div = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_div_min_n, step=1, key="rsi_div_min_n", on_change=save_rsi_state, args=("rsi_div_min_n", "saved_rsi_div_min_n"))
-                    with c_d5:
-                        days_since = st.number_input("Days Since Signal", min_value=1, value=st.session_state.saved_rsi_div_days_since, step=1, key="rsi_div_days_since", on_change=save_rsi_state, args=("rsi_div_days_since", "saved_rsi_div_days_since"))
-                    with c_d6:
-                         periods_str_div_days = st.text_input("Periods (Days)", value=st.session_state.saved_rsi_div_periods_days, key="rsi_div_periods_days", on_change=save_rsi_state, args=("rsi_div_periods_days", "saved_rsi_div_periods_days"))
-                    with c_d7:
-                         periods_str_div_weeks = st.text_input("Periods (Weeks)", value=st.session_state.saved_rsi_div_periods_weeks, key="rsi_div_periods_weeks", on_change=save_rsi_state, args=("rsi_div_periods_weeks", "saved_rsi_div_periods_weeks"))
-                    with c_d8:
-                         curr_div_opt = st.session_state.saved_rsi_div_opt
-                         idx_div_opt = ["Profit Factor", "SQN"].index(curr_div_opt) if curr_div_opt in ["Profit Factor", "SQN"] else 0
-                         opt_mode_div = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_div_opt, key="rsi_div_opt", on_change=save_rsi_state, args=("rsi_div_opt", "saved_rsi_div_opt"))
-                    
-                    periods_div_days = parse_periods(periods_str_div_days)
-                    periods_div_weeks = parse_periods(periods_str_div_weeks)
-                    
-                    div_opt_code = OPT_MAP[opt_mode_div]
-
-                    raw_results_div = []
-                    progress_bar = st.progress(0, text="Scanning Divergences...")
-                    grouped = master.groupby(t_col)
-                    grouped_list = list(grouped)
-                    total_groups = len(grouped_list)
-                    
-                    for i, (ticker, group) in enumerate(grouped_list):
-                        d_d, d_w = prepare_data(group.copy())
-                        
-                        if d_d is not None: 
-                            raw_results_div.extend(find_divergences(d_d, ticker, 'Daily', min_n=min_n_div, periods_input=periods_div_days, optimize_for=div_opt_code, lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since))
-                        if d_w is not None: 
-                            raw_results_div.extend(find_divergences(d_w, ticker, 'Weekly', min_n=min_n_div, periods_input=periods_div_weeks, optimize_for=div_opt_code, lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since))
-                        if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
-                    
-                    progress_bar.empty()
-                    
-                    if raw_results_div:
-                        df_all_results = pd.DataFrame(raw_results_div)
-                        
-                        # --- DYNAMIC DOWNLOAD BUTTON ---
-                        csv_export_df = df_all_results.rename(columns={
-                            "Signal_Date_ISO": "Day2",
-                            "P1_Date_ISO": "Day1"
-                        })
-                        
-                        # --- NEW: Combine Timeframe and Type for CSV Export ---
-                        csv_export_df["Type"] = csv_export_df["Timeframe"] + " " + csv_export_df["Type"]
-                        
-                        csv_cols = ["Type", "Ticker", "Day1", "Day2", "RSI1", "RSI2", "Price1", "Price2"]
-                        csv_data = csv_export_df[csv_cols].to_csv(index=False).encode('utf-8')
-                        
-                        file_label = data_option_div.replace(" ", "_") if data_option_div else "dataset"
-                        
-                        st.download_button(
-                            label="📥 Download 10 Year Signal History",
-                            data=csv_data,
-                            file_name=f"rsi_divergence_history_10y_{file_label}.csv",
-                            mime="text/csv"
-                        )
-                        st.caption("ℹ️ This CSV is the raw 10-year signal history only using the filters Max Candle Δ, Strict-50 Cross, and Pivot Candle Signal.")
-
-                        # --- UI DISPLAY FILTERING (Is_Recent == True) ---
-                        res_div_df = df_all_results[df_all_results["Is_Recent"] == True].copy()
-                        
-                        if res_div_df.empty:
-                            st.warning(f"No signals found in the last {days_since} days (though historical signals may exist in the download).")
-                        else:
-                            res_div_df = res_div_df.sort_values(by='Signal_Date_ISO', ascending=False)
-                            consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
-                            
-                            for tf in ['Daily', 'Weekly']:
-                                target_highlight = target_highlight_weekly if tf == 'Weekly' else target_highlight_daily
-                                date_header = "Week Δ" if tf == 'Weekly' else "Day Δ"
-                                
-                                for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                                    st.subheader(f"{emoji} {tf} {s_type} Signals")
-                                    tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
-                                    
-                                    # --- Header Logic ---
-                                    if div_source == 'Close':
-                                        price_header = "Close Price Δ"
-                                    else:
-                                        price_header = "Low Price Δ" if s_type == 'Bullish' else "High Price Δ"
-                                    
-                                    if not tbl_df.empty:
-                                        def style_div_df(df_in):
-                                            def highlight_row(row):
-                                                styles = [''] * len(row)
-                                                if row['Signal_Date_ISO'] == target_highlight:
-                                                    idx = df_in.columns.get_loc('Date_Display')
-                                                    styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
-                                                
-                                                if 'EV' in df_in.columns:
-                                                    val = row['EV']
-                                                    if pd.notnull(val) and val != 0:
-                                                        is_green = val > 0
-                                                        bg = 'background-color: #e6f4ea; color: #1e7e34;' if is_green else 'background-color: #fce8e6; color: #c5221f;'
-                                                        idx = df_in.columns.get_loc('EV')
-                                                        styles[idx] = f'{bg} font-weight: 500;'
-                                                return styles
-                                            return df_in.style.apply(highlight_row, axis=1)
-
-                                        st.dataframe(
-                                            style_div_df(tbl_df),
-                                            column_config={
-                                                "Ticker": st.column_config.TextColumn("Ticker"),
-                                                "Tags": st.column_config.ListColumn("Tags", width="medium"), 
-                                                "Date_Display": st.column_config.TextColumn(date_header),
-                                                "RSI_Display": st.column_config.TextColumn("RSI Δ"),
-                                                "Price_Display": st.column_config.TextColumn(price_header),
-                                                "Last_Close": st.column_config.TextColumn("Last Close"),
-                                                "Best Period": st.column_config.TextColumn("Best Period"),
-                                                "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
-                                                "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
-                                                "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
-                                                "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
-                                                "N": st.column_config.NumberColumn("N"),
-                                                "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="System Quality Number"),
-                                                "Signal_Date_ISO": None, "Type": None, "Timeframe": None, "Is_Recent": None,
-                                                "RSI1": None, "RSI2": None, "Price1": None, "Price2": None, "P1_Date_ISO": None 
-                                            },
-                                            hide_index=True,
-                                            use_container_width=True,
-                                            height=get_table_height(tbl_df, max_rows=50)
-                                        )
-                                        st.markdown("<br><br>", unsafe_allow_html=True)
-                                    else: st.info("No signals.")
-                    else: st.warning("No Divergence signals found.")
-                else:
-                    st.error(f"Failed to load dataset: {data_option_div}")
-            except Exception as e: st.error(f"Analysis failed: {e}")
-
-    with tab_pct:
-        data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
-        
-        with st.expander("ℹ️ Page Notes: Percentile Strategy Logic"):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                 st.markdown('<div class="footer-header">⚙️ STRATEGY</div>', unsafe_allow_html=True)
-                 st.markdown("""
-                * **Signal Trigger**: RSI crosses **ABOVE Low Percentile** (Leaving Low) or **BELOW High Percentile** (Leaving High).
-                * **Optimization Loop**: Calculates returns for multiple days (or weeks) and selects the Winner based on **Profit Factor** (or SQN).
-                """)
-            with c2:
-                st.markdown('<div class="footer-header">🔢 PERCENTILE DEFINITION</div>', unsafe_allow_html=True)
-                st.markdown("""
-                * **Low/High Percentile**: Calculated based on the full history (up to 10 years). 
-                * **Example**: RSI < 10th Percentile means current RSI is lower than 90% of history.
-                """)
-            with c3:
-                st.markdown('<div class="footer-header">📊 TABLE COLUMNS</div>', unsafe_allow_html=True)
-                st.markdown("""
-                * **Date**: The date the signal fired.
-                * **RSI Δ**: RSI movement.
-                * **Best Period**: The historical holding period that produced the best result.
-                * **Profit Factor**: Gross Wins / Gross Losses. 
-                * **Win Rate**: % of historical trades that won.
-                * **EV**: Average return per trade.
-                * **SQN**: System Quality Number.
-                """)
-        
-        if data_option_pct:
-            try:
-                key = dataset_map[data_option_pct]
-                master = load_parquet_and_clean(key)
-                
-                if master is not None and not master.empty:
-                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                    date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
-                    max_date_in_set = None
-                    if date_col_raw:
-                        max_dt_obj = pd.to_datetime(master[date_col_raw]).max()
-                        max_date_in_set = max_dt_obj.date()
-
-                    all_tickers = sorted(master[t_col].unique())
-                    with st.expander(f"🔍 View Scanned Tickers ({len(all_tickers)} symbols)"):
-                        sq_pct = st.text_input("Filter...", key="rsi_pct_filter_ticker").upper()
-                        ft_pct = [t for t in all_tickers if sq_pct in t]
-                        
-                        cols = st.columns(6)
-                        rows_per_col = math.ceil(len(ft_pct) / 6)
-                        for i in range(6):
-                            start = i * rows_per_col
-                            end = start + rows_per_col
-                            subset = ft_pct[start:end]
-                            with cols[i]:
-                                for t in subset:
-                                    st.write(t)
-
-                    pct_col1, pct_col2, pct_col3 = st.columns(3)
-                    with pct_col1: in_low = st.number_input("RSI Low Percentile (%)", min_value=1, max_value=49, value=st.session_state.saved_rsi_pct_low, step=1, key="rsi_pct_low", on_change=save_rsi_state, args=("rsi_pct_low", "saved_rsi_pct_low"))
-                    with pct_col2: in_high = st.number_input("RSI High Percentile (%)", min_value=51, max_value=99, value=st.session_state.saved_rsi_pct_high, step=1, key="rsi_pct_high", on_change=save_rsi_state, args=("rsi_pct_high", "saved_rsi_pct_high"))
-                    
-                    show_opts = ["Everything", "Leaving High", "Leaving Low"]
-                    curr_show = st.session_state.saved_rsi_pct_show
-                    idx_show = show_opts.index(curr_show) if curr_show in show_opts else 0
-                    with pct_col3: show_filter = st.selectbox("Actions to Show", show_opts, index=idx_show, key="rsi_pct_show", on_change=save_rsi_state, args=("rsi_pct_show", "saved_rsi_pct_show"))
-                    
-                    if not df_global.empty and "Trade Date" in df_global.columns:
-                        ref_date = df_global["Trade Date"].max().date()
-                    else:
-                        ref_date = date.today()
-                    default_start = ref_date - timedelta(days=14)
-                    
-                    if st.session_state.saved_rsi_pct_date is None:
-                        st.session_state.saved_rsi_pct_date = default_start
-
-                    pct_col4, pct_col5, pct_col6, pct_col7 = st.columns(4)
-                    with pct_col4: filter_date = st.date_input("Latest Date", value=st.session_state.saved_rsi_pct_date, key="rsi_pct_date", on_change=save_rsi_state, args=("rsi_pct_date", "saved_rsi_pct_date"))
-                    with pct_col5: min_n_pct = st.number_input("Minimum N", min_value=0, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
-                    with pct_col6: 
-                        periods_str_pct = st.text_input("Test Periods (Trading Days only)", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
-                    with pct_col7:
-                         curr_pct_opt = st.session_state.saved_rsi_pct_opt
-                         idx_pct_opt = ["Profit Factor", "SQN"].index(curr_pct_opt) if curr_pct_opt in ["Profit Factor", "SQN"] else 1
-                         opt_mode_pct = st.selectbox("Optimize By", ["Profit Factor", "SQN"], index=idx_pct_opt, key="rsi_pct_opt", on_change=save_rsi_state, args=("rsi_pct_opt", "saved_rsi_pct_opt"))
-
-                    periods_pct = parse_periods(periods_str_pct)
-                    pct_opt_code = OPT_MAP[opt_mode_pct]
-
-                    raw_results_pct = []
-                    progress_bar = st.progress(0, text="Scanning Percentiles...")
-                    grouped = master.groupby(t_col)
-                    grouped_list = list(grouped)
-                    total_groups = len(grouped_list)
-                    
-                    for i, (ticker, group) in enumerate(grouped_list):
-                        d_d, d_w = prepare_data(group.copy())
-                        
-                        if d_d is not None:
-                            raw_results_pct.extend(find_rsi_percentile_signals(d_d, ticker, pct_low=in_low/100.0, pct_high=in_high/100.0, min_n=min_n_pct, filter_date=filter_date, timeframe='Daily', periods_input=periods_pct, optimize_for=pct_opt_code))
-                        
-                        if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
-                    
-                    progress_bar.empty()
-
-                    if raw_results_pct:
-                        res_pct_df = pd.DataFrame(raw_results_pct).sort_values(by='Date_Obj', ascending=False)
-                        
-                        if show_filter == "Leaving High":
-                            res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bearish']
-                        elif show_filter == "Leaving Low":
-                            res_pct_df = res_pct_df[res_pct_df['Signal_Type'] == 'Bullish']
-                            
-                        def style_pct_df(df_in):
-                            def highlight_row(row):
-                                styles = [''] * len(row)
-                                if row['Date_Obj'] == max_date_in_set:
-                                    idx = df_in.columns.get_loc('Date')
-                                    styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
-                                
-                                if 'EV' in df_in.columns:
-                                    val = row['EV']
-                                    if pd.notnull(val) and val != 0:
-                                        is_green = val > 0
-                                        bg = 'background-color: #e6f4ea; color: #1e7e34;' if is_green else 'background-color: #fce8e6; color: #c5221f;'
-                                        idx = df_in.columns.get_loc('EV')
-                                        styles[idx] = f'{bg} font-weight: 500;'
-                                
-                                if 'Action' in df_in.columns:
-                                    act = row['Action']
-                                    idx = df_in.columns.get_loc('Action')
-                                    if "Leaving Low" in str(act):
-                                        styles[idx] = 'color: #1e7e34;' 
-                                    elif "Leaving High" in str(act):
-                                        styles[idx] = 'color: #c5221f;' 
-                                
-                                if 'SQN' in df_in.columns:
-                                    val = row['SQN']
-                                    if pd.notnull(val):
-                                        idx = df_in.columns.get_loc('SQN')
-                                        color = ''
-                                        font_weight = 'normal'
-                                        if val < 1.6: color = '#d32f2f'
-                                        elif 1.6 <= val < 2.0: color = '#f57c00'
-                                        elif 2.0 <= val < 2.5: color = '#fbc02d'
-                                        elif 2.5 <= val < 3.0: color = '#388e3c'
-                                        elif 3.0 <= val <= 5.0: color = '#2e7d32'; font_weight = 'bold'
-                                        elif 5.0 < val <= 7.0: color = '#1b5e20'; font_weight = 'bold'
-                                        elif val > 7.0: color = '#6a1b9a'; font_weight = 'bold'
-                                        if color: styles[idx] = f'color: {color}; font-weight: {font_weight};'
-                                return styles
-                            return df_in.style.apply(highlight_row, axis=1)
-
-                        st.dataframe(
-                            style_pct_df(res_pct_df),
-                            column_config={
-                                "Ticker": st.column_config.TextColumn("Ticker"),
-                                "Date": st.column_config.TextColumn("Date"),
-                                "Action": st.column_config.TextColumn("Action"),
-                                "RSI_Display": st.column_config.TextColumn("RSI Δ"),
-                                "Signal_Price": st.column_config.TextColumn("Signal Close"),
-                                "Last_Close": st.column_config.TextColumn("Last Close"), 
-                                "Best Period": st.column_config.TextColumn("Best Period"),
-                                "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"),
-                                "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"),
-                                "EV": st.column_config.NumberColumn("EV", format="%.1f%%"),
-                                "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), 
-                                "N": st.column_config.NumberColumn("N"),
-                                "SQN": st.column_config.NumberColumn("SQN", format="%.2f", help="How to Read the Score:\n< 1.6: Poor\n1.6 – 1.9: Below Avg\n2.0 – 2.5: Avg\n2.5 – 3.0: Good\n3.0 – 5.0: Excellent\n> 5.0: Superb"),
-                                "Signal_Type": None, "Date_Obj": None
-                            },
-                            hide_index=True,
-                            use_container_width=True,
-                            height=get_table_height(res_pct_df, max_rows=50)
-                        )
-                        st.markdown("<br><br>", unsafe_allow_html=True)
-                    else: st.info(f"No Percentile signals found (Crossing {in_low}th/{in_high}th percentile).")
-
-            except Exception as e: st.error(f"Analysis failed: {e}")
 
 def run_seasonality_app(df_global):
     st.title("📅 Seasonality")
