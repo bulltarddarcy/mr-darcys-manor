@@ -1298,7 +1298,7 @@ def run_rsi_scanner_app(df_global):
             
             st.divider()
 
-            # --- ANALYSIS LOGIC (Chains & Optimization - UPDATED for Volume) ---
+            # --- ANALYSIS LOGIC (Chains & Optimization) ---
             def analyze_chains(df_sub):
                 if df_sub.empty: return None
                 
@@ -1349,69 +1349,7 @@ def run_rsi_scanner_app(df_global):
                 
                 return pd.DataFrame(chains)
 
-            def render_chain_card(title, df_subset):
-                st.markdown(f"#### {title}")
-                chains = analyze_chains(df_subset)
-                
-                if chains is not None and not chains.empty:
-                    count = len(chains)
-                    avg_dur = chains['Duration'].mean()
-                    
-                    # Optimal Hold
-                    ret_cols = [c for c in chains.columns if c.startswith('Ret_')]
-                    if ret_cols:
-                        avg_rets = chains[ret_cols].mean()
-                        best_period = avg_rets.idxmax().replace('Ret_', '')
-                        best_val = avg_rets.max()
-                    else:
-                        best_period, best_val = "N/A", 0
-
-                    # Dynamic Tip Logic
-                    # 1. Did waiting for Volume help?
-                    chains_with_drawdown = chains[chains['Is_Chain']] # Only look at multi-signal events
-                    if not chains_with_drawdown.empty:
-                        vol_confirm_rate = (chains_with_drawdown['Vol_Confirmed'].sum() / len(chains_with_drawdown)) * 100
-                        avg_rsi_gap_first = chains_with_drawdown['RSI_Gap_First'].mean()
-                        avg_rsi_gap_best = chains_with_drawdown['RSI_Gap_Best'].mean()
-                        
-                        first_is_best_rate = (chains['First_Is_Best'].sum() / len(chains)) * 100
-                        
-                        tip_str = ""
-                        if first_is_best_rate > 60:
-                             tip_str = f"💡 **Tip**: Don't overthink it. The **First Signal** was the best entry {first_is_best_rate:.0f}% of the time."
-                        elif vol_confirm_rate > 60:
-                            tip_str = f"💡 **Tip**: Volume is key. The true bottom/top was accompanied by **Higher Volume** than the initial signal {vol_confirm_rate:.0f}% of the time."
-                        elif avg_rsi_gap_best > avg_rsi_gap_first + 1.5:
-                             tip_str = f"💡 **Tip**: Patience pays. Wait for the RSI Gap to widen. (Avg Best Gap: **{avg_rsi_gap_best:.1f}** vs Initial: {avg_rsi_gap_first:.1f})"
-                        else:
-                             tip_str = f"💡 **Tip**: Complex action. Chains last avg **{avg_dur:.1f} days**. Consider scaling in."
-                    else:
-                        tip_str = "💡 **Tip**: Signals tend to be singular events (not chains) for this timeframe."
-
-                    st.markdown(f"""
-                    * **Events**: {count} (merged from {len(df_subset)} signals)
-                    * **Avg Duration**: {avg_dur:.1f} days
-                    * **Optimal Hold**: {best_period} days (Avg +{best_val:.1f}%)
-                    """)
-                    st.info(tip_str)
-                else:
-                    st.write("No data found.")
-
-            # --- DISPLAY ANALYSIS (2x2 Grid) ---
-            st.markdown("### 🧠 Divergence Chain Analysis")
-            st.caption("Analyzes whether divergence events occur in clusters ('chains') and identifies the characteristics of the optimal entry point (Price/RSI/Volume).")
-            
-            row1_1, row1_2 = st.columns(2)
-            with row1_1: render_chain_card("🟢 Daily Bullish", res_df_h[(res_df_h['Type']=='Bullish') & (res_df_h['Timeframe']=='Daily')])
-            with row1_2: render_chain_card("🔴 Daily Bearish", res_df_h[(res_df_h['Type']=='Bearish') & (res_df_h['Timeframe']=='Daily')])
-            
-            row2_1, row2_2 = st.columns(2)
-            with row2_1: render_chain_card("🟢 Weekly Bullish", res_df_h[(res_df_h['Type']=='Bullish') & (res_df_h['Timeframe']=='Weekly')])
-            with row2_2: render_chain_card("🔴 Weekly Bearish", res_df_h[(res_df_h['Type']=='Bearish') & (res_df_h['Timeframe']=='Weekly')])
-
-            st.divider()
-
-            # --- DETAILED TABLES (Lifetime, 50 rows) ---
+            # --- TABLE GENERATION ---
             for tf in ['Daily', 'Weekly']:
                 p_cols_to_show = []
                 current_periods = parse_periods(h_per_days if tf == 'Daily' else h_per_weeks)
@@ -1421,9 +1359,52 @@ def run_rsi_scanner_app(df_global):
 
                 for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
                     st.subheader(f"{emoji} {tf} {s_type} History (Lifetime)")
+                    
+                    # 1. Filter Data
                     tbl_df = res_df_h[(res_df_h['Type']==s_type) & (res_df_h['Timeframe']==tf)].copy()
                     
+                    # 2. Run Analysis & Display Recommendations (Under Header, Before Table)
                     if not tbl_df.empty:
+                        chains = analyze_chains(tbl_df)
+                        if chains is not None and not chains.empty:
+                            count = len(chains)
+                            avg_dur = chains['Duration'].mean()
+                            
+                            # Optimal Hold
+                            ret_cols = [c for c in chains.columns if c.startswith('Ret_')]
+                            if ret_cols:
+                                avg_rets = chains[ret_cols].mean()
+                                best_period = avg_rets.idxmax().replace('Ret_', '')
+                                best_val = avg_rets.max()
+                            else:
+                                best_period, best_val = "N/A", 0
+
+                            # Dynamic Tip Logic
+                            chains_with_drawdown = chains[chains['Is_Chain']] 
+                            
+                            tip_str = ""
+                            if not chains_with_drawdown.empty:
+                                vol_confirm_rate = (chains_with_drawdown['Vol_Confirmed'].sum() / len(chains_with_drawdown)) * 100
+                                avg_rsi_gap_first = chains_with_drawdown['RSI_Gap_First'].mean()
+                                avg_rsi_gap_best = chains_with_drawdown['RSI_Gap_Best'].mean()
+                                first_is_best_rate = (chains['First_Is_Best'].sum() / len(chains)) * 100
+                                
+                                if first_is_best_rate > 60:
+                                     tip_str = f"💡 **Tip**: Don't overthink it. The **First Signal** was the best entry {first_is_best_rate:.0f}% of the time."
+                                elif vol_confirm_rate > 60:
+                                    tip_str = f"💡 **Tip**: Volume is key. The true bottom/top was accompanied by **Higher Volume** than the initial signal {vol_confirm_rate:.0f}% of the time."
+                                elif avg_rsi_gap_best > avg_rsi_gap_first + 1.5:
+                                     tip_str = f"💡 **Tip**: Patience pays. Wait for the RSI Gap to widen. (Avg Best Gap: **{avg_rsi_gap_best:.1f}** vs Initial: {avg_rsi_gap_first:.1f})"
+                                else:
+                                     tip_str = f"💡 **Tip**: Complex action. Chains last avg **{avg_dur:.1f} days**. Consider scaling in."
+                            else:
+                                tip_str = "💡 **Tip**: Signals tend to be singular events (not chains) for this timeframe."
+
+                            # Display Analysis Block
+                            st.markdown(f"**Events**: {count} | **Avg Duration**: {avg_dur:.1f}d | **Optimal Hold**: {best_period}d (+{best_val:.1f}%)")
+                            st.info(tip_str)
+
+                        # 3. Display Table
                         def style_ret(df_in):
                             def highlight_val(val):
                                 if pd.isna(val): return ''
