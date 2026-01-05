@@ -1025,7 +1025,7 @@ def run_rsi_scanner_app(df_global):
     
     OPT_MAP = {"Profit Factor": "PF", "SQN": "SQN"}
 
-    tab_div, tab_hist, tab_pct, tab_bot = st.tabs(["📉 Divergences", "📉 Div History", "🔢 Percentiles", "🤖 Backtester"])
+    tab_div, tab_hist, tab_pct, tab_bot = st.tabs(["📉 Divergences", "📉 Div History", "🔢 Percentiles", "🤖 RSI Only Backtester"])
 
     with tab_bot:
         st.markdown('<div class="light-note" style="margin-bottom: 15px;">ℹ️ If this is buggy, just go back to the RSI Divergences tab and back here and it will work.</div>', unsafe_allow_html=True)
