@@ -1810,121 +1810,65 @@ def fetch_yahoo_data(ticker):
 # --- 2. APP MODULES ---
 
 def run_database_app(df):
-    st.title("📂 Options Database")
-
-    # --- 0. CRITICAL DATA CLEANING (Fixes '0120C' Error) ---
-    # Force Strike to numeric, turning errors (like '0120C') into NaN
-    df['Strike'] = pd.to_numeric(df['Strike'], errors='coerce')
+    st.title("📂 Database")
+    max_data_date = get_max_trade_date(df)
     
-    # Create a clean view for calculating slider limits (drop bad rows)
-    df_clean_strikes = df.dropna(subset=['Strike'])
-    if df_clean_strikes.empty:
-        st.error("Error: No valid numeric strike prices found in dataset.")
+    if 'saved_db_ticker' not in st.session_state: st.session_state.saved_db_ticker = ""
+    if 'saved_db_start' not in st.session_state: st.session_state.saved_db_start = max_data_date
+    if 'saved_db_end' not in st.session_state: st.session_state.saved_db_end = max_data_date
+    if 'saved_db_exp' not in st.session_state: st.session_state.saved_db_exp = (date.today() + timedelta(days=365))
+    if 'saved_db_inc_cb' not in st.session_state: st.session_state.saved_db_inc_cb = True
+    if 'saved_db_inc_ps' not in st.session_state: st.session_state.saved_db_inc_ps = True
+    if 'saved_db_inc_pb' not in st.session_state: st.session_state.saved_db_inc_pb = True
+
+    def save_db_state(key, saved_key):
+        st.session_state[saved_key] = st.session_state[key]
+    
+    c1, c2, c3, c4 = st.columns(4, gap="medium")
+    with c1:
+        db_ticker = st.text_input("Ticker (blank=all)", value=st.session_state.saved_db_ticker, key="db_ticker_input", on_change=save_db_state, args=("db_ticker_input", "saved_db_ticker")).strip().upper()
+    with c2: start_date = st.date_input("Trade Start Date", value=st.session_state.saved_db_start, key="db_start", on_change=save_db_state, args=("db_start", "saved_db_start"))
+    with c3: end_date = st.date_input("Trade End Date", value=st.session_state.saved_db_end, key="db_end", on_change=save_db_state, args=("db_end", "saved_db_end"))
+    with c4:
+        db_exp_end = st.date_input("Expiration Range (end)", value=st.session_state.saved_db_exp, key="db_exp", on_change=save_db_state, args=("db_exp", "saved_db_exp"))
+    
+    ot1, ot2, ot3, ot_pad = st.columns([1.5, 1.5, 1.5, 5.5])
+    with ot1: inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_db_inc_cb, key="db_inc_cb", on_change=save_db_state, args=("db_inc_cb", "saved_db_inc_cb"))
+    with ot2: inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_db_inc_ps, key="db_inc_ps", on_change=save_db_state, args=("db_inc_ps", "saved_db_inc_ps"))
+    with ot3: inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_db_inc_pb, key="db_inc_pb", on_change=save_db_state, args=("db_inc_pb", "saved_db_inc_pb"))
+    
+    f = df.copy()
+    if db_ticker: f = f[f["Symbol"].astype(str).str.upper().eq(db_ticker)]
+    if start_date: f = f[f["Trade Date"].dt.date >= start_date]
+    if end_date: f = f[f["Trade Date"].dt.date <= end_date]
+    if db_exp_end: f = f[f["Expiry_DT"].dt.date <= db_exp_end]
+    
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    allowed_types = []
+    if inc_cb: allowed_types.append("Calls Bought")
+    if inc_pb: allowed_types.append("Puts Bought")
+    if inc_ps: allowed_types.append("Puts Sold")
+    f = f[f[order_type_col].isin(allowed_types)]
+    
+    if f.empty:
+        st.warning("No data found matching these filters.")
         return
         
-    min_strike, max_strike = int(df_clean_strikes['Strike'].min()), int(df_clean_strikes['Strike'].max())
-
-    # --- 1. DATE STATE MANAGEMENT ---
-    if 'db_start' not in st.session_state:
-        st.session_state.db_start = date(date.today().year, 1, 1) # Default YTD
-    if 'db_end' not in st.session_state:
-        st.session_state.db_end = date.today()
-
-    def set_date_range(mode):
-        today = date.today()
-        if mode == "MTD":
-            st.session_state.db_start = today.replace(day=1)
-        elif mode == "YTD":
-            st.session_state.db_start = today.replace(month=1, day=1)
-        elif mode == "30D":
-            st.session_state.db_start = today - timedelta(days=30)
-        elif mode == "60D":
-            st.session_state.db_start = today - timedelta(days=60)
-        elif mode == "90D":
-            st.session_state.db_start = today - timedelta(days=90)
-        st.session_state.db_end = today
-        st.rerun()
-
-    # --- 2. FILTERS UI ---
+    f = f.sort_values(by=["Trade Date", "Symbol"], ascending=[False, True])
+    display_cols = ["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
+    f_display = f[display_cols].copy()
+    f_display["Trade Date"] = f_display["Trade Date"].dt.strftime("%d %b %y")
+    f_display["Expiry"] = pd.to_datetime(f_display["Expiry"]).dt.strftime("%d %b %y")
     
-    # ROW 1: The 4 Main Boxes (Ticker, Strike, Start, End)
-    f1, f2, f3, f4 = st.columns(4)
-    
-    with f1:
-        all_syms = sorted(df['Symbol'].astype(str).unique().tolist())
-        tickers = st.multiselect("Ticker", options=all_syms, placeholder="All Tickers")
+    def highlight_db_order_type(val):
+        if val in ["Calls Bought", "Puts Sold"]: return 'background-color: rgba(113, 210, 138, 0.15); color: #71d28a; font-weight: 600;'
+        elif val == "Puts Bought": return 'background-color: rgba(242, 156, 160, 0.15); color: #f29ca0; font-weight: 600;'
+        return ''
         
-    with f2:
-        strike_range = st.slider("Strike Range", min_strike, max_strike, (min_strike, max_strike))
-        
-    with f3:
-        d_start = st.date_input("Start Date", value=st.session_state.db_start, key="date_in_start", on_change=lambda: st.session_state.update(db_start=st.session_state.date_in_start))
-
-    with f4:
-        d_end = st.date_input("End Date", value=st.session_state.db_end, key="date_in_end", on_change=lambda: st.session_state.update(db_end=st.session_state.date_in_end))
-
-    # ROW 2: Order Type + Quick Date Buttons
-    c_type, c_btns = st.columns([1, 2])
-    
-    with c_type:
-        all_types = sorted(df['Order Type'].astype(str).unique().tolist())
-        otypes = st.multiselect("Order Type", options=all_types, placeholder="All Types")
-        
-    with c_btns:
-        st.write("") # Spacer to align buttons with input box
-        st.write("")
-        b1, b2, b3, b4, b5 = st.columns(5)
-        if b1.button("MTD", use_container_width=True): set_date_range("MTD")
-        if b2.button("YTD", use_container_width=True): set_date_range("YTD")
-        if b3.button("30D", use_container_width=True): set_date_range("30D")
-        if b4.button("60D", use_container_width=True): set_date_range("60D")
-        if b5.button("90D", use_container_width=True): set_date_range("90D")
-
-    # --- 3. FILTERING LOGIC ---
-    mask = (
-        (pd.to_datetime(df['Trade Date']).dt.date >= d_start) &
-        (pd.to_datetime(df['Trade Date']).dt.date <= d_end) &
-        (df['Strike'] >= strike_range[0]) &
-        (df['Strike'] <= strike_range[1])
-    )
-
-    if tickers:
-        mask &= df['Symbol'].isin(tickers)
-    if otypes:
-        mask &= df['Order Type'].isin(otypes)
-
-    df_filtered = df[mask].copy()
-
-    # --- 4. DISPLAY METRICS & TABLE ---
-    st.divider()
-    
-    if not df_filtered.empty:
-        m1, m2, m3, m4 = st.columns(4)
-        total_prem = df_filtered['Dollars'].sum()
-        total_vol = df_filtered['Volume'].sum()
-        unique_tickers = df_filtered['Symbol'].nunique()
-        
-        m1.metric("Rows", f"{len(df_filtered):,}")
-        m2.metric("Total Premium", f"${total_prem:,.0f}")
-        m3.metric("Total Volume", f"{total_vol:,.0f}")
-        m4.metric("Tickers Active", unique_tickers)
-
-        df_filtered = df_filtered.sort_values(by="Trade Date", ascending=False)
-
-        st.dataframe(
-            df_filtered,
-            use_container_width=True,
-            column_config={
-                "Trade Date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
-                "Dollars": st.column_config.NumberColumn("Premium", format="$%.2f"),
-                "Strike": st.column_config.NumberColumn("Strike", format="$%d"),
-                "Spot": st.column_config.NumberColumn("Spot", format="$%.2f"),
-            },
-            height=600,
-            hide_index=True
-        )
-    else:
-        st.info("No records found matching these filters.")
+    st.subheader("Non-Expired Trades")
+    st.caption("⚠️ User should check OI to confirm trades are still open")
+    st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=True, hide_index=True, height=get_table_height(f_display, max_rows=30))
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
 
 @st.cache_data(ttl=600, show_spinner="Crunching Smart Money Data...")
 def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit):
