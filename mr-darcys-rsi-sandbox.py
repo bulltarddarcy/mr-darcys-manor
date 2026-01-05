@@ -1840,15 +1840,16 @@ def run_database_app(df):
     with ot3: inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_db_inc_pb, key="db_inc_pb", on_change=save_db_state, args=("db_inc_pb", "saved_db_inc_pb"))
     
     with ot_dates:
-        # Spacer to align buttons visually with checkboxes
+        # Spacer
         st.write("") 
         d_btn1, d_btn2, d_btn3, d_btn4, d_btn5 = st.columns(5)
         
-        # Logic: From Today, Only Change Start Date
         today = date.today()
         
+        # --- FIX: Update both the saved variable AND the widget key ---
         def set_start_date(new_start):
             st.session_state.saved_db_start = new_start
+            st.session_state.db_start = new_start # <--- This forces the widget to update
             st.rerun()
 
         if d_btn1.button("MTD", use_container_width=True, help="Month to Date"):
