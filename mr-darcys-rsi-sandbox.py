@@ -1812,14 +1812,24 @@ def fetch_yahoo_data(ticker):
 def run_database_app(df):
     st.title("📂 Options Database")
 
-    # --- 1. SESSION STATE INITIALIZATION FOR DATES ---
+    # --- 0. CRITICAL DATA CLEANING (Fixes '0120C' Error) ---
+    # Force Strike to numeric, turning errors (like '0120C') into NaN
+    df['Strike'] = pd.to_numeric(df['Strike'], errors='coerce')
+    
+    # Create a clean view for calculating slider limits (drop bad rows)
+    df_clean_strikes = df.dropna(subset=['Strike'])
+    if df_clean_strikes.empty:
+        st.error("Error: No valid numeric strike prices found in dataset.")
+        return
+        
+    min_strike, max_strike = int(df_clean_strikes['Strike'].min()), int(df_clean_strikes['Strike'].max())
+
+    # --- 1. DATE STATE MANAGEMENT ---
     if 'db_start' not in st.session_state:
         st.session_state.db_start = date(date.today().year, 1, 1) # Default YTD
     if 'db_end' not in st.session_state:
         st.session_state.db_end = date.today()
 
-    # --- 2. DATE PRESET BUTTONS ---
-    # Helper function to update state
     def set_date_range(mode):
         today = date.today()
         if mode == "MTD":
@@ -1833,44 +1843,44 @@ def run_database_app(df):
         elif mode == "90D":
             st.session_state.db_start = today - timedelta(days=90)
         st.session_state.db_end = today
+        st.rerun()
 
-    # Button Layout
-    st.markdown("##### 📅 Quick Filters")
-    b1, b2, b3, b4, b5 = st.columns(5)
+    # --- 2. FILTERS UI ---
     
-    if b1.button("📅 MTD", use_container_width=True): set_date_range("MTD")
-    if b2.button("📅 YTD", use_container_width=True): set_date_range("YTD")
-    if b3.button("Last 30D", use_container_width=True): set_date_range("30D")
-    if b4.button("Last 60D", use_container_width=True): set_date_range("60D")
-    if b5.button("Last 90D", use_container_width=True): set_date_range("90D")
-
-    # --- 3. MAIN FILTERS ---
-    with st.expander("🔎 Filter Database", expanded=True):
-        col1, col2, col3 = st.columns(3)
+    # ROW 1: The 4 Main Boxes (Ticker, Strike, Start, End)
+    f1, f2, f3, f4 = st.columns(4)
+    
+    with f1:
+        all_syms = sorted(df['Symbol'].astype(str).unique().tolist())
+        tickers = st.multiselect("Ticker", options=all_syms, placeholder="All Tickers")
         
-        with col1:
-            # Date Inputs linked to Session State
-            d_start = st.date_input("Start Date", value=st.session_state.db_start, key='db_start')
-            d_end = st.date_input("End Date", value=st.session_state.db_end, key='db_end')
+    with f2:
+        strike_range = st.slider("Strike Range", min_strike, max_strike, (min_strike, max_strike))
+        
+    with f3:
+        d_start = st.date_input("Start Date", value=st.session_state.db_start, key="date_in_start", on_change=lambda: st.session_state.update(db_start=st.session_state.date_in_start))
 
-        with col2:
-            # Ticker Filter
-            all_syms = sorted(df['Symbol'].unique().tolist())
-            tickers = st.multiselect("Ticker", options=all_syms, placeholder="All Tickers")
-            
-            # Order Type Filter
-            all_types = sorted(df['Order Type'].unique().tolist())
-            otypes = st.multiselect("Order Type", options=all_types, placeholder="All Types")
+    with f4:
+        d_end = st.date_input("End Date", value=st.session_state.db_end, key="date_in_end", on_change=lambda: st.session_state.update(db_end=st.session_state.date_in_end))
 
-        with col3:
-            # Strike & Expiry Filters
-            min_strike, max_strike = int(df['Strike'].min()), int(df['Strike'].max())
-            strike_range = st.slider("Strike Price", min_strike, max_strike, (min_strike, max_strike))
-            
-            # Text search for specific expiry string if needed
-            exp_search = st.text_input("Expiry (Contains)", placeholder="e.g. 2025-06")
+    # ROW 2: Order Type + Quick Date Buttons
+    c_type, c_btns = st.columns([1, 2])
+    
+    with c_type:
+        all_types = sorted(df['Order Type'].astype(str).unique().tolist())
+        otypes = st.multiselect("Order Type", options=all_types, placeholder="All Types")
+        
+    with c_btns:
+        st.write("") # Spacer to align buttons with input box
+        st.write("")
+        b1, b2, b3, b4, b5 = st.columns(5)
+        if b1.button("MTD", use_container_width=True): set_date_range("MTD")
+        if b2.button("YTD", use_container_width=True): set_date_range("YTD")
+        if b3.button("30D", use_container_width=True): set_date_range("30D")
+        if b4.button("60D", use_container_width=True): set_date_range("60D")
+        if b5.button("90D", use_container_width=True): set_date_range("90D")
 
-    # --- 4. DATA FILTERING LOGIC ---
+    # --- 3. FILTERING LOGIC ---
     mask = (
         (pd.to_datetime(df['Trade Date']).dt.date >= d_start) &
         (pd.to_datetime(df['Trade Date']).dt.date <= d_end) &
@@ -1882,14 +1892,13 @@ def run_database_app(df):
         mask &= df['Symbol'].isin(tickers)
     if otypes:
         mask &= df['Order Type'].isin(otypes)
-    if exp_search:
-        mask &= df['Expiry'].astype(str).str.contains(exp_search, case=False, na=False)
 
     df_filtered = df[mask].copy()
 
-    # --- 5. DISPLAY METRICS & TABLE ---
+    # --- 4. DISPLAY METRICS & TABLE ---
+    st.divider()
+    
     if not df_filtered.empty:
-        # Metrics
         m1, m2, m3, m4 = st.columns(4)
         total_prem = df_filtered['Dollars'].sum()
         total_vol = df_filtered['Volume'].sum()
@@ -1900,10 +1909,8 @@ def run_database_app(df):
         m3.metric("Total Volume", f"{total_vol:,.0f}")
         m4.metric("Tickers Active", unique_tickers)
 
-        # Sort by Date Descending
         df_filtered = df_filtered.sort_values(by="Trade Date", ascending=False)
 
-        # Main Table
         st.dataframe(
             df_filtered,
             use_container_width=True,
