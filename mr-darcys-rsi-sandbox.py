@@ -1033,7 +1033,7 @@ def run_rsi_scanner_app(df_global):
     CSV_PERIODS_DAYS = [5, 21, 63, 126, 252]
     CSV_PERIODS_WEEKS = [4, 13, 26, 52]
 
-    tab_div, tab_hist, tab_pct, tab_bot = st.tabs(["📉 Divergences", "📉 Div History", "🔢 Percentiles", "🤖 RSI Backtester"])
+    tab_div, tab_hist, tab_pct, tab_bot = st.tabs(["📉 Divergences Tracker", "📉 Divergeces History", "🔢 Percentiles (WIP)", "🤖 RSI Only Backtester"])
 
     # --------------------------------------------------------------------------
     # TAB 1: DIVERGENCES (SCANNER)
