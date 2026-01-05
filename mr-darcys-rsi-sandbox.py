@@ -363,14 +363,15 @@ def get_gdrive_binary_data(url):
 
 @st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
 def load_parquet_and_clean(key):
-    # This function fixes the "Magic Bytes" error by falling back to CSV if Parquet fails
-    if key not in st.secrets["DATA_KEYS_PARQUET"]:
-        st.error(f"Key {key} not found in secrets.")
+    # FIX: Check st.secrets directly for the key (removed incorrect nested lookup)
+    if key not in st.secrets:
+        st.error(f"Key '{key}' not found in Streamlit Secrets.")
         return None
         
-    url = st.secrets["DATA_KEYS_PARQUET"][key]
+    url = st.secrets[key]
     
     try:
+        # Handle Google Drive vs Direct Links
         if "drive.google.com" in url:
             file_id = url.split('/')[-2]
             d_url = f'https://drive.google.com/uc?id={file_id}'
@@ -379,14 +380,14 @@ def load_parquet_and_clean(key):
             resp = requests.get(url)
             
         if resp.status_code != 200:
-            st.error(f"Failed to fetch data: {resp.status_code}")
+            st.error(f"Failed to fetch data for {key}: {resp.status_code}")
             return None
             
         # Try Parquet First
         try:
             df = pd.read_parquet(BytesIO(resp.content))
         except Exception:
-            # Fallback: The file might be a CSV despite the key name
+            # Fallback: The file might be a CSV despite the key name (Fixes "Magic Bytes" error)
             try:
                 df = pd.read_csv(BytesIO(resp.content))
             except Exception as e:
