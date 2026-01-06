@@ -371,25 +371,32 @@ def load_parquet_and_clean(key):
     url = st.secrets[key]
     
     try:
+        content_io = None
+        
         # Handle Google Drive vs Direct Links
         if "drive.google.com" in url:
-            file_id = url.split('/')[-2]
-            d_url = f'https://drive.google.com/uc?id={file_id}'
-            resp = requests.get(d_url)
+            # FIX: Use the robust helper instead of fragile URL splitting
+            content_io = get_gdrive_binary_data(url)
+            if content_io is None:
+                st.error(f"Failed to fetch GDrive data for {key}")
+                return None
         else:
             resp = requests.get(url)
-            
-        if resp.status_code != 200:
-            st.error(f"Failed to fetch data for {key}: {resp.status_code}")
-            return None
+            if resp.status_code != 200:
+                st.error(f"Failed to fetch data for {key}: {resp.status_code}")
+                return None
+            content_io = BytesIO(resp.content)
             
         # Try Parquet First
         try:
-            df = pd.read_parquet(BytesIO(resp.content))
+            # Ensure we are at the start of the stream
+            content_io.seek(0)
+            df = pd.read_parquet(content_io)
         except Exception:
             # Fallback: The file might be a CSV despite the key name (Fixes "Magic Bytes" error)
             try:
-                df = pd.read_csv(BytesIO(resp.content))
+                content_io.seek(0)
+                df = pd.read_csv(content_io)
             except Exception as e:
                 st.error(f"Error loading {key}: Could not read as Parquet OR CSV. ({e})")
                 return None
@@ -1563,8 +1570,9 @@ def run_rsi_scanner_app(df_global):
             * **Days**: The holding period for the trade.
             * **Profit Factor (PF)**: Gross Wins / Gross Losses. Above 1.5 is good. Above 2.0 is excellent.
             * **Win Rate (WR)**: Percentage of trades that ended positive.
-            * **EV (Expected Value)**: The average return percentage per trade.
-            * **SQN (System Quality Number)**: A metric for the "easiness" of the trading system. Formula: `(Avg Trade / Std Dev) * sqrt(N)`.
+            * **EV (Expected Value)**: Represents the average profit or loss per trade expressed as a percentage. It's calculated by dividing the total P&L by the number of trades. A positive EV indicates a profitable system on average, while negative EV suggests losses. This metric answers the fundamental question: "How much do I make (or lose) per trade on average?" However, EV alone doesn't account for consistency or risk - a high EV could come from a few large wins masking many small losses.
+            * **SQN (System Quality Number)**: System Quality Number measures the quality and reliability of a trading system by evaluating how consistently it generates returns relative to their variability. It combines the average return, standard deviation, and sample size into a single metric that indicates whether your edge is statistically significant. SQN is essentially a Sharpe Ratio scaled by the square root of the number of trades. Values above 2.0 indicate an average or better system, while values above 3.0 suggest excellent performance. Unlike EV, SQN accounts for both the magnitude and consistency of returns. 
+                * Formula: `(Avg Trade / Std Dev) * sqrt(N)`
                 * **< 1.6**: Poor / Hard to trade.
                 * **1.6 - 2.0**: Average.
                 * **2.0 - 2.9**: Good.
@@ -1876,7 +1884,10 @@ def run_database_app(df):
     # This must run before the widget is re-rendered to avoid the StreamlitAPIException
     def set_start_date_cb(new_date):
         st.session_state.saved_db_start = new_date
-        st.session_state.db_start = new_date
+        # FIX: Delete the widget key to force a clean refresh from 'value'. 
+        # Setting st.session_state.db_start directly causes the "default value" conflict warning.
+        if "db_start" in st.session_state:
+            del st.session_state.db_start
     
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
