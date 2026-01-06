@@ -1561,28 +1561,28 @@ def run_rsi_scanner_app(df_global):
         st.markdown('<div class="light-note" style="margin-bottom: 15px;">ℹ️ If this is buggy, just go back to the RSI Divergences tab and back here and it will work.</div>', unsafe_allow_html=True)
         
         with st.expander("ℹ️ Page User Guide"):
-            col_guide_a, col_guide_b = st.columns(2)
-            with col_guide_a:
-                st.markdown("#### 🤔 What is this tool?")
-                st.markdown("This tool scans the **entire price history** (e.g., last 10 years) of a stock to find every instance where the RSI matched your criteria. It then 'simulates' a trade to see what would have happened if you bought and held.")
-                st.markdown("#### 🎯 Why use it?")
-                st.markdown("To validate your trade ideas. If a stock hits RSI 30, does it *actually* bounce historically? Or does it typically keep crashing? This tool gives you the hard data so you don't trade blind.")
-                st.markdown("#### 📊 How to Read the Data")
-                st.markdown("""
-                * **Profit Factor**: The most critical metric. Calculated as `Total Gains / Total Losses`.
-                    * **< 1.0**: Losing strategy.
-                    * **> 1.5**: Strong strategy.
-                    * **> 2.0**: Excellent.
-                * **Win Rate**: How often the trade makes money (e.g. 65% = 6.5 wins out of 10).
-                * **EV (Expected Value)**: Represents the average profit or loss per trade expressed as a percentage. It's calculated by dividing the total P&L by the number of trades. A positive EV indicates a profitable system on average, while negative EV suggests losses. This metric answers the fundamental question: "How much do I make (or lose) per trade on average?" However, EV alone doesn't account for consistency or risk - a high EV could come from a few large wins masking many small losses.
-                    * Calculated as `Total P&L / Number of Trades`.                
-                * **SQN (System Quality Number)**: Measures the quality and reliability of a trading system by evaluating how consistently it generates returns relative to their variability. It combines the average return, standard deviation, and sample size into a single metric that indicates whether your edge is statistically significant. SQN is essentially a Sharpe Ratio scaled by the square root of the number of trades. Unlike EV, SQN accounts for both the magnitude and consistency of returns.
-                    * Calculated as `(Average Return / Standard Deviation) x √(Number of Trades)`.
-                    * **< 1.6**: Hard to trade / Volatile.
-                    * **1.6 - 3.0**: Good / Average.
-                    * **> 3.0**: Excellent / Holy Grail.
-                * **Count**: Sample size. (Higher is better).
-                """)
+            #col_guide_a, col_guide_b = st.columns(2)
+            #with col_guide_a:
+            st.markdown("#### 🤔 What is this tool?")
+            st.markdown("This tool scans the **entire price history** (e.g., last 10 years) of a stock to find every instance where the RSI matched your criteria. It then 'simulates' a trade to see what would have happened if you bought and held.")
+            st.markdown("#### 🎯 Why use it?")
+            st.markdown("To validate your trade ideas. If a stock hits RSI 30, does it *actually* bounce historically? Or does it typically keep crashing? This tool gives you the hard data so you don't trade blind.")
+            st.markdown("#### 📊 How to Read the Data")
+            st.markdown("""
+            * **Profit Factor**: The most critical metric. Calculated as `Total Gains / Total Losses`.
+                * **< 1.0**: Losing strategy.
+                * **> 1.5**: Strong strategy.
+                * **> 2.0**: Excellent.
+            * **Win Rate**: How often the trade makes money (e.g. 65% = 6.5 wins out of 10).
+            * **EV (Expected Value)**: Represents the average profit or loss per trade expressed as a percentage. It's calculated by dividing the total P&L by the number of trades. A positive EV indicates a profitable system on average, while negative EV suggests losses. This metric answers the fundamental question: "How much do I make (or lose) per trade on average?" However, EV alone doesn't account for consistency or risk - a high EV could come from a few large wins masking many small losses.
+                * Calculated as `Total P&L / Number of Trades`.                
+            * **SQN (System Quality Number)**: Measures the quality and reliability of a trading system by evaluating how consistently it generates returns relative to their variability. It combines the average return, standard deviation, and sample size into a single metric that indicates whether your edge is statistically significant. SQN is essentially a Sharpe Ratio scaled by the square root of the number of trades. Unlike EV, SQN accounts for both the magnitude and consistency of returns.
+                * Calculated as `(Average Return / Standard Deviation) x √(Number of Trades)`.
+                * **< 1.6**: Hard to trade / Volatile.
+                * **1.6 - 3.0**: Good / Average.
+                * **> 3.0**: Excellent / Holy Grail.
+            * **Count**: Sample size. (Higher is better).
+            """)
 
         c_left, c_right = st.columns([1, 6])
         
