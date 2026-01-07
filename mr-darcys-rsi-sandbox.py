@@ -387,6 +387,7 @@ def get_gdrive_binary_data(url):
 
 @st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
 def load_parquet_and_clean(key):
+    # 1. Fetch the URL from secrets based on the key (e.g., PARQUET_SP100)
     if key not in st.secrets:
         st.error(f"Key '{key}' not found in Streamlit Secrets.")
         return None
@@ -394,43 +395,43 @@ def load_parquet_and_clean(key):
     url = st.secrets[key]
     
     try:
-        # Handle Google Drive using your robust helper
-        if "drive.google.com" in url:
-            buffer = get_gdrive_binary_data(url)
-            if not buffer:
-                return None
-            content = buffer.getvalue()
-        else:
-            # Handle direct links
-            resp = requests.get(url)
-            if resp.status_code != 200:
-                st.error(f"Failed to fetch data: {resp.status_code}")
-                return None
-            content = resp.content
+        # 2. Use your existing robust binary helper to handle Google Drive
+        # This function handles confirmation tokens for large files (SP500/SP100)
+        buffer = get_gdrive_binary_data(url)
+        
+        if not buffer:
+            st.error(f"Could not retrieve data for {key}. Check if the Drive link is public.")
+            return None
             
-        # Try Parquet First
+        content = buffer.getvalue()
+
+        # 3. Try Parquet First, then Fallback to CSV
         try:
             df = pd.read_parquet(BytesIO(content))
         except Exception:
-            # Fallback for CSV files
             try:
+                # Sometimes these files are actually CSVs despite the name
                 df = pd.read_csv(BytesIO(content))
             except Exception as e:
-                st.error(f"Error loading {key}: Could not read as Parquet OR CSV. ({e})")
+                st.error(f"Error reading {key}: {e}")
                 return None
 
-        # --- Rest of your standard cleaning logic remains the same ---
+        # 4. Standardize Columns
         df.columns = [c.strip() for c in df.columns]
+        
+        # Look for a Date column
         date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
             df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate')
             
+        # Ensure Price/Close consistency
         if 'Close' not in df.columns and 'Price' in df.columns:
             df = df.rename(columns={'Price': 'Close'})
         if 'Close' in df.columns and 'Price' not in df.columns:
             df['Price'] = df['Close']
             
+        # Ensure Numeric for calculations
         cols_to_numeric = ['Price', 'High', 'Low', 'Open', 'Volume', 'RSI', 'EMA8', 'EMA21', 'VolSMA']
         for c in cols_to_numeric:
             if c in df.columns:
