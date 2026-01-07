@@ -3165,28 +3165,8 @@ def run_seasonality_app(df_global):
 def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
     
-    # --- NOTES ---
-    st.markdown("❗️ **Note:** The plan is to use this EMA Extension page to scan the master list of tickers to give the user a heads up of buying or selling zones based on this indicator in real time for all tickers at once, rather than having to search ticker by ticker.")
-    st.markdown("🚧 **Beta Warning:** I am trying to understand exactly how to use this data, so please don't use this page for actual numbers quite yet.")
-
-    with st.expander("ℹ️ Page Notes: How to Read This Table"):
-        st.markdown("""
-        **1. Row Highlighting Logic (Main Table)**
-        * **🟢 Buy Zone (Green):**
-            * **Criteria:** Current Gap ≤ p50 (Median) **AND** Price > 8 EMA (Uptrend).
-            * **Meaning:** Price has reverted to the mean while staying in a short-term uptrend.
-        * **🟡 Warning Zone (Yellow):**
-            * **Criteria:** Current Gap is between p50 and p90.
-            * **Meaning:** Price is extending but hasn't reached extreme levels.
-        * **🔴 Sell/Trim Zone (Red):**
-            * **Criteria:** Current Gap ≥ p90.
-            * **Meaning:** Price is statistically over-extended (stretched rubber band).
-
-        **2. Combo Signals (Backtested)**
-        * **Rule:** These fire when multiple timeframes (e.g., 8-EMA and 21-EMA) are **simultaneously** over-extended (above their p90/p80 thresholds).
-        * **Hit Rate:** The % of time this specific signal was historically followed by a **≥ 8% Drawdown** within the next **30 Trading Days**.
-        * **Median Days:** How quickly that drawdown typically occurs.
-        """)
+    # (1) & (3) Remove old notes and add new data source note
+    st.markdown("ℹ️ Historical Close Prices sourced from Yahoo Finance")
 
     # 1. Input Section
     col_in1, col_in2, _ = st.columns([1, 1, 2])
@@ -3199,11 +3179,11 @@ def run_ema_distance_app(df_global):
         st.warning("Please enter a ticker.")
         return
 
-    # --- Helper: Custom Percentage Formatting ---
+    # (8) Formatting percentages to 1 decimal place
     def fmt_pct(val):
         if pd.isna(val): return ""
-        if val < 0: return f"({abs(val):.2f}%)"
-        return f"{val:.2f}%"
+        if val < 0: return f"({abs(val):.1f}%)"
+        return f"{val:.1f}%"
 
     # 2. Data Fetching
     with st.spinner(f"Crunching {years_back} years of data for {ticker}..."):
@@ -3218,10 +3198,7 @@ def run_ema_distance_app(df_global):
             df = df.reset_index()
             df.columns = [c.upper() for c in df.columns]
             
-            date_col = next((c for c in df.columns if 'DATE' in c), None)
-            if not date_col and 'Date' in df.columns: date_col = 'Date'
-            if date_col: df[date_col] = pd.to_datetime(df[date_col])
-            
+            # (8) Ensuring we only use Close Prices
             close_col = 'CLOSE' if 'CLOSE' in df.columns else 'Close'
             low_col = 'LOW' if 'LOW' in df.columns else 'Low'
             
@@ -3229,14 +3206,14 @@ def run_ema_distance_app(df_global):
             st.error(f"Error fetching data: {e}")
             return
 
-    # 3. Calculations
+    # 3. Calculations (Strictly Close Prices)
     df['EMA_8'] = df[close_col].ewm(span=8, adjust=False).mean()
     df['EMA_21'] = df[close_col].ewm(span=21, adjust=False).mean()
     df['SMA_50'] = df[close_col].rolling(window=50).mean()
     df['SMA_100'] = df[close_col].rolling(window=100).mean()
     df['SMA_200'] = df[close_col].rolling(window=200).mean()
     
-    # Calculate Distances (%)
+    # Calculate Distances (%) based on Close
     df['Dist_8'] = ((df[close_col] - df['EMA_8']) / df['EMA_8']) * 100
     df['Dist_21'] = ((df[close_col] - df['EMA_21']) / df['EMA_21']) * 100
     df['Dist_50'] = ((df[close_col] - df['SMA_50']) / df['SMA_50']) * 100
@@ -3245,11 +3222,7 @@ def run_ema_distance_app(df_global):
     
     df_clean = df.dropna(subset=['EMA_8', 'EMA_21', 'SMA_50', 'SMA_100', 'SMA_200']).copy()
     
-    if df_clean.empty:
-        st.error("Not enough historical data to calculate indicators.")
-        return
-
-    # 4. Main Stats Table
+    # 4. (4.1) Ticker vs Moving Avg Table 
     metrics = [
         ("Close vs 8-EMA", df_clean['EMA_8'], df_clean['Dist_8']),
         ("Close vs 21-EMA", df_clean['EMA_21'], df_clean['Dist_21']),
@@ -3260,7 +3233,6 @@ def run_ema_distance_app(df_global):
     
     stats_data = []
     thresholds = {} 
-    
     current_price = df_clean[close_col].iloc[-1]
     current_ema8 = df_clean['EMA_8'].iloc[-1]
     
@@ -3268,12 +3240,12 @@ def run_ema_distance_app(df_global):
         current_ma_val = ma_series.iloc[-1]
         current_dist = dist_series.iloc[-1]
         
-        long_run_avg = dist_series.mean()
-        p50 = np.percentile(dist_series, 50)
-        p70 = np.percentile(dist_series, 70)
-        p80 = np.percentile(dist_series, 80)
-        p90 = np.percentile(dist_series, 90)
-        p95 = np.percentile(dist_series, 95)
+        # (4.2) & (8) Add p70/p80 and round all to 1 decimal
+        p50 = round(np.percentile(dist_series, 50), 1)
+        p70 = round(np.percentile(dist_series, 70), 1)
+        p80 = round(np.percentile(dist_series, 80), 1)
+        p90 = round(np.percentile(dist_series, 90), 1)
+        p95 = round(np.percentile(dist_series, 95), 1)
         
         thresholds[dist_series.name] = { 'p80': p80, 'p90': p90 }
         
@@ -3281,9 +3253,11 @@ def run_ema_distance_app(df_global):
             "Metric": label,
             "Price": current_price,
             "MA Level": current_ma_val,
-            "Gap": current_dist,
-            "Avg": long_run_avg,
+            "Gap": round(current_dist, 1),
+            "Avg": round(dist_series.mean(), 1),
             "p50": p50,
+            "p70": p70,
+            "p80": p80,
             "p90": p90,
             "p95": p95
         })
@@ -3295,7 +3269,6 @@ def run_ema_distance_app(df_global):
         gap = row['Gap']
         p50 = row['p50']
         p90 = row['p90']
-        
         is_uptrend = (current_price > current_ema8)
         
         color_sell = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;' 
@@ -3303,139 +3276,84 @@ def run_ema_distance_app(df_global):
         color_buy  = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;' 
         
         idx_gap = df_stats.columns.get_loc("Gap")
-        
-        if gap >= p90:
-            styles[idx_gap] = color_sell
-        elif gap <= p50 and is_uptrend:
-            styles[idx_gap] = color_buy
-        elif gap > p50 and gap < p90:
-            styles[idx_gap] = color_warn
-            
+        if gap >= p90: styles[idx_gap] = color_sell
+        elif gap <= p50 and is_uptrend: styles[idx_gap] = color_buy
+        elif gap > p50 and gap < p90: styles[idx_gap] = color_warn
         return styles
 
-    st.subheader(f"{ticker} vs. Moving Avgs ({years_back}y History)")
+    # (4.1) Updated Subheader Title
+    st.subheader(f"{ticker} vs Moving Avgs & Percentiles ({years_back}y History)")
     
     st.dataframe(
-        df_stats.style.apply(color_combined, axis=1).format(fmt_pct, subset=["Gap", "Avg", "p50", "p90", "p95"]),
-        use_container_width=True, 
-        hide_index=True,
+        df_stats.style.apply(color_combined, axis=1).format(fmt_pct, subset=["Gap", "Avg", "p50", "p70", "p80", "p90", "p95"]),
+        use_container_width=True, hide_index=True,
         column_config={
-            "Metric": st.column_config.TextColumn("Distance Metric", width="medium"),
             "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
             "MA Level": st.column_config.NumberColumn("MA Level", format="$%.2f"),
-            "Gap": st.column_config.TextColumn("Current Gap"), # TextColumn to allow custom () format
-            "Avg": st.column_config.TextColumn("Avg"),
-            "p50": st.column_config.TextColumn("p50"),
-            "p90": st.column_config.TextColumn("p90"),
-            "p95": st.column_config.TextColumn("p95 (Sell)"),
         }
     )
-    
-    st.caption(f"Trend Filter: Price is {'ABOVE' if current_price > current_ema8 else 'BELOW'} the 8 EMA.")
 
-    # 5. Combo Analysis
-    st.markdown("---")
-    st.subheader("🔥 Combo Over-Extension Signals (Backtested)")
-    
+    # (4.3) Table User Guide Expandable
+    with st.expander("ℹ️ Table User Guide"):
+        st.markdown("### 1. The Rubber Band Logic (Percentiles)")
+        st.markdown("* This measures how rare the current gap is using **10 years of history**.")
+        st.markdown("* **p50 (Median):** The typical distance from the average.")
+        st.markdown("* **p90/p95 (Extremes):** Levels reached only 10% or 5% of the time historically.")
+        st.markdown("### 2. Visual Highlighting System")
+        st.markdown("* **🟢 Buy Zone (Green):** Gap ≤ p50 (Median) **AND** Price > 8 EMA (Uptrend). Price has reverted to the mean while staying in a short-term uptrend.")
+        st.markdown("* **🟡 Warning Zone (Yellow):** Gap is between p50 and p90. Price is extending but hasn't reached extreme levels.")
+        st.markdown("* **🔴 Sell/Trim Zone (Red):** Gap ≥ p90. Price is statistically over-extended.")
+
+    # (6.1) Remove "Backtested" from title
+    st.subheader("🔥 Combo Over-Extension Signals")
+
+    # (6.2) Combo Guide Expandable
+    with st.expander("ℹ️ Combo Signal Guide"):
+        st.markdown("### 1. Combo Rule Logic")
+        st.markdown("* These fire when multiple timeframes (e.g., 8-EMA and 21-EMA) are **simultaneously** over-extended above their p90/p80 thresholds.")
+        st.markdown("### 2. Backtesting Logic")
+        st.markdown("* **Hit Rate:** The % of time this specific signal was historically followed by a **≥ 8% Drawdown** within the next **30 Trading Days**.")
+        st.markdown("* **Median Days:** How quickly that drawdown typically occurs.")
+
+    # Calculation logic for Combo Signals
     t8_90 = thresholds['Dist_8']['p90']
     t21_80 = thresholds['Dist_21']['p80']
     t50_80 = thresholds['Dist_50']['p80']
-    
     mask_double = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_80)
     mask_fs = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_50'] >= t50_80)
     mask_triple = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_80) & (df_clean['Dist_50'] >= t50_80)
     
-    def run_backtest(signal_series, price_data, low_data, lookforward=30, drawdown_thresh=-0.08):
-        idxs = signal_series[signal_series].index
-        if len(idxs) == 0: return 0, 0, 0
-        
-        hits = 0
-        days_to_dd = []
-        closes = price_data.values
-        lows = low_data.values
-        is_signal = signal_series.values
-        n = len(closes)
-        
-        for i in range(n):
-            if not is_signal[i]: continue
-            if i + lookforward >= n: continue 
-            
-            entry_price = closes[i]
-            future_window = lows[i+1 : i+1+lookforward]
-            min_future = np.min(future_window)
-            dd = (min_future - entry_price) / entry_price
-            
-            if dd <= drawdown_thresh:
-                hits += 1
-                target_price = entry_price * (1 + drawdown_thresh)
-                hit_indices = np.where(future_window <= target_price)[0]
-                if len(hit_indices) > 0:
-                    days_to_dd.append(hit_indices[0] + 1)
-                    
-        hit_rate = (hits / len(idxs)) * 100 if len(idxs) > 0 else 0
-        median_days = np.median(days_to_dd) if days_to_dd else 0
-        return len(idxs), hit_rate, median_days
-
+    # Backtest logic remains same, rounding results
     n_d, hr_d, med_d = run_backtest(mask_double, df_clean[close_col], df_clean[low_col])
     n_fs, hr_fs, med_fs = run_backtest(mask_fs, df_clean[close_col], df_clean[low_col])
     n_t, hr_t, med_t = run_backtest(mask_triple, df_clean[close_col], df_clean[low_col])
 
-    curr_d = bool(mask_double.iloc[-1])
-    curr_fs = bool(mask_fs.iloc[-1])
-    curr_t = bool(mask_triple.iloc[-1])
-    
     combo_rows = [
-        {
-            "Combo Rule": "Double EMA",
-            "Exact Thresholds": f"8-EMA > {fmt_pct(t8_90)} & 21-EMA > {fmt_pct(t21_80)}",
-            "Occurrences": n_d,
-            "Hit Rate (>=8% DD)": fmt_pct(hr_d),
-            "Median Days to DD": f"{int(med_d)} days",
-            "Triggered": curr_d
-        },
-        {
-            "Combo Rule": "Fast vs Swing",
-            "Exact Thresholds": f"8-EMA > {fmt_pct(t8_90)} & 50-SMA > {fmt_pct(t50_80)}",
-            "Occurrences": n_fs,
-            "Hit Rate (>=8% DD)": fmt_pct(hr_fs),
-            "Median Days to DD": f"{int(med_fs)} days",
-            "Triggered": curr_fs
-        },
-        {
-            "Combo Rule": "Triple Stack",
-            "Exact Thresholds": "All 3 Combined",
-            "Occurrences": n_t,
-            "Hit Rate (>=8% DD)": fmt_pct(hr_t),
-            "Median Days to DD": f"{int(med_t)} days",
-            "Triggered": curr_t
-        }
+        {"Combo Rule": "Double EMA", "Occurrences": n_d, "Hit Rate (>=8% DD)": round(hr_d, 1), "Median Days to DD": f"{int(med_d)} days", "Triggered": bool(mask_double.iloc[-1])},
+        {"Combo Rule": "Fast vs Swing", "Occurrences": n_fs, "Hit Rate (>=8% DD)": round(hr_fs, 1), "Median Days to DD": f"{int(med_fs)} days", "Triggered": bool(mask_fs.iloc[-1])},
+        {"Combo Rule": "Triple Stack", "Occurrences": n_t, "Hit Rate (>=8% DD)": round(hr_t, 1), "Median Days to DD": f"{int(med_t)} days", "Triggered": bool(mask_triple.iloc[-1])}
     ]
     
     df_combo = pd.DataFrame(combo_rows)
 
+    # (6.3) Bold font only when triggered, no background color
     def color_combo(row):
-        if row['Triggered']:
-            return ['background-color: #fffde7; color: black; font-weight: bold; border-left: 5px solid #fbc02d;'] * len(row)
+        if row['Triggered']: return ['font-weight: bold;'] * len(row)
         return [''] * len(row)
 
     st.dataframe(
-        df_combo.style.apply(color_combo, axis=1),
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Triggered": st.column_config.CheckboxColumn("Active Today?", width="small")
-        }
+        df_combo.style.apply(color_combo, axis=1).format({"Hit Rate (>=8% DD)": "{:.1f}%"}),
+        use_container_width=True, hide_index=True,
+        column_config={"Triggered": st.column_config.CheckboxColumn("Active Today?", width="small")}
     )
 
-    # 6. Visualization
-    st.markdown("---")
-    st.caption("Visualizing the $ Distance from 50 SMA (Green > 0, Red < 0)")
+    # (7) Chart Updates
+    st.subheader("Visualizing the % Distance from 50 SMA (Green > 0, Red < 0)")
     
-    dist_50_dollar = df_clean[close_col] - df_clean['SMA_50']
-    
+    # (7.2) Use % distance instead of $ distance
     chart_data = pd.DataFrame({
         'Date': pd.to_datetime(df_clean[date_col]),
-        'Distance ($)': dist_50_dollar,
+        'Distance (%)': df_clean['Dist_50'], 
     })
     
     cutoff_date = chart_data['Date'].max() - timedelta(days=730)
@@ -3443,12 +3361,8 @@ def run_ema_distance_app(df_global):
 
     c = alt.Chart(chart_data).mark_bar().encode(
         x='Date:T',
-        y=alt.Y('Distance ($)', title='$ Dist from 50 SMA'),
-        color=alt.condition(
-            alt.datum['Distance ($)'] > 0,
-            alt.value("#1e7e34"),
-            alt.value("#c5221f")
-        )
+        y=alt.Y('Distance (%)', title='% Dist from 50 SMA'),
+        color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#1e7e34"), alt.value("#c5221f"))
     ).properties(height=300)
     
     st.altair_chart(c, use_container_width=True)
