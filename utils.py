@@ -20,7 +20,8 @@ EMA21_PERIOD = 21
 
 def get_gdrive_binary_data(url):
     """
-    Robust Google Drive downloader with Error Reporting.
+    Robust Google Drive downloader.
+    Automatically bypasses 'Virus Scan' warnings by extracting the confirmation token from the HTML.
     """
     try:
         # 1. Extract ID
@@ -33,44 +34,47 @@ def get_gdrive_binary_data(url):
             return None
             
         file_id = match.group(1)
-        
-        # 2. Standard Download URL
         download_url = "https://drive.google.com/uc?export=download"
         session = requests.Session()
         
-        # 3. First Attempt: Try to get the file
-        # INCREASED TIMEOUT to 60s for SP100
+        # 2. First Attempt
         response = session.get(download_url, params={'id': file_id}, stream=True, timeout=60)
         
-        # 4. Check for the Warning Token in Cookies
-        token = None
-        for key, value in session.cookies.items():
-            if key.startswith('download_warning'):
-                token = value
-                break
-        
-        # 5. If we found a warning token, we automatically send it back to confirm
-        if token:
-            params = {'id': file_id, 'confirm': token}
-            response = session.get(download_url, params=params, stream=True, timeout=60)
+        # 3. Check for "Virus Scan" HTML Page
+        # If we get HTML instead of binary data, we need to find the 'confirm' token
+        if "text/html" in response.headers.get("Content-Type", "").lower():
+            content = response.text
             
-        # 6. Final Validation
+            # Look for the 'confirm=...' pattern in the HTML (often in the 'Download anyway' link)
+            # It usually looks like: &confirm=xxxx or ?confirm=xxxx
+            token_match = re.search(r'confirm=([a-zA-Z0-9_]+)', content)
+            
+            if token_match:
+                token = token_match.group(1)
+                # Retry with the confirmation token
+                params = {'id': file_id, 'confirm': token}
+                response = session.get(download_url, params=params, stream=True, timeout=60)
+            else:
+                # If we can't find a token in the HTML, check cookies (older method)
+                for key, value in session.cookies.items():
+                    if key.startswith('download_warning'):
+                        params = {'id': file_id, 'confirm': value}
+                        response = session.get(download_url, params=params, stream=True, timeout=60)
+                        break
+
+        # 4. Final Validation
         if response.status_code == 200:
+            # Check the first chunk to ensure it's not still HTML
             try:
                 chunk = next(response.iter_content(chunk_size=100), b"")
+                if chunk.strip().startswith(b"<!DOCTYPE"):
+                    st.error(f"Download Error: Google Drive returned an HTML warning page for {file_id}. The file might be too large or restricted.")
+                    return None
+                return BytesIO(chunk + response.raw.read())
             except StopIteration:
-                st.error(f"Download Error: File {file_id} is empty.")
                 return None
-            
-            # If the file content starts with "<!DOCTYPE html", the bypass failed
-            if chunk.strip().startswith(b"<!DOCTYPE html"):
-                st.error(f"Download Error: Google Drive returned an HTML warning page for {file_id}. The file might be too large or restricted.")
-                return None
-            
-            # Success
-            return BytesIO(chunk + response.raw.read())
-            
-        st.error(f"Download Error: HTTP {response.status_code} for {file_id}")
+                
+        st.error(f"Download Error: HTTP {response.status_code}")
         return None
 
     except Exception as e:
