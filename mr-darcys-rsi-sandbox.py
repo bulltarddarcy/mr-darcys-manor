@@ -3452,19 +3452,38 @@ try:
     df_global = load_and_clean_data(sheet_url)
     
     # 1. Database Date (from Google Sheet)
-    db_date = df_global["Trade Date"].max().strftime("%d %b %y")
+    # Checks the latest "Trade Date" in your manual entry sheet
+    if not df_global.empty and "Trade Date" in df_global.columns:
+        db_date = df_global["Trade Date"].max().strftime("%d %b %y")
+    else:
+        db_date = "No Data"
     
-    # 2. Price History Date (fetch AAPL as proxy for latest market data)
+    # 2. Price History Date (Fetch AAPL from Drive as proxy for dataset freshness)
+    # Checks the max date in your AAPL.csv file to see when you last ran your updater
     price_date = "Syncing..."
     try:
-        df_aapl = fetch_yahoo_data("AAPL")
-        if df_aapl is not None and not df_aapl.empty:
-            price_date = pd.to_datetime(df_aapl['DATE']).max().strftime("%d %b %y")
+        t_map_check = load_ticker_map()
+        
+        if t_map_check and "AAPL" in t_map_check:
+            df_aapl_check = get_ticker_technicals("AAPL", t_map_check)
+            
+            if df_aapl_check is not None and not df_aapl_check.empty:
+                # Find date column regardless of case (DATE, Date, ChartDate)
+                date_col_check = next((c for c in df_aapl_check.columns if 'DATE' in c.upper()), None)
+                
+                if date_col_check:
+                    price_date = pd.to_datetime(df_aapl_check[date_col_check]).max().strftime("%d %b %y")
+                else:
+                    price_date = "Date Error"
+            else:
+                price_date = "Read Error"
         else:
-            price_date = "Offline"
+            price_date = "AAPL Not Mapped"
+
     except Exception:
         price_date = "Offline"
 
+    # 3. Navigation Setup
     pg = st.navigation([
         st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
         st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
@@ -3475,9 +3494,55 @@ try:
         st.Page(lambda: run_ema_distance_app(df_global), title="EMA Distance", icon="📏", url_path="ema_distance"),
     ])
 
+    # 4. Sidebar Captions
     st.sidebar.caption("🖥️ Everything is best viewed with a wide desktop monitor in light mode.")
     st.sidebar.caption(f"💾 **Database:** {db_date}")
     st.sidebar.caption(f"📈 **Price History:** {price_date}")
+    
+    # 5. 🏥 NEW DATA HEALTH WIDGET
+    with st.sidebar.expander("🏥 Data Health Check", expanded=False):
+        st.markdown("### 🔌 System Files")
+        
+        # A. Check Ticker Map (Crucial for History/Seasonality)
+        tm_key = "URL_TICKER_MAP"
+        tm_url = st.secrets.get(tm_key, "")
+        if not tm_url:
+            st.markdown(f"❌ **Ticker Map**: Secret Missing")
+        elif "drive.google.com" not in tm_url:
+            st.markdown(f"⚠️ **Ticker Map**: Invalid URL")
+        else:
+             st.markdown(f"✅ **Ticker Map**: Connected")
+
+        st.divider()
+        st.markdown("### 📉 RSI Datasets")
+
+        # B. Check Parquet Files (RSI Scanner Data)
+        # Uses the new bulletproof get_parquet_config() function
+        health_config = get_parquet_config()
+        all_good = True
+        
+        for name, key in health_config.items():
+            url = st.secrets.get(key, "")
+            
+            if not url:
+                st.markdown(f"❌ **{name}**: Secret Missing")
+                all_good = False
+            elif "drive.google.com" not in url:
+                 st.markdown(f"⚠️ **{name}**: Invalid URL Format")
+                 all_good = False
+            else:
+                # Warn if using 'drive_link' vs 'sharing'
+                status_icon = "✅"
+                note = ""
+                if "usp=drive_link" in url:
+                    status_icon = "⚠️" 
+                    note = "(drive_link)"
+                st.markdown(f"{status_icon} **{name}**: Linked {note}")
+        
+        if all_good and tm_url:
+            st.caption("All configurations look valid.")
+        else:
+            st.error("Configuration errors detected.")
     
     pg.run()
     
