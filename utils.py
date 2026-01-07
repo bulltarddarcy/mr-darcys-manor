@@ -20,8 +20,7 @@ EMA21_PERIOD = 21
 
 def get_gdrive_binary_data(url):
     """
-    Robust Google Drive downloader.
-    Uses Session Cookies to bypass 'Virus Scan' and 'High Traffic' warnings automatically.
+    Robust Google Drive downloader with Error Reporting.
     """
     try:
         # 1. Extract ID
@@ -40,11 +39,10 @@ def get_gdrive_binary_data(url):
         session = requests.Session()
         
         # 3. First Attempt: Try to get the file
-        # We allow a longer timeout (50s) to handle server lags
-        response = session.get(download_url, params={'id': file_id}, stream=True, timeout=50)
+        # INCREASED TIMEOUT to 60s for SP100
+        response = session.get(download_url, params={'id': file_id}, stream=True, timeout=60)
         
         # 4. Check for the Warning Token in Cookies
-        # Google sets a cookie named 'download_warning_...' when it intercepts the download.
         token = None
         for key, value in session.cookies.items():
             if key.startswith('download_warning'):
@@ -54,26 +52,29 @@ def get_gdrive_binary_data(url):
         # 5. If we found a warning token, we automatically send it back to confirm
         if token:
             params = {'id': file_id, 'confirm': token}
-            response = session.get(download_url, params=params, stream=True, timeout=50)
+            response = session.get(download_url, params=params, stream=True, timeout=60)
             
         # 6. Final Validation
         if response.status_code == 200:
-            # Peek at the first 100 bytes to ensure it's not still an HTML error page
             try:
                 chunk = next(response.iter_content(chunk_size=100), b"")
             except StopIteration:
+                st.error(f"Download Error: File {file_id} is empty.")
                 return None
             
-            # If the file content starts with "<!DOCTYPE html", the bypass failed (likely a hard 24hr ban)
+            # If the file content starts with "<!DOCTYPE html", the bypass failed
             if chunk.strip().startswith(b"<!DOCTYPE html"):
+                st.error(f"Download Error: Google Drive returned an HTML warning page for {file_id}. The file might be too large or restricted.")
                 return None
             
-            # Success: Stitch the chunk back together with the rest of the stream
+            # Success
             return BytesIO(chunk + response.raw.read())
             
+        st.error(f"Download Error: HTTP {response.status_code} for {file_id}")
         return None
 
     except Exception as e:
+        st.error(f"Download Exception: {e}")
         return None
 
 @st.cache_data(ttl=3600)
@@ -118,6 +119,7 @@ def get_parquet_config():
         
     return config
 
+
 @st.cache_data(ttl=3600, show_spinner="Loading Dataset...")
 def load_parquet_and_clean(key):
     # Ensure key has no hidden whitespace
@@ -131,23 +133,18 @@ def load_parquet_and_clean(key):
     
     try:
         buffer = get_gdrive_binary_data(url)
+        # If buffer is None, the downloader has already printed the error.
         if not buffer:
             return None
             
         content = buffer.getvalue()
         
-        # Verify we didn't just download an HTML error page (Virus Scan warning)
-        if content.startswith(b"<!DOCTYPE"):
-            st.error(f"File {clean_key} failed: Google Drive sent HTML instead of data. Check permissions.")
-            return None
-
         # Try Parquet, Fallback to CSV
         try:
             df = pd.read_parquet(BytesIO(content))
             
-            # --- THE FIX: Force Date out of the Index ---
-            # Even if you generated a new file, this safety check ensures 
-            # we ALWAYS find the date, whether it's an index or a column.
+            # --- CRITICAL FIX: Check for Date in Index ---
+            # If Date is the index (common in financial data), move it to a column.
             if isinstance(df.index, pd.DatetimeIndex):
                 df.reset_index(inplace=True)
             elif df.index.name and 'DATE' in str(df.index.name).upper():
@@ -157,7 +154,7 @@ def load_parquet_and_clean(key):
             try:
                 df = pd.read_csv(BytesIO(content))
             except Exception as e:
-                st.error(f"Data format error for {clean_key}: {e}")
+                st.error(f"Data format error for {clean_key} (Not valid Parquet or CSV): {e}")
                 return None
 
         # --- Standard Cleaning Logic ---
@@ -167,18 +164,20 @@ def load_parquet_and_clean(key):
         date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
         
         # Fallback: Check if 'index' column exists and holds dates
-        # (This happens if we reset an unnamed index above)
         if not date_col and 'index' in df.columns:
-            if pd.api.types.is_datetime64_any_dtype(df['index']):
+            if pd.api.types.is_datetime64_any_dtype(df['index']) or pd.api.types.is_object_dtype(df['index']):
                  date_col = 'index'
 
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
             df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate')
+        else:
+            # If we still can't find a date column, print the columns to help debug
+            st.error(f"Error {clean_key}: Could not identify Date column. Found: {list(df.columns)}")
+            return None
         
         # 2. Find Price/Close Column
         if 'Price' not in df.columns:
-            # Case-insensitive search for 'Close'
             close_col = next((c for c in df.columns if c.upper() == 'CLOSE'), None)
             if close_col:
                 df['Price'] = df[close_col]
@@ -187,6 +186,7 @@ def load_parquet_and_clean(key):
     except Exception as e:
         st.error(f"Fatal error processing {clean_key}: {e}")
         return None
+
 
 @st.cache_data(ttl=3600)
 def load_ticker_map():
