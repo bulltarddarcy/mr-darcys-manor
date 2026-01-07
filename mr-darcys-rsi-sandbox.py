@@ -408,13 +408,18 @@ def load_ticker_map():
         url = st.secrets.get("URL_TICKER_MAP")
         if not url: return {}
 
-        buffer = get_confirmed_gdrive_data(url)
-        if buffer and buffer != "HTML_ERROR":
+        # FIXED: Use the function that actually exists in your script
+        buffer = get_gdrive_binary_data(url)
+        
+        # Note: get_gdrive_binary_data returns None on failure, not "HTML_ERROR"
+        if buffer:
             df = pd.read_csv(buffer)
             if len(df.columns) >= 2:
                 return dict(zip(df.iloc[:, 0].astype(str).str.strip().str.upper(), 
                               df.iloc[:, 1].astype(str).str.strip()))
-    except Exception:
+    except Exception as e:
+        # Optional: Print the error to see it in logs next time
+        print(f"Error loading ticker map: {e}")
         pass
     return {}
 
