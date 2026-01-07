@@ -1167,4 +1167,46 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
             
     return signals
 
+@st.cache_data(ttl=300)
+def is_above_ema21(symbol: str) -> bool:
+    try:
+        ticker = yf.Ticker(symbol)
+        h = ticker.history(period="60d")
+        if len(h) < 21:
+            return True 
+        ema21_last = h["Close"].ewm(span=21, adjust=False).mean().iloc[-1]
+        latest_price = h["Close"].iloc[-1]
+        return latest_price > ema21_last
+    except:
+        return True
+
+@st.cache_data(ttl=300)
+def get_ticker_technicals(ticker: str, mapping: dict):
+    if not mapping or ticker not in mapping:
+        return None
+    
+    file_id = mapping[ticker]
+    file_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    
+    # FIXED: Changed from 'get_confirmed_gdrive_data' to 'get_gdrive_binary_data'
+    buffer = get_gdrive_binary_data(file_url)
+    
+    if buffer:
+        try:
+            df = pd.read_csv(buffer)
+            
+            # 1. Clean Column Names
+            df.columns = [c.strip().upper() for c in df.columns]
+            
+            # 2. Ensure we can identify the Date column (Column A or named "DATE")
+            # If the first column is named something weird, we rename it to DATE
+            if "DATE" not in df.columns:
+                first_col = df.columns[0]
+                df.rename(columns={first_col: "DATE"}, inplace=True)
+
+            return df
+        except Exception as e:
+            print(f"Error parsing CSV for {ticker}: {e}")
+            return None
+    return None
 
