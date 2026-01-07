@@ -388,45 +388,45 @@ DATA_KEYS_PARQUET = get_parquet_config()
 
 def get_gdrive_binary_data(url):
     """
-    Forces Google Drive to provide the raw file content, bypassing 
-    previews and handling confirmation for large/protected files.
+    Downloads binary data from Google Drive, automatically handling 
+    the 'Virus Scan Warning' confirmation for Parquet files.
     """
     try:
-        # 1. Extract the unique File ID
-        file_id = ""
-        if 'id=' in url:
-            file_id = url.split('id=')[1].split('&')[0]
-        elif '/d/' in url:
-            # Extracts ID from between /d/ and the next slash or question mark
-            match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
-            if match:
-                file_id = match.group(1)
-        
-        if not file_id: 
+        # 1. Improved ID Extraction (Handles all URL variants)
+        match = re.search(r'(?:id=|[d/])([a-zA-Z0-9_-]{25,})', url)
+        if not match:
             return None
-            
-        # 2. Reconstruct the direct download endpoint
-        download_url = "https://docs.google.com/uc?export=download&id=" + file_id
+        file_id = match.group(1)
+        
+        download_url = "https://docs.google.com/uc?export=download"
         session = requests.Session()
         
-        # 3. First attempt to fetch
-        response = session.get(download_url, stream=True, timeout=15)
+        # 2. Initial request to get the file or the warning page
+        response = session.get(download_url, params={'id': file_id}, stream=True)
         
-        # 4. Check if we received an HTML warning instead of the file
-        # Parquet files start with 'PAR1', CSVs don't start with '<!DOCTYPE'
-        if response.text.strip().startswith("<!DOCTYPE html>"):
-            # It's a warning page. Scrape the confirmation token.
-            confirm_token = None
+        # 3. Check if Google served an HTML warning page instead of the file
+        # We look for a 'confirm' token in the cookies or the HTML content
+        confirm_token = None
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                confirm_token = value
+                break
+        
+        if not confirm_token:
+            # If not in cookies, search the HTML text for 'confirm=xxxx'
+            # (Google sometimes embeds it in the 'Download Anyway' link)
             match = re.search(r'confirm=([0-9A-Za-z-_]+)', response.text)
             if match:
                 confirm_token = match.group(1)
-                # Re-request with the token
-                response = session.get(download_url + "&confirm=" + confirm_token, stream=True, timeout=15)
-        
-        # 5. Return the raw bytes
-        return BytesIO(response.content)
-    except Exception as e:
-        print(f"G-Drive Sync Error: {e}")
+
+        # 4. If we found a token, resubmit the request with the confirmation
+        if confirm_token:
+            response = session.get(download_url, params={'id': file_id, 'confirm': confirm_token}, stream=True)
+            
+        if response.status_code == 200:
+            return BytesIO(response.content)
+        return None
+    except Exception:
         return None
 
 
