@@ -697,6 +697,7 @@ def run_strike_zones_app(df):
 
 def run_price_divergences_app(df_global):
     st.title("📉 Price Divergences")
+    from datetime import timedelta # Ensure this is available for benchmark calc
     
     st.markdown("""
         <style>
@@ -745,15 +746,18 @@ def run_price_divergences_app(df_global):
         tm = load_ticker_map()
         benchmarks = {}
         for sym in ["SPY", "QQQ"]:
-            df = fetch_history_optimized(sym, tm)
-            if df is not None and not df.empty:
-                df.columns = [c.strip().upper() for c in df.columns]
-                d_col = next((c for c in df.columns if 'DATE' in c), None)
-                c_col = next((c for c in df.columns if 'CLOSE' in c), None)
-                if d_col and c_col:
-                    df[d_col] = pd.to_datetime(df[d_col])
-                    df = df.set_index(d_col).sort_index()
-                    benchmarks[sym] = df[[c_col]]
+            try:
+                df = fetch_history_optimized(sym, tm)
+                if df is not None and not df.empty:
+                    df.columns = [c.strip().upper() for c in df.columns]
+                    d_col = next((c for c in df.columns if 'DATE' in c), None)
+                    c_col = next((c for c in df.columns if 'CLOSE' in c), None)
+                    if d_col and c_col:
+                        df[d_col] = pd.to_datetime(df[d_col])
+                        df = df.set_index(d_col).sort_index()
+                        benchmarks[sym] = df[[c_col]]
+            except Exception:
+                pass
         return benchmarks
 
     # --- TABS ---
@@ -837,28 +841,28 @@ def run_price_divergences_app(df_global):
                         if d_d is not None and not d_d.empty:
                             daily_divs = find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            curr_close_d = float(d_d['Price'].iloc[-1])
+                            curr_close_d = float(d_d['Price'].iloc[-1]) if 'Price' in d_d.columns else 0.0
 
                             if daily_divs:
-                                all_rsi = d_d['RSI'].dropna().values
+                                all_rsi = d_d['RSI'].dropna().values if 'RSI' in d_d.columns else []
                                 has_rsi_vals = len(all_rsi) > 0
+                                
                                 for div in daily_divs:
                                     div['Last_Close'] = curr_close_d
                                     
-                                    # --- Benchmark Calculation (Daily) ---
-                                    sig_dt = pd.to_datetime(div['Signal_Date_ISO'])
-                                    for b_sym, b_df in benchmarks.items():
-                                        if not b_df.empty:
-                                            try:
+                                    # Safe Benchmark Calculation
+                                    div['SPY_Ret'] = 0.0
+                                    div['QQQ_Ret'] = 0.0
+                                    try:
+                                        sig_dt = pd.to_datetime(div['Signal_Date_ISO'])
+                                        for b_sym, b_df in benchmarks.items():
+                                            if not b_df.empty:
                                                 idx_loc = b_df.index.searchsorted(sig_dt)
                                                 if idx_loc < len(b_df):
                                                     entry_p = b_df.iloc[idx_loc].iloc[0]
                                                     exit_p = b_df.iloc[-1].iloc[0]
                                                     div[f'{b_sym}_Ret'] = ((exit_p - entry_p) / entry_p) * 100
-                                                else:
-                                                    div[f'{b_sym}_Ret'] = 0.0
-                                            except:
-                                                div[f'{b_sym}_Ret'] = 0.0
+                                    except Exception: pass
 
                                     if has_rsi_vals:
                                         p1 = (all_rsi < div['RSI1']).mean() * 100
@@ -877,28 +881,29 @@ def run_price_divergences_app(df_global):
                         if d_w is not None and not d_w.empty: 
                             weekly_divs = find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            curr_close_w = float(d_w['Price'].iloc[-1])
+                            curr_close_w = float(d_w['Price'].iloc[-1]) if 'Price' in d_w.columns else 0.0
 
                             if weekly_divs:
-                                all_rsi_w = d_w['RSI'].dropna().values
+                                all_rsi_w = d_w['RSI'].dropna().values if 'RSI' in d_w.columns else []
                                 has_rsi_vals_w = len(all_rsi_w) > 0
                                 for div in weekly_divs:
                                     div['Last_Close'] = curr_close_w
                                     
-                                    # --- Benchmark Calculation (Weekly) ---
-                                    sig_dt = pd.to_datetime(div['Signal_Date_ISO'])
-                                    approx_friday = sig_dt + timedelta(days=4)
-                                    
-                                    for b_sym, b_df in benchmarks.items():
-                                        if not b_df.empty:
-                                            try:
+                                    # Safe Benchmark Calculation
+                                    div['SPY_Ret'] = 0.0
+                                    div['QQQ_Ret'] = 0.0
+                                    try:
+                                        sig_dt = pd.to_datetime(div['Signal_Date_ISO'])
+                                        approx_friday = sig_dt + timedelta(days=4)
+                                        
+                                        for b_sym, b_df in benchmarks.items():
+                                            if not b_df.empty:
                                                 idx_loc = b_df.index.searchsorted(approx_friday)
                                                 if idx_loc >= len(b_df): idx_loc = len(b_df) - 1
                                                 entry_p = b_df.iloc[idx_loc].iloc[0]
                                                 exit_p = b_df.iloc[-1].iloc[0]
                                                 div[f'{b_sym}_Ret'] = ((exit_p - entry_p) / entry_p) * 100
-                                            except:
-                                                div[f'{b_sym}_Ret'] = 0.0
+                                    except Exception: pass
 
                                     if has_rsi_vals_w:
                                         p1 = (all_rsi_w < div['RSI1']).mean() * 100
@@ -926,6 +931,7 @@ def run_price_divergences_app(df_global):
                         else:
                             # --- CALCULATE RETURN SINCE SIGNAL ---
                             res_div_df['Price2'] = pd.to_numeric(res_div_df['Price2'], errors='coerce')
+                            res_div_df['Last_Close'] = pd.to_numeric(res_div_df['Last_Close'], errors='coerce')
                             res_div_df['Return_Since_Signal'] = ((res_div_df['Last_Close'] - res_div_df['Price2']) / res_div_df['Price2']) * 100
                             
                             res_div_df = res_div_df.sort_values(by='Signal_Date_ISO', ascending=False)
