@@ -136,7 +136,7 @@ def load_parquet_and_clean(key):
             
         content = buffer.getvalue()
         
-        # Verify we didn't just download an HTML error page
+        # Verify we didn't just download an HTML error page (Virus Scan warning)
         if content.startswith(b"<!DOCTYPE"):
             st.error(f"File {clean_key} failed: Google Drive sent HTML instead of data. Check permissions.")
             return None
@@ -145,9 +145,9 @@ def load_parquet_and_clean(key):
         try:
             df = pd.read_parquet(BytesIO(content))
             
-            # --- THE FIX: Check if Date is hidden in the Index ---
-            # SP100 likely has the date as the index, while others have it as a column.
-            # We force it out of the index so the rest of the script can see it.
+            # --- THE FIX: Force Date out of the Index ---
+            # Even if you generated a new file, this safety check ensures 
+            # we ALWAYS find the date, whether it's an index or a column.
             if isinstance(df.index, pd.DatetimeIndex):
                 df.reset_index(inplace=True)
             elif df.index.name and 'DATE' in str(df.index.name).upper():
@@ -163,11 +163,11 @@ def load_parquet_and_clean(key):
         # --- Standard Cleaning Logic ---
         df.columns = [str(c).strip() for c in df.columns]
         
-        # 1. Find Date Column
-        # We look for DATE, or 'index' (which happens if we reset an unnamed index)
+        # 1. Find Date Column (Case Insensitive)
         date_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
         
         # Fallback: Check if 'index' column exists and holds dates
+        # (This happens if we reset an unnamed index above)
         if not date_col and 'index' in df.columns:
             if pd.api.types.is_datetime64_any_dtype(df['index']):
                  date_col = 'index'
