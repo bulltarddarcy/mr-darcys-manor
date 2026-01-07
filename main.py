@@ -740,7 +740,6 @@ def run_price_divergences_app(df_global):
     CSV_PERIODS_WEEKS = [4, 13, 26, 52]
 
     # --- HELPER: BENCHMARK RETURNS ---
-    # We fetch SPY/QQQ once to use for benchmarking
     @st.cache_data(ttl=3600)
     def get_benchmark_data():
         tm = load_ticker_map()
@@ -748,7 +747,6 @@ def run_price_divergences_app(df_global):
         for sym in ["SPY", "QQQ"]:
             df = fetch_history_optimized(sym, tm)
             if df is not None and not df.empty:
-                # Standardize columns
                 df.columns = [c.strip().upper() for c in df.columns]
                 d_col = next((c for c in df.columns if 'DATE' in c), None)
                 c_col = next((c for c in df.columns if 'CLOSE' in c), None)
@@ -777,10 +775,13 @@ def run_price_divergences_app(df_global):
                 * **Min RSI Delta**: The minimum required difference between the two RSI pivot points.
                 """)
             with c_guide2:
-                st.markdown("#### 📊 Table Metrics")
+                st.markdown("#### 📊 Table Metrics & Benchmarks")
                 st.markdown("""
-                * **Return Δ**: % Change from the Signal Price (P2) to the Last Close.
-                * **vs SPY/QQQ**: Compares the average return of these signals to buying SPY or QQQ on the exact same dates.
+                * **Return Δ:** % Change from the Signal Price (P2) to the Last Close.
+                * **Win Rate:** Percentage of current active signals that are in profit.
+                * **Relative Performance (vs SPY/QQQ):**
+                    * **Main Number (e.g. +7.1%):** The **Alpha**. This is how much the strategy outperformed the index (Strategy Avg - Index Avg).
+                    * **Bracket Number (e.g. +1.0%):** The **Index Return**. This is what SPY/QQQ actually did during the same holding periods.
                 """)
         
         if data_option_div:
@@ -845,17 +846,13 @@ def run_price_divergences_app(df_global):
                                     div['Last_Close'] = curr_close_d
                                     
                                     # --- Benchmark Calculation (Daily) ---
-                                    # Easy: Use Signal Date directly
                                     sig_dt = pd.to_datetime(div['Signal_Date_ISO'])
                                     for b_sym, b_df in benchmarks.items():
-                                        # Get Price on Signal Date
-                                        # Use asof to find nearest price if exact date missing (e.g. holidays)
                                         if not b_df.empty:
                                             try:
-                                                # Look for price on or immediately after signal
                                                 idx_loc = b_df.index.searchsorted(sig_dt)
                                                 if idx_loc < len(b_df):
-                                                    entry_p = b_df.iloc[idx_loc].iloc[0] # First col is close
+                                                    entry_p = b_df.iloc[idx_loc].iloc[0]
                                                     exit_p = b_df.iloc[-1].iloc[0]
                                                     div[f'{b_sym}_Ret'] = ((exit_p - entry_p) / entry_p) * 100
                                                 else:
@@ -889,22 +886,14 @@ def run_price_divergences_app(df_global):
                                     div['Last_Close'] = curr_close_w
                                     
                                     # --- Benchmark Calculation (Weekly) ---
-                                    # Signal_Date_ISO is likely the Monday of the week.
-                                    # We want the Friday close (or end of that candle)
                                     sig_dt = pd.to_datetime(div['Signal_Date_ISO'])
-                                    
-                                    # Approximation: If Weekly data usually stores the Monday date,
-                                    # we add 4 days to approximate Friday close for SPY entry
                                     approx_friday = sig_dt + timedelta(days=4)
                                     
                                     for b_sym, b_df in benchmarks.items():
                                         if not b_df.empty:
                                             try:
-                                                # Find price closest to that Friday
                                                 idx_loc = b_df.index.searchsorted(approx_friday)
-                                                # If future, take last
                                                 if idx_loc >= len(b_df): idx_loc = len(b_df) - 1
-                                                
                                                 entry_p = b_df.iloc[idx_loc].iloc[0]
                                                 exit_p = b_df.iloc[-1].iloc[0]
                                                 div[f'{b_sym}_Ret'] = ((exit_p - entry_p) / entry_p) * 100
@@ -959,35 +948,23 @@ def run_price_divergences_app(df_global):
                                         # --- METRICS CALCULATIONS ---
                                         count_sigs = len(tbl_df)
                                         
-                                        # Base Return Logic
                                         if s_type == 'Bullish':
                                             raw_ret = tbl_df['Return_Since_Signal']
                                             avg_return = raw_ret.mean()
                                             win_rate = (raw_ret > 0).mean() * 100
                                             
-                                            # Benchmarks (Long Only)
                                             spy_avg = tbl_df['SPY_Ret'].mean() if 'SPY_Ret' in tbl_df.columns else 0.0
                                             qqq_avg = tbl_df['QQQ_Ret'].mean() if 'QQQ_Ret' in tbl_df.columns else 0.0
                                             
                                         else:
                                             # Bearish (Shorting)
-                                            # Return is inverse of price action
                                             raw_ret = tbl_df['Return_Since_Signal'] * -1
                                             avg_return = raw_ret.mean()
                                             win_rate = (raw_ret > 0).mean() * 100
                                             
-                                            # Benchmarks (Shorting assumption for apples-to-apples?)
-                                            # Usually benchmarks are shown as "What if I just bought SPY?"
-                                            # BUT if we are comparing a SHORT strategy, we should compare against SHORTING SPY
-                                            # or just show SPY's raw return to show "Did this beat the market trend?"
-                                            # Standard practice: Show SPY Buy & Hold return to see if Shorting was better than just being long.
-                                            # However, to see if it generated alpha against the market direction, we often compare Short Strategy vs Short SPY.
-                                            # Let's stick to standard "SPY Return" (Long) to see correlation, or inverse? 
-                                            # Let's show SPY Long return. If SPY was +5% and we were Short +5%, we massively outperformed market direction.
                                             spy_avg = tbl_df['SPY_Ret'].mean() if 'SPY_Ret' in tbl_df.columns else 0.0
                                             qqq_avg = tbl_df['QQQ_Ret'].mean() if 'QQQ_Ret' in tbl_df.columns else 0.0
 
-                                        # Formatting differences
                                         spy_diff = avg_return - spy_avg
                                         qqq_diff = avg_return - qqq_avg
                                         
