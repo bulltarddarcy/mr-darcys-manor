@@ -736,7 +736,6 @@ def run_price_divergences_app(df_global):
     with tab_div:
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
         
-        # --- UPDATED USER GUIDE FOR CLARITY ---
         with st.expander("ℹ️ Page User Guide"):
             c_guide1, c_guide2 = st.columns(2)
             with c_guide1:
@@ -757,22 +756,23 @@ def run_price_divergences_app(df_global):
                     * **Highlighting**: The cell turns YELLOW if **EITHER** pivot (1 or 2) was historically extreme (<10% or >90%).
                 """)
         
-        # --- NEW SECTION ADDED HERE ---
-        with st.expander("View Scanned Tickers"):
-            t_map = load_ticker_map()
-            if t_map:
-                valid_tickers = sorted([t for t in t_map.keys() if not t.endswith('_PARQUET')])
-                st.write(", ".join(valid_tickers))
-            else:
-                st.caption("No tickers currently loaded in the map.")
-        # ------------------------------
-        
         if data_option_div:
             try:
                 key = dataset_map[data_option_div]
                 master = load_parquet_and_clean(key)
                 
                 if master is not None and not master.empty:
+                    # --- MOVED & UPDATED: View Scanned Tickers ---
+                    # Now pulls directly from the loaded dataset
+                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+                    with st.expander(f"View Scanned Tickers ({data_option_div})"):
+                        if t_col:
+                            unique_tickers = sorted(master[t_col].unique().tolist())
+                            st.write(", ".join(unique_tickers))
+                        else:
+                            st.caption("No ticker column found in dataset.")
+                    # ---------------------------------------------
+
                     target_highlight_daily = None
                     highlight_list_weekly = []
                     
@@ -786,8 +786,6 @@ def run_price_divergences_app(df_global):
                         current_week_monday = (max_dt_obj - timedelta(days=days_to_subtract))
                         prev_week_monday = current_week_monday - timedelta(days=7)
                         highlight_list_weekly = [current_week_monday.strftime('%Y-%m-%d'), prev_week_monday.strftime('%Y-%m-%d')]
-                    
-                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
                     
                     # --- INPUTS ---
                     c_d1, c_d2, c_d3, c_d4, c_d5 = st.columns(5)
@@ -822,7 +820,6 @@ def run_price_divergences_app(df_global):
                                 all_rsi = d_d['RSI'].dropna().values
                                 if len(all_rsi) > 0:
                                     for div in daily_divs:
-                                        # Calculate percentile (0-100) for both pivots
                                         p1 = (all_rsi < div['RSI1']).mean() * 100
                                         p2 = (all_rsi < div['RSI2']).mean() * 100
                                         div['RSI1_Pct'] = p1
@@ -872,33 +869,23 @@ def run_price_divergences_app(df_global):
                                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                     price_header = "Close Price Δ" if div_source == 'Close' else ("Low Price Δ" if s_type == 'Bullish' else "High Price Δ")
                                     
-                                    # Handle Percentile Column Naming and Logic
                                     pct_col_title = "RSI Low %ile" if s_type == 'Bullish' else "RSI High %ile"
 
                                     if not tbl_df.empty:
-                                        # Fill NaN percentiles if any
                                         if 'RSI2_Pct' not in tbl_df.columns: tbl_df['RSI2_Pct'] = 50
                                         if 'Extreme_Flag' not in tbl_df.columns: tbl_df['Extreme_Flag'] = False
 
                                         def style_div_df(df_in):
-                                            # We need to map styles based on column names
-                                            # Pandas Styler is row-based mainly, need to identify columns by name
-                                            
                                             def highlight_cells(row):
                                                 styles = [''] * len(row)
-                                                
-                                                # 1. Date Highlight
                                                 if row['Signal_Date_ISO'] in targets:
                                                     if 'Date_Display' in df_in.columns:
                                                         idx = df_in.columns.get_loc('Date_Display')
                                                         styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
                                                 
-                                                # 2. RSI Percentile Highlight
-                                                # Check if the Extreme_Flag is True
                                                 if row.get('Extreme_Flag', False):
                                                     if 'RSI2_Pct' in df_in.columns:
                                                         idx_p = df_in.columns.get_loc('RSI2_Pct')
-                                                        # Yellow highlight for extreme RSI
                                                         styles[idx_p] = 'background-color: rgba(255, 235, 59, 0.25); color: #f57f17; font-weight: bold;'
 
                                                 return styles
@@ -929,7 +916,6 @@ def run_price_divergences_app(df_global):
     # TAB 2: DIV HISTORY
     # --------------------------------------------------------------------------
     with tab_hist:
-        # --- ROW 1 ---
         c_h1, c_h2, c_h3, c_h4 = st.columns(4)
         with c_h1:
             hist_ticker_in = st.text_input("Ticker", value=st.session_state.rsi_hist_ticker, key="rsi_hist_ticker_in").strip().upper()
@@ -942,7 +928,6 @@ def run_price_divergences_app(df_global):
             h_strict_str = st.selectbox("50-Cross Inval", ["Yes", "No"], index=0, key="rsi_hist_strict")
             h_strict = (h_strict_str == "Yes")
 
-        # --- ROW 2 ---
         c_h5, c_h6, c_h7 = st.columns(3)
         with c_h5: 
             h_source = st.selectbox("Candle Price Method", ["High/Low", "Close"], index=0, key="rsi_hist_source")
@@ -965,7 +950,6 @@ def run_price_divergences_app(df_global):
                     
                     if df_h is not None and not df_h.empty:
                         d_d_h, d_w_h = prepare_data(df_h.copy())
-                        # If weekly missing, fabricate it
                         if d_w_h is None and d_d_h is not None:
                             temp_w = d_d_h.copy().resample('W').agg({'Price': 'last', 'High': 'max', 'Low': 'min', 'Volume': 'sum'}).dropna()
                             temp_w = add_technicals(temp_w)
@@ -1106,13 +1090,7 @@ def run_rsi_scanner_app(df_global):
             * **Warning:** Statistical significance requires sample size. Be skeptical of metrics derived from fewer than 10-15 trades.
             """)
 
-        with st.expander("View Scanned Tickers"):
-            t_map = load_ticker_map()
-            if t_map:
-                valid_tickers = sorted([t for t in t_map.keys() if not t.endswith('_PARQUET')])
-                st.write(", ".join(valid_tickers))
-            else:
-                st.caption("No tickers currently loaded in the map.")
+        # (Removed View Scanned Tickers per instructions)
 
         c_left, c_right = st.columns([1, 6])
         with c_left:
@@ -1219,7 +1197,7 @@ def run_rsi_scanner_app(df_global):
     with tab_pct:
         data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
         
-        # --- NEW: User Guide & Ticker List ---
+        # --- NEW: User Guide & Ticker List (Showing only dataset tickers) ---
         with st.expander("ℹ️ Page User Guide: RSI Percentiles", expanded=False):
             st.markdown("""
             ### 🎯 Goal
@@ -1238,22 +1216,6 @@ def run_rsi_scanner_app(df_global):
             * **Win Rate:** How often this signal has resulted in a profit historically.
             """)
 
-        with st.expander("View Scanned Tickers"):
-            t_map_pct = load_ticker_map()
-            if t_map_pct:
-                valid_tickers_pct = sorted([t for t in t_map_pct.keys() if not t.endswith('_PARQUET')])
-                st.write(", ".join(valid_tickers_pct))
-            else:
-                st.caption("No tickers currently loaded in the map.")
-        # -------------------------------------
-
-        c_p1, c_p2, c_p3, c_p4 = st.columns(4)
-        with c_p1: pct_low = st.number_input("RSI Low (e.g. 10)", min_value=1, max_value=40, value=st.session_state.saved_rsi_pct_low, step=1, key="rsi_pct_low", on_change=save_rsi_state, args=("rsi_pct_low", "saved_rsi_pct_low"))
-        with c_p2: pct_high = st.number_input("RSI High (e.g. 90)", min_value=60, max_value=99, value=st.session_state.saved_rsi_pct_high, step=1, key="rsi_pct_high", on_change=save_rsi_state, args=("rsi_pct_high", "saved_rsi_pct_high"))
-        with c_p3: min_n_pct = st.number_input("Min N", min_value=1, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
-        with c_p4: periods_str_pct = st.text_input("Periods", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
-            
-        periods_pct = parse_periods(periods_str_pct)
         
         if data_option_pct:
             try:
@@ -1261,6 +1223,23 @@ def run_rsi_scanner_app(df_global):
                 master = load_parquet_and_clean(key)
                 if master is not None and not master.empty:
                     t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+                    
+                    # --- View Scanned Tickers (Specific to Dataset) ---
+                    with st.expander(f"View Scanned Tickers ({data_option_pct})"):
+                        if t_col:
+                            unique_tickers = sorted(master[t_col].unique().tolist())
+                            st.write(", ".join(unique_tickers))
+                        else:
+                            st.caption("No ticker column found in dataset.")
+                    # --------------------------------------------------
+
+                    c_p1, c_p2, c_p3, c_p4 = st.columns(4)
+                    with c_p1: pct_low = st.number_input("RSI Low (e.g. 10)", min_value=1, max_value=40, value=st.session_state.saved_rsi_pct_low, step=1, key="rsi_pct_low", on_change=save_rsi_state, args=("rsi_pct_low", "saved_rsi_pct_low"))
+                    with c_p2: pct_high = st.number_input("RSI High (e.g. 90)", min_value=60, max_value=99, value=st.session_state.saved_rsi_pct_high, step=1, key="rsi_pct_high", on_change=save_rsi_state, args=("rsi_pct_high", "saved_rsi_pct_high"))
+                    with c_p3: min_n_pct = st.number_input("Min N", min_value=1, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
+                    with c_p4: periods_str_pct = st.text_input("Periods", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
+            
+                    periods_pct = parse_periods(periods_str_pct)
                     raw_results_pct = []
                     
                     prog_bar = st.progress(0, text="Scanning Percentiles...")
