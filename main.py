@@ -809,34 +809,56 @@ def run_price_divergences_app(df_global):
                         d_d, d_w = prepare_data(group.copy())
                         
                         # --- Process Daily ---
-                        if d_d is not None:
+                        if d_d is not None and not d_d.empty:
                             daily_divs = find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            if daily_divs and 'RSI' in d_d.columns:
+                            # Get safe numeric last close
+                            curr_close_d = float(d_d['Price'].iloc[-1])
+
+                            if daily_divs:
                                 all_rsi = d_d['RSI'].dropna().values
-                                if len(all_rsi) > 0:
-                                    for div in daily_divs:
+                                has_rsi_vals = len(all_rsi) > 0
+                                for div in daily_divs:
+                                    # Fix Last Close here to ensure it's a float
+                                    div['Last_Close'] = curr_close_d
+                                    
+                                    if has_rsi_vals:
                                         p1 = (all_rsi < div['RSI1']).mean() * 100
                                         p2 = (all_rsi < div['RSI2']).mean() * 100
                                         div['RSI1_Pct'] = p1
                                         div['RSI2_Pct'] = p2
                                         div['Extreme_Flag'] = (p1 < 10 or p2 < 10) if div['Type'] == 'Bullish' else (p1 > 90 or p2 > 90)
+                                    else:
+                                        div['RSI1_Pct'] = 50
+                                        div['RSI2_Pct'] = 50
+                                        div['Extreme_Flag'] = False
                             
                             raw_results_div.extend(daily_divs)
                         
                         # --- Process Weekly ---
-                        if d_w is not None: 
+                        if d_w is not None and not d_w.empty: 
                             weekly_divs = find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            if weekly_divs and 'RSI' in d_w.columns:
+                            # Get safe numeric last close
+                            curr_close_w = float(d_w['Price'].iloc[-1])
+
+                            if weekly_divs:
                                 all_rsi_w = d_w['RSI'].dropna().values
-                                if len(all_rsi_w) > 0:
-                                    for div in weekly_divs:
+                                has_rsi_vals_w = len(all_rsi_w) > 0
+                                for div in weekly_divs:
+                                    # Fix Last Close here
+                                    div['Last_Close'] = curr_close_w
+
+                                    if has_rsi_vals_w:
                                         p1 = (all_rsi_w < div['RSI1']).mean() * 100
                                         p2 = (all_rsi_w < div['RSI2']).mean() * 100
                                         div['RSI1_Pct'] = p1
                                         div['RSI2_Pct'] = p2
                                         div['Extreme_Flag'] = (p1 < 10 or p2 < 10) if div['Type'] == 'Bullish' else (p1 > 90 or p2 > 90)
+                                    else:
+                                        div['RSI1_Pct'] = 50
+                                        div['RSI2_Pct'] = 50
+                                        div['Extreme_Flag'] = False
 
                             raw_results_div.extend(weekly_divs)
                             
@@ -852,9 +874,8 @@ def run_price_divergences_app(df_global):
                             st.warning(f"No signals found in the last {days_since} days.")
                         else:
                             # --- CALCULATE RETURN SINCE SIGNAL ---
-                            # Clean and ensure numeric
+                            # Ensure numeric types (Last_Close is now guaranteed float from loop above)
                             res_div_df['Price2'] = pd.to_numeric(res_div_df['Price2'], errors='coerce')
-                            res_div_df['Last_Close'] = pd.to_numeric(res_div_df['Last_Close'], errors='coerce')
                             
                             # Calculate % difference
                             res_div_df['Return_Since_Signal'] = ((res_div_df['Last_Close'] - res_div_df['Price2']) / res_div_df['Price2']) * 100
@@ -879,21 +900,17 @@ def run_price_divergences_app(df_global):
                                         # --- METRICS CALCULATIONS ---
                                         count_sigs = len(tbl_df)
                                         
-                                        # Win Rate:
-                                        # Bullish: Return > 0 is win
-                                        # Bearish: Return < 0 is win (Price went down)
                                         if s_type == 'Bullish':
                                             win_rate = (tbl_df['Return_Since_Signal'] > 0).mean() * 100
                                             avg_return = tbl_df['Return_Since_Signal'].mean()
                                         else:
+                                            # For bearish, price going down (negative return) is a win
                                             win_rate = (tbl_df['Return_Since_Signal'] < 0).mean() * 100
-                                            # For average return on bearish, usually we flip the sign to show "profit"
-                                            # But user asked for Avg Return. If shorting, a -5% price drop is a +5% return.
+                                            # Invert return sign for display (Short profit)
                                             avg_return = tbl_df['Return_Since_Signal'].mean() * -1
 
                                         st.subheader(f"{emoji} {tf} {s_type} Signals")
                                         
-                                        # Render Metrics
                                         st.markdown(f"""
                                         <div style="margin-bottom: 10px;">
                                             <span class="metric-box">Count: {count_sigs}</span>
@@ -919,18 +936,14 @@ def run_price_divergences_app(df_global):
                                                         styles[idx_p] = 'background-color: rgba(255, 235, 59, 0.25); color: #f57f17; font-weight: bold;'
 
                                                 # 3. Return Column Color Logic
-                                                # "Red for down and green for up in bullish tables (and the opposite in bearish tables)"
                                                 if 'Return_Since_Signal' in df_in.columns:
                                                     val = row['Return_Since_Signal']
                                                     idx_r = df_in.columns.get_loc('Return_Since_Signal')
                                                     
                                                     if not pd.isna(val):
                                                         if s_type == 'Bullish':
-                                                            # Green if Up (Positive), Red if Down
                                                             color = '#1e7e34' if val > 0 else '#c5221f'
                                                         else:
-                                                            # Bearish Table
-                                                            # Green if Down (Negative Price Action), Red if Up
                                                             color = '#1e7e34' if val < 0 else '#c5221f'
                                                         
                                                         styles[idx_r] = f'color: {color}; font-weight: bold;'
@@ -947,10 +960,9 @@ def run_price_divergences_app(df_global):
                                                 "RSI_Display": st.column_config.TextColumn("RSI Δ"),
                                                 "RSI2_Pct": st.column_config.NumberColumn(pct_col_title, format="%d", help="Percentile rank of the signal RSI relative to ticker history."),
                                                 "Price_Display": st.column_config.TextColumn(price_header),
-                                                "Last_Close": st.column_config.TextColumn("Last Close"),
+                                                "Last_Close": st.column_config.NumberColumn("Last Close", format="$%.2f"),
                                                 "Return_Since_Signal": st.column_config.NumberColumn("Return Δ", format="%.1f%%")
                                             },
-                                            # Insert Return_Since_Signal before RSI2_Pct
                                             column_order=["Ticker", "Tags", "Date_Display", "RSI_Display", "Price_Display", "Last_Close", "Return_Since_Signal", "RSI2_Pct"],
                                             hide_index=True,
                                             use_container_width=True,
