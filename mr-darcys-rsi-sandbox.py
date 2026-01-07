@@ -269,7 +269,7 @@ def get_gdrive_binary_data(url):
         
         # 2. Use a Session to handle potential redirects/cookies
         session = requests.Session()
-        response = session.get(download_url, stream=True, timeout=20)
+        response = session.get(download_url, stream=True, timeout=50)
         
         # 3. Handle the "Virus Scan" confirmation automatically
         if response.text.strip().startswith("<!DOCTYPE html>"):
