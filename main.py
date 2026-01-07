@@ -749,7 +749,6 @@ def run_price_divergences_app(df_global):
             try:
                 df = fetch_history_optimized(sym, tm)
                 if df is not None and not df.empty:
-                    # Robust Column Names
                     df.columns = [c.strip().upper() for c in df.columns]
                     d_col = next((c for c in df.columns if 'DATE' in c), None)
                     c_col = next((c for c in df.columns if 'CLOSE' in c), None)
@@ -758,7 +757,6 @@ def run_price_divergences_app(df_global):
                     if d_col and c_col and o_col:
                         df[d_col] = pd.to_datetime(df[d_col])
                         df = df.set_index(d_col).sort_index()
-                        # Rename to standard names for easy lookup
                         benchmarks[sym] = df[[o_col, c_col]].rename(columns={o_col: 'OPEN', c_col: 'CLOSE'})
             except Exception: pass
         return benchmarks
@@ -843,7 +841,7 @@ def run_price_divergences_app(df_global):
                         def create_next_day_map(df_in):
                             d_lookup = df_in.copy()
                             
-                            # 1. Ensure Date Col
+                            # 1. Find Date Column
                             date_c = next((c for c in d_lookup.columns if 'DATE' in c.upper()), None)
                             if not date_c:
                                 if isinstance(d_lookup.index, pd.DatetimeIndex):
@@ -851,13 +849,16 @@ def run_price_divergences_app(df_global):
                                     date_c = d_lookup.columns[0]
                                 else: return {}
 
-                            # 2. Ensure Open Col (Robust Search)
+                            # 2. Find Open Column (Robust)
                             open_c = next((c for c in d_lookup.columns if 'OPEN' in c.upper()), None)
-                            if not open_c: return {} # Can't map next open if no open col
+                            if not open_c: return {}
 
                             d_lookup[date_c] = pd.to_datetime(d_lookup[date_c])
                             
-                            # Shift to get Next Day
+                            # 3. CRITICAL: Sort by Date Ascending so shift(-1) gets the FUTURE row
+                            d_lookup = d_lookup.sort_values(by=date_c, ascending=True)
+                            
+                            # 4. Shift to get Next Day data on the Current Day row
                             d_lookup['Next_Open'] = d_lookup[open_c].shift(-1)
                             d_lookup['Next_Date'] = d_lookup[date_c].shift(-1)
                             
@@ -979,7 +980,6 @@ def run_price_divergences_app(df_global):
                             st.warning(f"No signals found in the last {days_since} days.")
                         else:
                             # --- CALCULATE RETURN SINCE SIGNAL ---
-                            # Return is now (Last Close - Next Open) / Next Open
                             res_div_df['Entry_Price'] = pd.to_numeric(res_div_df['Entry_Price'], errors='coerce')
                             res_div_df['Last_Close'] = pd.to_numeric(res_div_df['Last_Close'], errors='coerce')
                             
