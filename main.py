@@ -702,6 +702,16 @@ def run_price_divergences_app(df_global):
         <style>
         .top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; }
         [data-testid="stDataFrame"] th { font-weight: 900 !important; }
+        .metric-box {
+            background-color: rgba(128, 128, 128, 0.08);
+            border-radius: 6px;
+            padding: 8px 12px;
+            display: inline-block;
+            margin-right: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            border: 1px solid rgba(128, 128, 128, 0.2);
+        }
         </style>
         """, unsafe_allow_html=True)
 
@@ -736,7 +746,6 @@ def run_price_divergences_app(df_global):
     with tab_div:
         data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
         
-        # --- UPDATED USER GUIDE FOR CLARITY ---
         with st.expander("ℹ️ Page User Guide"):
             c_guide1, c_guide2 = st.columns(2)
             with c_guide1:
@@ -745,16 +754,12 @@ def run_price_divergences_app(df_global):
                 * **Dataset**: Selects the universe of stocks to scan (e.g., SP500, NASDAQ).
                 * **Days Since Signal**: Filters the view to show only signals that were confirmed within this number of past trading days.
                 * **Min RSI Delta**: The minimum required difference between the two RSI pivot points.
-                * **Strict 50-Cross**: If "Yes", signal is invalid if RSI crossed 50 between pivots.
                 """)
             with c_guide2:
                 st.markdown("#### 📊 Table Columns")
                 st.markdown("""
-                * **RSI Δ**: RSI value at first pivot vs second pivot.
-                * **Price Δ**: Price at first pivot vs second pivot.
-                * **RSI %ile (New)**: The historical percentile rank of the **2nd Pivot (The Signal Candle)**.
-                    * **Value**: Shows how rare the signal RSI is (e.g., **5** = Bottom 5% of all history).
-                    * **Highlighting**: The cell turns YELLOW if **EITHER** pivot (1 or 2) was historically extreme (<10% or >90%).
+                * **Return Δ**: % Change from the Signal Price (P2) to the Last Close.
+                * **RSI %ile**: The historical percentile rank of the signal RSI. Yellow cells indicate extreme readings (<10% or >90%).
                 """)
         
         if data_option_div:
@@ -807,12 +812,10 @@ def run_price_divergences_app(df_global):
                         if d_d is not None:
                             daily_divs = find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            # Inject RSI Percentiles
                             if daily_divs and 'RSI' in d_d.columns:
                                 all_rsi = d_d['RSI'].dropna().values
                                 if len(all_rsi) > 0:
                                     for div in daily_divs:
-                                        # Calculate percentile (0-100) for both pivots
                                         p1 = (all_rsi < div['RSI1']).mean() * 100
                                         p2 = (all_rsi < div['RSI2']).mean() * 100
                                         div['RSI1_Pct'] = p1
@@ -825,7 +828,6 @@ def run_price_divergences_app(df_global):
                         if d_w is not None: 
                             weekly_divs = find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            # Inject RSI Percentiles
                             if weekly_divs and 'RSI' in d_w.columns:
                                 all_rsi_w = d_w['RSI'].dropna().values
                                 if len(all_rsi_w) > 0:
@@ -844,12 +846,19 @@ def run_price_divergences_app(df_global):
                     
                     if raw_results_div:
                         df_all_results = pd.DataFrame(raw_results_div)
-                        # --- UI DISPLAY ---
                         res_div_df = df_all_results[df_all_results["Is_Recent"] == True].copy()
                         
                         if res_div_df.empty:
                             st.warning(f"No signals found in the last {days_since} days.")
                         else:
+                            # --- CALCULATE RETURN SINCE SIGNAL ---
+                            # Clean and ensure numeric
+                            res_div_df['Price2'] = pd.to_numeric(res_div_df['Price2'], errors='coerce')
+                            res_div_df['Last_Close'] = pd.to_numeric(res_div_df['Last_Close'], errors='coerce')
+                            
+                            # Calculate % difference
+                            res_div_df['Return_Since_Signal'] = ((res_div_df['Last_Close'] - res_div_df['Price2']) / res_div_df['Price2']) * 100
+                            
                             res_div_df = res_div_df.sort_values(by='Signal_Date_ISO', ascending=False)
                             consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
                             
@@ -858,22 +867,42 @@ def run_price_divergences_app(df_global):
                                 date_header = "Week Δ" if tf == 'Weekly' else "Day Δ"
                                 
                                 for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                                    st.subheader(f"{emoji} {tf} {s_type} Signals")
+                                    
                                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                     price_header = "Close Price Δ" if div_source == 'Close' else ("Low Price Δ" if s_type == 'Bullish' else "High Price Δ")
-                                    
-                                    # Handle Percentile Column Naming and Logic
                                     pct_col_title = "RSI Low %ile" if s_type == 'Bullish' else "RSI High %ile"
 
                                     if not tbl_df.empty:
-                                        # Fill NaN percentiles if any
                                         if 'RSI2_Pct' not in tbl_df.columns: tbl_df['RSI2_Pct'] = 50
                                         if 'Extreme_Flag' not in tbl_df.columns: tbl_df['Extreme_Flag'] = False
+                                        
+                                        # --- METRICS CALCULATIONS ---
+                                        count_sigs = len(tbl_df)
+                                        
+                                        # Win Rate:
+                                        # Bullish: Return > 0 is win
+                                        # Bearish: Return < 0 is win (Price went down)
+                                        if s_type == 'Bullish':
+                                            win_rate = (tbl_df['Return_Since_Signal'] > 0).mean() * 100
+                                            avg_return = tbl_df['Return_Since_Signal'].mean()
+                                        else:
+                                            win_rate = (tbl_df['Return_Since_Signal'] < 0).mean() * 100
+                                            # For average return on bearish, usually we flip the sign to show "profit"
+                                            # But user asked for Avg Return. If shorting, a -5% price drop is a +5% return.
+                                            avg_return = tbl_df['Return_Since_Signal'].mean() * -1
+
+                                        st.subheader(f"{emoji} {tf} {s_type} Signals")
+                                        
+                                        # Render Metrics
+                                        st.markdown(f"""
+                                        <div style="margin-bottom: 10px;">
+                                            <span class="metric-box">Count: {count_sigs}</span>
+                                            <span class="metric-box">Win Rate: {win_rate:.1f}%</span>
+                                            <span class="metric-box">Avg Return: {avg_return:+.1f}%</span>
+                                        </div>
+                                        """, unsafe_allow_html=True)
 
                                         def style_div_df(df_in):
-                                            # We need to map styles based on column names
-                                            # Pandas Styler is row-based mainly, need to identify columns by name
-                                            
                                             def highlight_cells(row):
                                                 styles = [''] * len(row)
                                                 
@@ -884,12 +913,27 @@ def run_price_divergences_app(df_global):
                                                         styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
                                                 
                                                 # 2. RSI Percentile Highlight
-                                                # Check if the Extreme_Flag is True
                                                 if row.get('Extreme_Flag', False):
                                                     if 'RSI2_Pct' in df_in.columns:
                                                         idx_p = df_in.columns.get_loc('RSI2_Pct')
-                                                        # Yellow highlight for extreme RSI
                                                         styles[idx_p] = 'background-color: rgba(255, 235, 59, 0.25); color: #f57f17; font-weight: bold;'
+
+                                                # 3. Return Column Color Logic
+                                                # "Red for down and green for up in bullish tables (and the opposite in bearish tables)"
+                                                if 'Return_Since_Signal' in df_in.columns:
+                                                    val = row['Return_Since_Signal']
+                                                    idx_r = df_in.columns.get_loc('Return_Since_Signal')
+                                                    
+                                                    if not pd.isna(val):
+                                                        if s_type == 'Bullish':
+                                                            # Green if Up (Positive), Red if Down
+                                                            color = '#1e7e34' if val > 0 else '#c5221f'
+                                                        else:
+                                                            # Bearish Table
+                                                            # Green if Down (Negative Price Action), Red if Up
+                                                            color = '#1e7e34' if val < 0 else '#c5221f'
+                                                        
+                                                        styles[idx_r] = f'color: {color}; font-weight: bold;'
 
                                                 return styles
                                             return df_in.style.apply(highlight_cells, axis=1)
@@ -904,8 +948,10 @@ def run_price_divergences_app(df_global):
                                                 "RSI2_Pct": st.column_config.NumberColumn(pct_col_title, format="%d", help="Percentile rank of the signal RSI relative to ticker history."),
                                                 "Price_Display": st.column_config.TextColumn(price_header),
                                                 "Last_Close": st.column_config.TextColumn("Last Close"),
+                                                "Return_Since_Signal": st.column_config.NumberColumn("Return Δ", format="%.1f%%")
                                             },
-                                            column_order=["Ticker", "Tags", "Date_Display", "RSI_Display", "Price_Display", "Last_Close", "RSI2_Pct"],
+                                            # Insert Return_Since_Signal before RSI2_Pct
+                                            column_order=["Ticker", "Tags", "Date_Display", "RSI_Display", "Price_Display", "Last_Close", "Return_Since_Signal", "RSI2_Pct"],
                                             hide_index=True,
                                             use_container_width=True,
                                             height=get_table_height(tbl_df, max_rows=50)
