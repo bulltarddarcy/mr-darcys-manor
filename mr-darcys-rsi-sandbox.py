@@ -3527,11 +3527,9 @@ try:
     st.sidebar.caption(f"💾 **Database:** {db_date}")
     st.sidebar.caption(f"📈 **Price History:** {price_date}")
     
-    # 5. 🏥 NEW DATA HEALTH WIDGET
+    # 5. 🏥 NEW DATA HEALTH WIDGET (UPDATED)
     with st.sidebar.expander("🏥 Data Health Check", expanded=False):
-        st.markdown("### 🔌 System Files")
-        
-        # A. Check Ticker Map (Crucial for History/Seasonality)
+        # A. Check Ticker Map
         tm_key = "URL_TICKER_MAP"
         tm_url = st.secrets.get(tm_key, "")
         if not tm_url:
@@ -3541,11 +3539,7 @@ try:
         else:
              st.markdown(f"✅ **Ticker Map**: Connected")
 
-        st.divider()
-        st.markdown("### 📉 RSI Datasets")
-
-        # B. Check Parquet Files (RSI Scanner Data)
-        # Uses the new bulletproof get_parquet_config() function
+        # B. Check Parquet Files
         health_config = get_parquet_config()
         all_good = True
         
