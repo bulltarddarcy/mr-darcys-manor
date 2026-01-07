@@ -988,12 +988,45 @@ def run_rsi_scanner_app(df_global):
     # TAB 1: RSI BACKTESTER
     # --------------------------------------------------------------------------
     with tab_bot:
-        with st.expander("ℹ️ Page User Guide"):
-            st.markdown("#### 🤔 What is this tool?")
-            st.markdown("This tool scans the **entire price history** (e.g., last 10 years) of a stock to find every instance where the RSI matched your criteria. It then 'simulates' a trade to see what would have happened if you bought and held.")
+        with st.expander("ℹ️ Page User Guide: Methodology, Inputs & Metrics", expanded=False):
             st.markdown("""
-            * **Profit Factor**: Total Gains / Total Losses. (> 1.5 is Strong).
-            * **SQN**: System Quality Number. Measures consistency of returns. (> 3.0 is Excellent).
+            ### 📚 Overview & Data Source
+            This tool performs a historical backtest on a specific ticker to evaluate how price reacts after the **Relative Strength Index (RSI)** hits a specific level.
+            * **Data Source:** Historical OHLCV data is sourced from your connected Parquet database (primary) or falls back to the **Yahoo Finance API** (secondary) if the ticker is not found in your DB.
+            * **Strategy:** "Buy and Hold". The system identifies every date in the lookback period where RSI was within your specified range, then simulates buying at that Close and holding for a fixed number of days ($N$).
+
+            ### ⚙️ Input Parameters
+            * **Ticker:** The stock symbol to analyze (e.g., NVDA, SPY).
+            * **Lookback Years:** The historical window to scan (e.g., 10 years). A longer lookback includes different market cycles (bull and bear markets).
+            * **RSI Tolerance:** The "width" of your RSI signal capture.
+                * *Example:* If the stock's current RSI is **30** and Tolerance is **2**, the system backtests every historical instance where RSI was between **28 and 32**.
+
+            ### 📊 Statistical Metrics & Scoring
+            The table displays the results of holding the trade for different durations (from 1 day to 252 days).
+
+            #### 1. Profit Factor (PF)
+            * **Purpose:** Measures the risk/reward relationship by comparing total gains to total losses.
+            * **Calculation:** $\\frac{\\text{Gross Wins (Sum of all positive returns)}}{\\text{Gross Losses (Sum of absolute negative returns)}}$
+            * **Scoring:**
+                * 🔴 **< 1.0:** Losing strategy (The setup lost money historically).
+                * 🟡 **1.0 - 1.5:** Marginal/Choppy.
+                * 🟢 **> 1.5:** Strong (Profitable).
+                * 🚀 **> 2.0:** Excellent (Highly profitable).
+
+            #### 2. System Quality Number (SQN)
+            * **Purpose:** Measures the quality and consistency of the trading system. It penalizes strategies that are volatile or rely on a single lucky "home run."
+            * **Calculation:** $(\\frac{\\text{Average Return}}{\\text{Std Dev of Returns}}) \\times \\sqrt{\\text{Number of Trades}}$
+            * **Scoring (Van Tharp Scale):**
+                * 🔴 **< 1.6:** Poor / Hard to trade.
+                * 🟡 **1.6 - 3.0:** Average.
+                * 🟢 **3.0 - 5.0:** Excellent.
+                * 🚀 **> 5.0:** "Holy Grail" (Extremely rare and consistent).
+
+            #### 3. Win Rate & EV
+            * **Win Rate:** The percentage of historical trades that ended in profit ($> 0\\%$). *Target: > 60%*.
+            * **EV (Expected Value):** The average return per trade.
+                * *Interpretation:* If EV is $+2.5\\%$, it means historically, every time this RSI setup occurred, the stock gained an average of $2.5\\%$ over this timeframe.
+            * **Count:** The sample size. *Warning: Be skeptical of stats derived from fewer than 10 trades.*
             """)
 
         c_left, c_right = st.columns([1, 6])
