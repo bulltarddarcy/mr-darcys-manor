@@ -780,7 +780,7 @@ def run_price_divergences_app(df_global):
             with c_guide2:
                 st.markdown("#### 📊 Table Metrics & Benchmarks")
                 st.markdown("""
-                * **Return Δ:** % Change from the **CLOSE** of the Signal Date to the Last Close. (Prev. used Lows/Highs).
+                * **Return Δ:** % Change from the **CLOSE** of the Signal Date to the Last Close.
                 * **Win Rate:** Percentage of current active signals that are in profit.
                 * **Relative Performance (vs SPY/QQQ):**
                     * **Main Number (e.g. +7.1%):** The **Alpha**. This is how much the strategy outperformed the index (Strategy Avg - Index Avg).
@@ -841,11 +841,35 @@ def run_price_divergences_app(df_global):
                             
                             curr_close_d = float(d_d['Price'].iloc[-1]) if 'Price' in d_d.columns else 0.0
                             
-                            # Create a quick Date->Close lookup map for this ticker
-                            # We use this to correct the Entry Price (using Close instead of Low)
-                            date_col_d = next((c for c in d_d.columns if 'DATE' in c.upper()), 'Date')
-                            d_d['Date_Str'] = d_d[date_col_d].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
-                            price_map_d = pd.Series(d_d['Price'].values, index=d_d['Date_Str']).to_dict()
+                            # --- ROBUST DATE LOOKUP (Fix for KeyError: 'Date') ---
+                            # Create a copy to find dates safely without breaking main DF
+                            d_lookup = d_d.copy()
+                            date_col_found = None
+                            
+                            # 1. Try column search
+                            found = [c for c in d_lookup.columns if 'DATE' in c.upper()]
+                            if found:
+                                date_col_found = found[0]
+                                d_lookup[date_col_found] = pd.to_datetime(d_lookup[date_col_found])
+                                d_lookup['Date_Str'] = d_lookup[date_col_found].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
+                            
+                            # 2. Try Index if column not found
+                            elif isinstance(d_lookup.index, pd.DatetimeIndex):
+                                d_lookup['Date_Str'] = d_lookup.index.strftime('%Y-%m-%d')
+                            
+                            # 3. Fallback: Reset index and search again
+                            else:
+                                d_lookup = d_lookup.reset_index()
+                                found_idx = [c for c in d_lookup.columns if 'DATE' in c.upper()]
+                                if found_idx:
+                                    date_col_found = found_idx[0]
+                                    d_lookup[date_col_found] = pd.to_datetime(d_lookup[date_col_found])
+                                    d_lookup['Date_Str'] = d_lookup[date_col_found].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
+                                else:
+                                    d_lookup['Date_Str'] = ''
+
+                            price_map_d = pd.Series(d_lookup['Price'].values, index=d_lookup['Date_Str']).to_dict()
+                            # ------------------------------------------------------
 
                             if daily_divs:
                                 all_rsi = d_d['RSI'].dropna().values if 'RSI' in d_d.columns else []
@@ -854,12 +878,10 @@ def run_price_divergences_app(df_global):
                                 for div in daily_divs:
                                     div['Last_Close'] = curr_close_d
                                     
-                                    # OVERRIDE: Use the CLOSE of the signal date as the entry price
-                                    # Fallback to div['Price2'] (Low) only if lookup fails
+                                    # Use lookup map for entry price
                                     sig_iso = div['Signal_Date_ISO']
                                     div['Entry_Price'] = price_map_d.get(sig_iso, div['Price2'])
                                     
-                                    # Benchmark Logic
                                     div['SPY_Ret'] = 0.0
                                     div['QQQ_Ret'] = 0.0
                                     try:
@@ -892,9 +914,29 @@ def run_price_divergences_app(df_global):
                             
                             curr_close_w = float(d_w['Price'].iloc[-1]) if 'Price' in d_w.columns else 0.0
                             
-                            date_col_w = next((c for c in d_w.columns if 'DATE' in c.upper()), 'Date')
-                            d_w['Date_Str'] = d_w[date_col_w].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
-                            price_map_w = pd.Series(d_w['Price'].values, index=d_w['Date_Str']).to_dict()
+                            # --- ROBUST DATE LOOKUP WEEKLY ---
+                            d_lookup_w = d_w.copy()
+                            date_col_w_found = None
+                            
+                            found_w = [c for c in d_lookup_w.columns if 'DATE' in c.upper()]
+                            if found_w:
+                                date_col_w_found = found_w[0]
+                                d_lookup_w[date_col_w_found] = pd.to_datetime(d_lookup_w[date_col_w_found])
+                                d_lookup_w['Date_Str'] = d_lookup_w[date_col_w_found].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
+                            elif isinstance(d_lookup_w.index, pd.DatetimeIndex):
+                                d_lookup_w['Date_Str'] = d_lookup_w.index.strftime('%Y-%m-%d')
+                            else:
+                                d_lookup_w = d_lookup_w.reset_index()
+                                found_idx_w = [c for c in d_lookup_w.columns if 'DATE' in c.upper()]
+                                if found_idx_w:
+                                    date_col_w_found = found_idx_w[0]
+                                    d_lookup_w[date_col_w_found] = pd.to_datetime(d_lookup_w[date_col_w_found])
+                                    d_lookup_w['Date_Str'] = d_lookup_w[date_col_w_found].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else '')
+                                else:
+                                    d_lookup_w['Date_Str'] = ''
+                            
+                            price_map_w = pd.Series(d_lookup_w['Price'].values, index=d_lookup_w['Date_Str']).to_dict()
+                            # --------------------------------
 
                             if weekly_divs:
                                 all_rsi_w = d_w['RSI'].dropna().values if 'RSI' in d_w.columns else []
@@ -902,16 +944,13 @@ def run_price_divergences_app(df_global):
                                 for div in weekly_divs:
                                     div['Last_Close'] = curr_close_w
                                     
-                                    # OVERRIDE: Use Close of signal date
                                     sig_iso = div['Signal_Date_ISO']
                                     div['Entry_Price'] = price_map_w.get(sig_iso, div['Price2'])
                                     
-                                    # Benchmark Logic
                                     div['SPY_Ret'] = 0.0
                                     div['QQQ_Ret'] = 0.0
                                     try:
                                         sig_dt = pd.to_datetime(sig_iso)
-                                        # Approximation for Weekly: +4 days to get Friday
                                         approx_friday = sig_dt + timedelta(days=4)
                                         
                                         for b_sym, b_df in benchmarks.items():
@@ -948,7 +987,6 @@ def run_price_divergences_app(df_global):
                             st.warning(f"No signals found in the last {days_since} days.")
                         else:
                             # --- CALCULATE RETURN SINCE SIGNAL ---
-                            # Use Entry_Price (Close) instead of Price2 (Low/High)
                             res_div_df['Entry_Price'] = pd.to_numeric(res_div_df['Entry_Price'], errors='coerce')
                             res_div_df['Last_Close'] = pd.to_numeric(res_div_df['Last_Close'], errors='coerce')
                             
@@ -983,7 +1021,7 @@ def run_price_divergences_app(df_global):
                                             qqq_avg = tbl_df['QQQ_Ret'].mean() if 'QQQ_Ret' in tbl_df.columns else 0.0
                                             
                                         else:
-                                            # Bearish (Shorting)
+                                            # Bearish
                                             raw_ret = tbl_df['Return_Since_Signal'] * -1
                                             avg_return = raw_ret.mean()
                                             win_rate = (raw_ret > 0).mean() * 100
@@ -1013,19 +1051,16 @@ def run_price_divergences_app(df_global):
                                             def highlight_cells(row):
                                                 styles = [''] * len(row)
                                                 
-                                                # 1. Date Highlight
                                                 if row['Signal_Date_ISO'] in targets:
                                                     if 'Date_Display' in df_in.columns:
                                                         idx = df_in.columns.get_loc('Date_Display')
                                                         styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
                                                 
-                                                # 2. RSI Percentile Highlight
                                                 if row.get('Extreme_Flag', False):
                                                     if 'RSI2_Pct' in df_in.columns:
                                                         idx_p = df_in.columns.get_loc('RSI2_Pct')
                                                         styles[idx_p] = 'background-color: rgba(255, 235, 59, 0.25); color: #f57f17; font-weight: bold;'
 
-                                                # 3. Return Column Color Logic
                                                 if 'Return_Since_Signal' in df_in.columns:
                                                     val = row['Return_Since_Signal']
                                                     idx_r = df_in.columns.get_loc('Return_Since_Signal')
