@@ -1909,7 +1909,7 @@ def run_ema_distance_app(df_global):
     bars = alt.Chart(chart_data).mark_bar().encode(
         x='Date:T', 
         y=alt.Y('Distance (%)', title='% Dist from 50 SMA'),
-        color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#1e7e34"), alt.value("#c5221f"))
+        color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#71d28a"), alt.value("#f29ca0"))
     )
 
     # Horizontal Rule representing Current % Distance
@@ -2021,7 +2021,7 @@ try:
     ])
 
     # 4. Sidebar Captions
-    st.sidebar.caption("🖥️ Use a wide monitor on light mode.")
+    st.sidebar.caption("🖥️ Wide monitor & light mode.")
     st.sidebar.caption(f"💾 **JB Database:** {db_date}")
     st.sidebar.caption(f"📈 **Price/RSIs:** {price_date}")
     
