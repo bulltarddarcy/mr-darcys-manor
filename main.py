@@ -1209,7 +1209,7 @@ def run_rsi_scanner_app(df_global):
         
         with c_left:
             st.markdown("#### 1. Asset & Scope")
-            ticker = st.text_input("Ticker", value="NVDA", key="rsi_bt_ticker_input").strip().upper()
+            ticker = st.text_input("Ticker", value="NFLX", key="rsi_bt_ticker_input").strip().upper()
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=20, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=10.0, value=2.0, step=0.5, help="Search for RSI +/- this value.")
             
