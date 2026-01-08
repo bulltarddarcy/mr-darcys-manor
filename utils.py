@@ -825,16 +825,15 @@ def analyze_trade_setup(ticker, t_df, global_df):
     
     return score, reasons, suggestions
 
-@st.cache_data(ttl=CACHE_TTL)
+@st.cache_data(ttl=86400)
 def get_market_cap(symbol: str) -> float:
     try:
         t = yf.Ticker(symbol)
-        # 1. Try Fast Info (Instant)
+        # fast_info is efficient and doesn't require a full API scrape
         mc = t.fast_info.get('marketCap')
         if mc: return float(mc)
-
-        # 2. RESTORED FALLBACK: Try Slow Info (Reliable but slow)
-        # Note: In batch operations, this is handled by parallel threads, minimizing delay.
+        
+        # Fallback: slightly slower but more comprehensive
         info = t.info
         mc = info.get('marketCap')
         if mc: return float(mc)
