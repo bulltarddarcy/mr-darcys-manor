@@ -1198,23 +1198,22 @@ def run_rsi_scanner_app(df_global):
     options = list(dataset_map.keys())
 
     # --- HELPER: ROBUST DATA LOADING ---
+    # Fixes the 'Close' vs 'CLOSE' error by normalizing columns immediately
     def load_tech_data(symbol, ticker_map_ref):
-        # 1. Try DB
         d = get_ticker_technicals(symbol, ticker_map_ref)
-        # 2. Try Yahoo
         if d is None or d.empty: 
             d = fetch_yahoo_data(symbol)
         
         if d is not None and not d.empty:
-            # Normalize Columns immediately to avoid 'Close' vs 'CLOSE' errors
+            # 1. Normalize all cols to UPPERCASE
             d.columns = [c.strip().upper() for c in d.columns]
             
-            # Map variations to standard names
-            if 'ADJ CLOSE' in d.columns: d = d.rename(columns={'ADJ CLOSE': 'CLOSE'})
+            # 2. Map 'ADJ CLOSE' or 'Adj Close' to 'CLOSE' if missing
+            if 'CLOSE' not in d.columns and 'ADJ CLOSE' in d.columns:
+                 d = d.rename(columns={'ADJ CLOSE': 'CLOSE'})
             
-            # Ensure required columns exist
+            # 3. Last ditch: find any column with 'CLOSE' in it
             if 'CLOSE' not in d.columns:
-                # Last ditch effort to find a close column
                 possible = [c for c in d.columns if 'CLOSE' in c]
                 if possible: d = d.rename(columns={possible[0]: 'CLOSE'})
         return d
@@ -1238,22 +1237,21 @@ def run_rsi_scanner_app(df_global):
         with c_right:
             st.markdown("#### 2. Contextual Filters")
             
-            # Helper for Split UI logic (Mode | Value)
-            def filter_ui_row(col_obj, label, key_prefix, default_mode="Above"):
-                with col_obj:
-                    st.caption(f"**{label}**")
-                    c1, c2 = st.columns([1.2, 1])
-                    with c1:
-                        mode = st.selectbox("Mode", ["Above", "Below"], index=0 if default_mode=="Above" else 1, key=f"{key_prefix}_mode", label_visibility="collapsed")
-                    with c2:
-                        val = st.number_input("Pct", min_value=0.0, value=0.0, step=0.5, format="%.1f", key=f"{key_prefix}_val", label_visibility="collapsed")
+            # FIXED: Removed 'col_obj' argument to prevent context manager error
+            def filter_ui_row(label, key_prefix, default_mode="Above"):
+                st.caption(f"**{label}**")
+                c1, c2 = st.columns([1.2, 1])
+                with c1:
+                    mode = st.selectbox("Mode", ["Above", "Below"], index=0 if default_mode=="Above" else 1, key=f"{key_prefix}_mode", label_visibility="collapsed")
+                with c2:
+                    val = st.number_input("Pct", min_value=0.0, value=0.0, step=0.5, format="%.1f", key=f"{key_prefix}_val", label_visibility="collapsed")
                 return mode, val
 
             # Grid Layout for Filters
             r1_c1, r1_c2, r1_c3 = st.columns(3)
-            with r1_c1: m_sma200, v_sma200 = filter_ui_row(st, "Price vs 200 SMA", "f_sma200")
-            with r1_c2: m_sma50, v_sma50 = filter_ui_row(st, "Price vs 50 SMA", "f_sma50")
-            with r1_c3: m_spy, v_spy = filter_ui_row(st, "SPY vs 200 SMA", "f_spy")
+            with r1_c1: m_sma200, v_sma200 = filter_ui_row("Price vs 200 SMA", "f_sma200")
+            with r1_c2: m_sma50, v_sma50 = filter_ui_row("Price vs 50 SMA", "f_sma50")
+            with r1_c3: m_spy, v_spy = filter_ui_row("SPY vs 200 SMA", "f_spy")
 
             st.markdown("") # Spacer
             r2_c1, r2_c2, r2_c3 = st.columns(3)
@@ -1272,23 +1270,17 @@ def run_rsi_scanner_app(df_global):
         if ticker:
             ticker_map = load_ticker_map()
             
-            # 1. Fetch MAIN Ticker
+            # 1. Fetch MAIN Ticker (Using robust loader)
             df = load_tech_data(ticker, ticker_map)
             
             # 2. Fetch CONTEXT Tickers (SPY, VIX)
             df_spy = None
             df_vix = None
             
-            # Fetch SPY if used (checking filters to avoid unnecessary calls)
-            # Default to fetching SPY just in case to be safe, or just check if user enabled it
-            # To be safe against "Close" errors, we use the helper function
-            if m_spy and v_spy is not None: # Simplistic check, really we always fetch context if needed
-                 df_spy = load_tech_data("SPY", ticker_map)
-                 if df_spy is not None and not df_spy.empty:
-                     if 'CLOSE' in df_spy.columns:
-                        df_spy['SPY_SMA200'] = df_spy['CLOSE'].rolling(200).mean()
-                     else:
-                        df_spy = None # Failed to find close col
+            # Fetch SPY if used (we check filters inside the logic, but fetching safely is cheap)
+            df_spy = load_tech_data("SPY", ticker_map)
+            if df_spy is not None and not df_spy.empty and 'CLOSE' in df_spy.columns:
+                df_spy['SPY_SMA200'] = df_spy['CLOSE'].rolling(200).mean()
 
             if filter_vix != "Any":
                 df_vix = load_tech_data("^VIX", ticker_map)
