@@ -1225,7 +1225,7 @@ def run_rsi_scanner_app(df_global):
     # --------------------------------------------------------------------------
     with tab_bot:
         # --- LAYOUT: INPUTS ---
-        c_left, c_right = st.columns([1, 2])
+        c_left, c_mid, c_right = st.columns([1, 0.2, 3])
         
         with c_left:
             st.markdown("#### 1. Asset & Scope")
@@ -1233,13 +1233,14 @@ def run_rsi_scanner_app(df_global):
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=20, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=10.0, value=2.0, step=0.5, help="Search for RSI +/- this value.")
             
-            # De-duping logic moved here as dropdown
+            # De-duping logic as dropdown
             dedupe_str = st.selectbox("De-dupe Signals", ["Yes", "No"], index=0, help="If Yes (Recommended): Simulates 'One Trade at a Time'. If you buy on Day 1 for a 21-day hold, ignores all other signals until Day 22.\n\nIf No: Counts EVERY signal day as a new trade (can inflate stats during crashes).")
             dedupe_signals = (dedupe_str == "Yes")
             
         with c_right:
-            # Placeholder to keep layout alignment
-            st.write("")
+            st.markdown("#### 2. Contextual Filters")
+            # SMA 200 Filter
+            filter_sma200 = st.selectbox("Price vs 200 SMA", ["Any", "Above", "Below"], index=0, help="Filter signals based on where the price is relative to the 200-day Simple Moving Average.")
 
         st.divider()
         
@@ -1273,6 +1274,9 @@ def run_rsi_scanner_app(df_global):
                         rs = gain / loss
                         df['RSI'] = 100 - (100 / (1 + rs))
 
+                    # Calc SMA 200 for Filter
+                    df['SMA200'] = df[close_col].rolling(200).mean()
+
                     # Trim to Lookback
                     cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
                     df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True)
@@ -1282,8 +1286,14 @@ def run_rsi_scanner_app(df_global):
                     current_rsi = current_row['RSI']
                     rsi_min, rsi_max = current_rsi - rsi_tol, current_rsi + rsi_tol
                     
-                    # Base Filter: RSI Range only
+                    # Base Filter: RSI Range
                     mask = (df['RSI'] >= rsi_min) & (df['RSI'] <= rsi_max)
+                    
+                    # Context Filter: SMA 200
+                    if filter_sma200 == "Above":
+                        mask &= (df[close_col] > df['SMA200'])
+                    elif filter_sma200 == "Below":
+                        mask &= (df[close_col] < df['SMA200'])
                     
                     # Apply Mask (Exclude the very last row which is "today")
                     matches = df.iloc[:-1][mask[:-1]].copy()
@@ -1293,11 +1303,10 @@ def run_rsi_scanner_app(df_global):
 
                     # --- DISPLAY ---
                     st.subheader(f"📊 Analysis: {ticker}")
-                    sc1, sc2, sc3, sc4 = st.columns(4)
+                    sc1, sc2, sc3 = st.columns(3)
                     sc1.metric("Current Price", f"${current_row[close_col]:.2f}")
                     sc2.metric("Current RSI", f"{current_rsi:.1f}")
                     sc3.metric("RSI Hist. Rank", f"{rsi_rank:.1f}%", help=f"Percentile Rank: Bottom {rsi_rank:.1f}%")
-                    sc4.metric("Matches Found", f"{len(matches)}", f"in last {lookback_years}y")
                     
                     if not matches.empty:
                         match_indices = matches.index.values
@@ -1397,9 +1406,14 @@ def run_rsi_scanner_app(df_global):
                                 
                         res_df = pd.DataFrame(results)
                         
-                        def color_ev(val):
-                            color = "#71d28a" if val > 0 else "#f29ca0"
-                            return f'color: {color}; font-weight: bold;'
+                        # --- HIGHLIGHTING LOGIC ---
+                        def highlight_ev(val):
+                            if pd.isna(val) or val < 10.0: return ''
+                            return 'color: #71d28a; font-weight: bold;'
+                        
+                        def highlight_wr(val):
+                            if pd.isna(val) or val < 75.0: return ''
+                            return 'color: #71d28a; font-weight: bold;'
                             
                         def color_dd(val):
                             if val < -15: return 'color: #c5221f; font-weight: bold;' 
@@ -1415,7 +1429,8 @@ def run_rsi_scanner_app(df_global):
                                 "Avg DD": "{:.1f}%", "Median DD": "{:.1f}%", 
                                 "Min DD": "{:.1f}%", "Max DD": "{:.1f}%"
                             })
-                            .map(color_ev, subset=["Lump EV", "Optimal EV"])
+                            .map(highlight_ev, subset=["Lump EV", "Optimal EV"])
+                            .map(highlight_wr, subset=["Lump WR", "Optimal WR"])
                             .map(color_dd, subset=["Max DD", "Avg DD"]),
                             column_config={
                                 "Days": st.column_config.NumberColumn("Hold", help="Trading Days held"),
@@ -1455,7 +1470,7 @@ def run_rsi_scanner_app(df_global):
                                     st.warning(f"**💰 Optimization Result**\nLump Sum generally performed as well as (or better than) DCA.")
 
                     else:
-                        st.warning("No historical matches found. Try widening the RSI tolerance.")
+                        st.warning("No historical matches found. Try widening the RSI tolerance or adjusting the filters.")
 
     # --------------------------------------------------------------------------
     # TAB 2: RSI PERCENTILES (Unchanged)
