@@ -819,7 +819,7 @@ def run_price_divergences_app(df_global):
                 * **Div Mode**: Toggle between Regular (Reversal), Hidden (Continuation), or Both.
                 * **Days Since Signal**: Filters the view to show only signals that were confirmed within this number of past trading days.
                 * **Min RSI Delta**: The minimum required difference between the two RSI pivot points.
-                * **Strict Valid**: If "Yes", signal is invalid if RSI crossed 50 between pivots.
+                * **50 RSI Cross Inval**: If "Yes", signal is invalid if RSI crossed 50 between pivots (Regular only).
                 """)
             with c_guide2:
                 st.markdown("#### 📊 Table Columns")
@@ -859,29 +859,86 @@ def run_price_divergences_app(df_global):
                         highlight_list_weekly = [current_week_monday.strftime('%Y-%m-%d'), prev_week_monday.strftime('%Y-%m-%d')]
                     
                     # --- INPUTS ---
-                    c_d1, c_d2, c_d3, c_d4, c_d5, c_d6 = st.columns(6) # Increased to 6
-                    with c_d1: days_since = st.number_input("Days Since Signal", min_value=1, value=st.session_state.saved_rsi_div_days_since, step=1, key="rsi_div_days_since", on_change=save_rsi_state, args=("rsi_div_days_since", "saved_rsi_div_days_since"))
-                    with c_d2: div_diff = st.number_input("Min RSI Delta", min_value=0.5, value=st.session_state.saved_rsi_div_diff, step=0.5, key="rsi_div_diff", on_change=save_rsi_state, args=("rsi_div_diff", "saved_rsi_div_diff"))
-                    with c_d3: div_lookback = st.number_input("Max Lookback", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
+                    c_d1, c_d2, c_d3, c_d4, c_d5, c_d6 = st.columns(6)
+                    
+                    with c_d1: 
+                        days_since = st.number_input(
+                            "Days Since Signal", 
+                            min_value=1, 
+                            value=st.session_state.saved_rsi_div_days_since, 
+                            step=1, 
+                            help="Show signals confirmed within this many past days.",
+                            key="rsi_div_days_since", 
+                            on_change=save_rsi_state, 
+                            args=("rsi_div_days_since", "saved_rsi_div_days_since")
+                        )
+                        
+                    with c_d2: 
+                        div_diff = st.number_input(
+                            "Min RSI Delta", 
+                            min_value=0.5, 
+                            value=st.session_state.saved_rsi_div_diff, 
+                            step=0.5, 
+                            help="Minimum required difference between the two RSI pivot points.",
+                            key="rsi_div_diff", 
+                            on_change=save_rsi_state, 
+                            args=("rsi_div_diff", "saved_rsi_div_diff")
+                        )
+                        
+                    with c_d3: 
+                        div_lookback = st.number_input(
+                            "Max Lookback", 
+                            min_value=30, 
+                            value=st.session_state.saved_rsi_div_lookback, 
+                            step=5, 
+                            help="Max number of candles to look back for the first pivot point.",
+                            key="rsi_div_lookback", 
+                            on_change=save_rsi_state, 
+                            args=("rsi_div_lookback", "saved_rsi_div_lookback")
+                        )
                     
                     with c_d4:
                          curr_strict = st.session_state.saved_rsi_div_strict
                          idx_strict = ["Yes", "No"].index(curr_strict) if curr_strict in ["Yes", "No"] else 0
-                         strict_div_str = st.selectbox("Strict Valid", ["Yes", "No"], index=idx_strict, key="rsi_div_strict", on_change=save_rsi_state, args=("rsi_div_strict", "saved_rsi_div_strict"))
+                         
+                         strict_div_str = st.selectbox(
+                             "50 RSI Cross Inval", 
+                             ["Yes", "No"], 
+                             index=idx_strict, 
+                             help="If Yes: Regular Divergences are INVALID if RSI crosses 50 between pivots. (Ignored for Hidden).",
+                             key="rsi_div_strict", 
+                             on_change=save_rsi_state, 
+                             args=("rsi_div_strict", "saved_rsi_div_strict")
+                         )
                          strict_div = (strict_div_str == "Yes")
                     
                     with c_d5:
                          curr_source = st.session_state.saved_rsi_div_source
                          idx_source = ["High/Low", "Close"].index(curr_source) if curr_source in ["High/Low", "Close"] else 0
-                         div_source = st.selectbox("Price Method", ["High/Low", "Close"], index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
+                         div_source = st.selectbox(
+                             "Price Method", 
+                             ["High/Low", "Close"], 
+                             index=idx_source, 
+                             help="Use High/Low (Wicks) or Close (Body) prices for divergence calculation.",
+                             key="rsi_div_source", 
+                             on_change=save_rsi_state, 
+                             args=("rsi_div_source", "saved_rsi_div_source")
+                         )
                     
-                    # --- NEW INPUT: Div Type ---
                     with c_d6:
                          curr_type = st.session_state.saved_rsi_div_type
                          valid_types = ["Regular", "Hidden", "Both"]
                          if curr_type not in valid_types: curr_type = "Regular"
                          idx_type = valid_types.index(curr_type)
-                         div_mode_sel = st.selectbox("Div Mode", valid_types, index=idx_type, key="rsi_div_type", on_change=save_rsi_state, args=("rsi_div_type", "saved_rsi_div_type"))
+                         div_mode_sel = st.selectbox(
+                             "Div Mode", 
+                             valid_types, 
+                             index=idx_type, 
+                             help="Regular (Reversal) or Hidden (Continuation) patterns.",
+                             key="rsi_div_type", 
+                             on_change=save_rsi_state, 
+                             args=("rsi_div_type", "saved_rsi_div_type")
+                         )
                     
                     raw_results_div = []
                     progress_bar = st.progress(0, text="Scanning Divergences...")
