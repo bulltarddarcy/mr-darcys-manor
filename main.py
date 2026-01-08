@@ -1204,9 +1204,14 @@ def run_rsi_scanner_app(df_global):
             d = fetch_yahoo_data(symbol)
         
         if d is not None and not d.empty:
+            # 1. Normalize all cols to UPPERCASE
             d.columns = [c.strip().upper() for c in d.columns]
+            
+            # 2. Map 'ADJ CLOSE' or 'Adj Close' to 'CLOSE' if missing
             if 'CLOSE' not in d.columns and 'ADJ CLOSE' in d.columns:
                  d = d.rename(columns={'ADJ CLOSE': 'CLOSE'})
+            
+            # 3. Last ditch: find any column with 'CLOSE' in it
             if 'CLOSE' not in d.columns:
                 possible = [c for c in d.columns if 'CLOSE' in c]
                 if possible: d = d.rename(columns={possible[0]: 'CLOSE'})
@@ -1220,7 +1225,7 @@ def run_rsi_scanner_app(df_global):
     # --------------------------------------------------------------------------
     with tab_bot:
         # --- LAYOUT: INPUTS ---
-        c_left, c_mid, c_right = st.columns([1, 0.2, 3])
+        c_left, c_right = st.columns([1, 2])
         
         with c_left:
             st.markdown("#### 1. Asset & Scope")
@@ -1229,24 +1234,12 @@ def run_rsi_scanner_app(df_global):
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=10.0, value=2.0, step=0.5, help="Search for RSI +/- this value.")
             
             st.markdown("#### ⚙️ Strategy Logic")
+            # De-duping logic to prevent counting the same crash 5 times
             dedupe_signals = st.checkbox("De-dupe Signals", value=True, help="If Checked (Recommended): Simulates 'One Trade at a Time'.\nIf Unchecked: Counts EVERY signal day as a new trade (can inflate stats during crashes).")
             
         with c_right:
-            st.markdown("#### 2. Contextual Filters")
-            
-            def filter_ui_row(label, key_prefix, default_mode="Above"):
-                st.caption(f"**{label}**")
-                c1, c2 = st.columns([1.2, 1])
-                with c1:
-                    mode = st.selectbox("Mode", ["Above", "Below"], index=0 if default_mode=="Above" else 1, key=f"{key_prefix}_mode", label_visibility="collapsed")
-                with c2:
-                    val = st.number_input("Pct", min_value=0.0, value=0.0, step=0.5, format="%.1f", key=f"{key_prefix}_val", label_visibility="collapsed")
-                return mode, val
-
-            r1_c1, r1_c2, r1_c3 = st.columns(3)
-            with r1_c1: m_sma200, v_sma200 = filter_ui_row("Price vs 200 SMA", "f_sma200")
-            with r1_c2: m_sma50, v_sma50 = filter_ui_row("Price vs 50 SMA", "f_sma50")
-            with r1_c3: m_spy, v_spy = filter_ui_row("SPY vs 200 SMA", "f_spy")
+            # Placeholder to keep layout alignment if needed, or leave empty
+            st.write("")
 
         st.divider()
         
@@ -1257,12 +1250,6 @@ def run_rsi_scanner_app(df_global):
             # 1. Fetch MAIN Ticker
             df = load_tech_data(ticker, ticker_map)
             
-            # 2. Fetch CONTEXT Ticker
-            df_spy = None
-            df_spy = load_tech_data("SPY", ticker_map)
-            if df_spy is not None and not df_spy.empty and 'CLOSE' in df_spy.columns:
-                df_spy['SPY_SMA200'] = df_spy['CLOSE'].rolling(200).mean()
-
             if df is None or df.empty:
                 st.error(f"Could not retrieve data for {ticker}.")
             else:
@@ -1286,67 +1273,26 @@ def run_rsi_scanner_app(df_global):
                         rs = gain / loss
                         df['RSI'] = 100 - (100 / (1 + rs))
 
-                    # Calc MAs
-                    df['SMA50'] = df[close_col].rolling(50).mean()
-                    df['SMA200'] = df[close_col].rolling(200).mean()
-                    
                     # Trim to Lookback
                     cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
                     df = df[df[date_col] >= cutoff_date].copy().reset_index(drop=True)
-
-                    # --- MERGE CONTEXT (SPY) WITH FIX ---
-                    # FIX: Create a 'merge_date' column normalized to midnight to ensure alignment
-                    df['merge_date'] = df[date_col].dt.normalize()
-
-                    if df_spy is not None:
-                        spy_date_col = next((c for c in df_spy.columns if 'DATE' in c), None)
-                        if spy_date_col:
-                            df_spy[spy_date_col] = pd.to_datetime(df_spy[spy_date_col])
-                            df_spy['merge_date'] = df_spy[spy_date_col].dt.normalize()
-                            
-                            spy_renamed = df_spy[['merge_date', 'CLOSE', 'SPY_SMA200']].rename(columns={'CLOSE': 'SPY_Close'})
-                            
-                            # Merge on the normalized date
-                            df = df.merge(spy_renamed, on='merge_date', how='left')
 
                     # --- APPLY FILTERS ---
                     current_row = df.iloc[-1]
                     current_rsi = current_row['RSI']
                     rsi_min, rsi_max = current_rsi - rsi_tol, current_rsi + rsi_tol
                     
-                    def apply_split_filter(series_price, series_ma, mode, pct_val):
-                        if series_price is None or series_ma is None: return True
-                        
-                        # Handle potential NaNs (e.g. first 200 days)
-                        # We fill NaNs with False logic (can't filter on missing data)
-                        mask = pd.Series(False, index=series_price.index)
-                        
-                        if mode == "Above":
-                            mask = series_price > (series_ma * (1 + pct_val/100.0))
-                        else: # Below
-                            mask = series_price < (series_ma * (1 - pct_val/100.0))
-                        
-                        return mask.fillna(False)
-
-                    # Base Filter: RSI Range
+                    # Base Filter: RSI Range only
                     mask = (df['RSI'] >= rsi_min) & (df['RSI'] <= rsi_max)
-
-                    # Tech Filters
-                    mask &= apply_split_filter(df[close_col], df['SMA200'], m_sma200, v_sma200)
-                    mask &= apply_split_filter(df[close_col], df['SMA50'], m_sma50, v_sma50)
                     
-                    # Regime Filters
-                    if df_spy is not None and 'SPY_Close' in df.columns:
-                        mask &= apply_split_filter(df['SPY_Close'], df['SPY_SMA200'], m_spy, v_spy)
-                    
-                    # Exclude 'today'
+                    # Apply Mask (Exclude the very last row which is "today")
                     matches = df.iloc[:-1][mask[:-1]].copy()
                     
                     # --- PERCENTILE RANK ---
                     rsi_rank = (df['RSI'] < current_rsi).mean() * 100
 
                     # --- DISPLAY ---
-                    st.subheader(f"📊 Analysis: {ticker} (RSI {current_rsi:.1f})")
+                    st.subheader(f"📊 Analysis: {ticker}") # Removed redundant (RSI xx.x)
                     sc1, sc2, sc3, sc4 = st.columns(4)
                     sc1.metric("Current Price", f"${current_row[close_col]:.2f}")
                     sc2.metric("Current RSI", f"{current_rsi:.1f}")
@@ -1509,7 +1455,7 @@ def run_rsi_scanner_app(df_global):
                                     st.warning(f"**💰 Optimization Result**\nLump Sum generally performed as well as (or better than) DCA.")
 
                     else:
-                        st.warning("No historical matches found. Try widening the RSI tolerance or adjusting filters.")
+                        st.warning("No historical matches found. Try widening the RSI tolerance.")
 
     # --------------------------------------------------------------------------
     # TAB 2: RSI PERCENTILES (Unchanged)
