@@ -412,19 +412,47 @@ def find_divergences(df, ticker, timeframe, min_n=1, periods_input=None, lookbac
     if df is None or len(df) < lookback_period:
         return []
 
-    # 1. Setup Data
-    if price_source == 'Close':
-        price_high = df['Close'].values
-        price_low = df['Close'].values
-    else:
-        price_high = df['High'].values if 'High' in df.columns else df['Close'].values
-        price_low = df['Low'].values if 'Low' in df.columns else df['Close'].values
+    # --- FIX: COLUMN NAME NORMALIZATION ---
+    # Create a copy to avoid SettingWithCopy warnings on the original df
+    df = df.copy()
+    
+    # Map common variations to standard Title Case for internal logic
+    col_map = {c: c.title() for c in df.columns} # e.g. 'CLOSE' -> 'Close', 'rsi' -> 'Rsi'
+    
+    # Explicitly fix the specific ones we need if they exist in uppercase
+    # This handles 'CLOSE', 'HIGH', 'LOW', 'RSI', 'DATE'
+    upper_cols = [c.upper() for c in df.columns]
+    
+    if 'CLOSE' in upper_cols and 'Close' not in df.columns:
+        df.rename(columns={c: 'Close' for c in df.columns if c.upper() == 'CLOSE'}, inplace=True)
+    if 'HIGH' in upper_cols and 'High' not in df.columns:
+        df.rename(columns={c: 'High' for c in df.columns if c.upper() == 'HIGH'}, inplace=True)
+    if 'LOW' in upper_cols and 'Low' not in df.columns:
+        df.rename(columns={c: 'Low' for c in df.columns if c.upper() == 'LOW'}, inplace=True)
+    if 'RSI' in upper_cols and 'RSI' not in df.columns: # Keep RSI uppercase if you prefer, or normalize
+         df.rename(columns={c: 'RSI' for c in df.columns if c.upper() == 'RSI'}, inplace=True)
+    if 'DATE' in upper_cols and 'Date' not in df.columns:
+         df.rename(columns={c: 'Date' for c in df.columns if c.upper() == 'DATE'}, inplace=True)
+         
+    # ----------------------------------------
 
-    rsi = df['RSI'].values
-    dates = df['Date'].values if 'Date' in df.columns else df.index.values
+    # 1. Setup Data Arrays
+    try:
+        if price_source == 'Close':
+            price_high = df['Close'].values
+            price_low = df['Close'].values
+        else:
+            # Fallback to Close if High/Low missing
+            price_high = df['High'].values if 'High' in df.columns else df['Close'].values
+            price_low = df['Low'].values if 'Low' in df.columns else df['Close'].values
+
+        rsi = df['RSI'].values
+        dates = df['Date'].values if 'Date' in df.columns else df.index.values
+    except KeyError as e:
+        # If we still fail, return empty list so the app doesn't crash
+        return []
     
     # 2. Find Peaks/Valleys
-    # FIX: argrelextrema requires order >= 1. We force at least 1 even if user inputs 0.
     safe_order = max(1, int(min_n))
     
     peaks = argrelextrema(rsi, np.greater, order=safe_order)[0]
@@ -432,24 +460,19 @@ def find_divergences(df, ticker, timeframe, min_n=1, periods_input=None, lookbac
     
     results = []
     
-    # Helper: Strict 50-Cross Check (Only for Standard Divs)
+    # Helper: Strict 50-Cross Check
     def check_strict(idx_start, idx_end, is_bullish):
         if idx_end - idx_start <= 1: return True
         mid_rsi = rsi[idx_start+1 : idx_end]
         if len(mid_rsi) == 0: return True
         
-        # Bullish Standard: RSI should ideally NOT cross above 50
         if is_bullish: return not (mid_rsi > 50).any()
-        # Bearish Standard: RSI should ideally NOT cross below 50
         else: return not (mid_rsi < 50).any()
 
     # --- 3. Scan Bullish Divergences (Valleys) ---
     if len(valleys) >= 2:
         for i in range(len(valleys)-1, 0, -1):
             idx_curr = valleys[i]
-            
-            # Optimization: Skip old signals early if we only want recent ones
-            # (Note: We still scan history for the 'History' tab, so we filter Is_Recent at end)
             
             for j in range(i-1, -1, -1):
                 idx_prev = valleys[j]
@@ -462,18 +485,17 @@ def find_divergences(df, ticker, timeframe, min_n=1, periods_input=None, lookbac
                     
                 div_type_found = None
                 
-                # A) STANDARD BULLISH: Lower Low Price + Higher Low RSI
+                # A) STANDARD BULLISH
                 if p_curr < p_prev and rsi_curr > rsi_prev:
                     if "Standard" in mode or mode == "Both":
                         div_type_found = "Bullish (Standard)"
 
-                # B) HIDDEN BULLISH: Higher Low Price + Lower Low RSI
+                # B) HIDDEN BULLISH
                 elif p_curr > p_prev and rsi_curr < rsi_prev:
                     if "Hidden" in mode or mode == "Both":
                         div_type_found = "Bullish (Hidden)"
                 
                 if div_type_found:
-                    # FIX: Only apply strict validation to STANDARD divergences
                     if strict_validation and "Standard" in div_type_found:
                         if not check_strict(idx_prev, idx_curr, is_bullish=True):
                             continue
@@ -511,18 +533,17 @@ def find_divergences(df, ticker, timeframe, min_n=1, periods_input=None, lookbac
 
                 div_type_found = None
 
-                # A) STANDARD BEARISH: Higher High Price + Lower High RSI
+                # A) STANDARD BEARISH
                 if p_curr > p_prev and rsi_curr < rsi_prev:
                     if "Standard" in mode or mode == "Both":
                         div_type_found = "Bearish (Standard)"
 
-                # B) HIDDEN BEARISH: Lower High Price + Higher High RSI
+                # B) HIDDEN BEARISH
                 elif p_curr < p_prev and rsi_curr > rsi_prev:
                     if "Hidden" in mode or mode == "Both":
                         div_type_found = "Bearish (Hidden)"
                 
                 if div_type_found:
-                    # FIX: Only apply strict validation to STANDARD divergences
                     if strict_validation and "Standard" in div_type_found:
                         if not check_strict(idx_prev, idx_curr, is_bullish=False):
                             continue
@@ -544,7 +565,7 @@ def find_divergences(df, ticker, timeframe, min_n=1, periods_input=None, lookbac
                     })
                     break
 
-    # Calculate Forward Returns (If periods provided)
+    # Calculate Forward Returns
     if periods_input and results:
         closes = df['Close'].values
         max_idx = len(closes) - 1
