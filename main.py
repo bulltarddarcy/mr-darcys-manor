@@ -1233,12 +1233,12 @@ def run_rsi_scanner_app(df_global):
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=20, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=10.0, value=2.0, step=0.5, help="Search for RSI +/- this value.")
             
-            st.markdown("#### ⚙️ Strategy Logic")
-            # De-duping logic to prevent counting the same crash 5 times
-            dedupe_signals = st.checkbox("De-dupe Signals", value=True, help="If Checked (Recommended): Simulates 'One Trade at a Time'.\nIf Unchecked: Counts EVERY signal day as a new trade (can inflate stats during crashes).")
+            # De-duping logic moved here as dropdown
+            dedupe_str = st.selectbox("De-dupe Signals", ["Yes", "No"], index=0, help="If Yes (Recommended): Simulates 'One Trade at a Time'. If you buy on Day 1 for a 21-day hold, ignores all other signals until Day 22.\n\nIf No: Counts EVERY signal day as a new trade (can inflate stats during crashes).")
+            dedupe_signals = (dedupe_str == "Yes")
             
         with c_right:
-            # Placeholder to keep layout alignment if needed, or leave empty
+            # Placeholder to keep layout alignment
             st.write("")
 
         st.divider()
@@ -1292,7 +1292,7 @@ def run_rsi_scanner_app(df_global):
                     rsi_rank = (df['RSI'] < current_rsi).mean() * 100
 
                     # --- DISPLAY ---
-                    st.subheader(f"📊 Analysis: {ticker}") # Removed redundant (RSI xx.x)
+                    st.subheader(f"📊 Analysis: {ticker}")
                     sc1, sc2, sc3, sc4 = st.columns(4)
                     sc1.metric("Current Price", f"${current_row[close_col]:.2f}")
                     sc2.metric("Current RSI", f"{current_rsi:.1f}")
