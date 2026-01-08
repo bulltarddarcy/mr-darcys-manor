@@ -1209,28 +1209,40 @@ def run_rsi_scanner_app(df_global):
         
         with c_left:
             st.markdown("#### 1. Asset & Scope")
-            ticker = st.text_input("Ticker", value="NVDA", key="rsi_bt_ticker_input").strip().upper()
+            ticker = st.text_input("Ticker", value="NFLX", key="rsi_bt_ticker_input").strip().upper()
             lookback_years = st.number_input("Lookback Years", min_value=1, max_value=20, value=10)
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=10.0, value=2.0, step=0.5, help="Search for RSI +/- this value.")
             
         with c_right:
             st.markdown("#### 2. Contextual Filters")
-            f_c1, f_c2 = st.columns(2)
+            
+            # Helper to create the split UI (Mode | Value)
+            def filter_ui(label, key_prefix, default_mode="Above"):
+                c1, c2 = st.columns([1, 1.5])
+                with c1:
+                    mode = st.selectbox(f"{label} Mode", ["Above", "Below"], index=0 if default_mode=="Above" else 1, key=f"{key_prefix}_mode", label_visibility="collapsed")
+                with c2:
+                    val = st.number_input(f"{label} %", min_value=0.0, value=0.0, step=0.5, format="%.1f", key=f"{key_prefix}_val", label_visibility="collapsed")
+                return mode, val
+
+            f_c1, f_c2 = st.columns(2, gap="medium")
+            
             with f_c1:
-                # Technical Filters (Merged Input)
-                f_sma200 = st.number_input("Price vs 200 SMA (%)", value=0.0, step=1.0, format="%.1f", 
-                                           help="Positive (e.g. 5.0) = Price > 5% ABOVE SMA.\nNegative (e.g. -5.0) = Price > 5% BELOW SMA.\nTip: Enter 0.1 for simple 'Above' or -0.1 for simple 'Below'.")
-                f_sma50 = st.number_input("Price vs 50 SMA (%)", value=0.0, step=1.0, format="%.1f",
-                                          help="Positive (e.g. 5.0) = Price > 5% ABOVE SMA.\nNegative (e.g. -5.0) = Price > 5% BELOW SMA.\nTip: Enter 0.1 for simple 'Above' or -0.1 for simple 'Below'.")
-                vol_days_filter = st.number_input("Volume Filter (Days)", min_value=0, value=0, step=1, 
-                                                  help="0 = Disabled.\nValue (e.g. 20) = Requires Signal Day Volume > 20-Day Average Volume.")
+                st.caption("**Price vs 200 SMA**")
+                m_sma200, v_sma200 = filter_ui("SMA200", "f_sma200")
+                
+                st.caption("**Price vs 50 SMA**")
+                m_sma50, v_sma50 = filter_ui("SMA50", "f_sma50")
+
+                st.caption("**Volume Filter**")
+                vol_days_filter = st.number_input("Min Vol Days (0=Off)", min_value=0, value=0, step=1, label_visibility="collapsed", help="Requires Signal Volume > X-Day Average.")
             
             with f_c2:
-                # Regime Filters
-                f_spy_sma200 = st.number_input("SPY vs 200 SMA (%)", value=0.0, step=1.0, format="%.1f",
-                                               help="Positive (e.g. 0.1) = SPY > 200 SMA (Bull Market).\nNegative (e.g. -0.1) = SPY < 200 SMA (Bear Market).")
-                filter_vix = st.selectbox("VIX Filter", ["Any", "VIX > 20 (Fear)", "VIX < 20 (Calm)"], index=0,
-                                          help="Filter signals based on the VIX (Volatility Index) level.")
+                st.caption("**SPY vs 200 SMA (Regime)**")
+                m_spy, v_spy = filter_ui("SPY", "f_spy")
+                
+                st.caption("**VIX Filter**")
+                filter_vix = st.selectbox("VIX Level", ["Any", "VIX > 20 (Fear)", "VIX < 20 (Calm)"], index=0, label_visibility="collapsed")
 
         st.divider()
         
@@ -1246,11 +1258,11 @@ def run_rsi_scanner_app(df_global):
             df_spy = None
             df_vix = None
             
-            # Fetch SPY if filter is NOT 0
-            if f_spy_sma200 != 0:
-                df_spy = fetch_yahoo_data("SPY")
-                if df_spy is not None:
-                    df_spy['SPY_SMA200'] = df_spy['Close'].rolling(200).mean()
+            # Fetch SPY (Always fetch to check filters, unless logic allows skipping)
+            # Simplest is to fetch if we are using it
+            df_spy = fetch_yahoo_data("SPY")
+            if df_spy is not None:
+                df_spy['SPY_SMA200'] = df_spy['Close'].rolling(200).mean()
                     
             if filter_vix != "Any":
                 df_vix = fetch_yahoo_data("^VIX")
@@ -1303,31 +1315,30 @@ def run_rsi_scanner_app(df_global):
                 current_rsi = current_row['RSI']
                 rsi_min, rsi_max = current_rsi - rsi_tol, current_rsi + rsi_tol
                 
+                # Helper for Split UI logic
+                def apply_split_filter(series_price, series_ma, mode, pct_val):
+                    # Value 0 + Above -> Price > SMA
+                    # Value 5 + Above -> Price > SMA * 1.05
+                    # Value 5 + Below -> Price < SMA * 0.95
+                    if mode == "Above":
+                        return series_price > (series_ma * (1 + pct_val/100.0))
+                    else: # Below
+                        return series_price < (series_ma * (1 - pct_val/100.0))
+
                 # Base Filter: RSI Range
                 mask = (df['RSI'] >= rsi_min) & (df['RSI'] <= rsi_max)
-                
-                # Helper for % logic
-                def apply_pct_filter(series_price, series_ma, threshold):
-                    if threshold > 0:
-                        # Price > SMA * (1 + 5/100) -> Price > SMA * 1.05
-                        return series_price > (series_ma * (1 + threshold/100.0))
-                    elif threshold < 0:
-                        # Price < SMA * (1 - 5/100) -> Price < SMA * 0.95
-                        # Note: User inputs -5 for "Below by 5%". 
-                        return series_price < (series_ma * (1 + threshold/100.0))
-                    return True # Disabled
 
                 # Tech Filters
-                if f_sma200 != 0: mask &= apply_pct_filter(df[close_col], df['SMA200'], f_sma200)
-                if f_sma50 != 0:  mask &= apply_pct_filter(df[close_col], df['SMA50'], f_sma50)
+                mask &= apply_split_filter(df[close_col], df['SMA200'], m_sma200, v_sma200)
+                mask &= apply_split_filter(df[close_col], df['SMA50'], m_sma50, v_sma50)
                 
                 # Volume Filter
                 if vol_days_filter > 0:
                      mask &= (df[vol_col] > df['Vol_Avg_User'])
                 
                 # Regime Filters
-                if df_spy is not None and f_spy_sma200 != 0:
-                    mask &= apply_pct_filter(df['SPY_Close'], df['SPY_SMA200'], f_spy_sma200)
+                if df_spy is not None:
+                    mask &= apply_split_filter(df['SPY_Close'], df['SPY_SMA200'], m_spy, v_spy)
                     
                 if df_vix is not None:
                     if filter_vix == "VIX > 20 (Fear)": mask &= (df['VIX_Close'] > 20)
