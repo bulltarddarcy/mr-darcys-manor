@@ -405,7 +405,7 @@ def get_stock_indicators(sym: str):
 def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, optimize_for='PF', lookback_period=90, price_source='High/Low', strict_validation=True, recent_days_filter=25, rsi_diff_threshold=2.0, div_mode='Regular'):
     """
     Identifies Regular (Reversal) and Hidden (Continuation) divergences.
-    div_mode: 'Regular', 'Hidden', or 'Both'.
+    Strict Validation is ONLY applied to Regular Divergences.
     """
     divergences = []
     n_rows = len(df_tf)
@@ -436,14 +436,12 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
     l = pd.Series(low_vals)
     h = pd.Series(high_vals)
     
-    # 5-bar swing (2 left, 2 right) to confirm local structure
     is_swing_low = (l < l.shift(1)) & (l < l.shift(2)) & (l < l.shift(-1)) & (l < l.shift(-2))
     is_swing_high = (h > h.shift(1)) & (h > h.shift(2)) & (h > h.shift(-1)) & (h > h.shift(-2))
     
     pivot_low_indices = np.where(is_swing_low)[0]
     pivot_high_indices = np.where(is_swing_high)[0]
     
-    # Filter valid range
     pivot_low_indices = pivot_low_indices[pivot_low_indices > lookback_period]
     pivot_high_indices = pivot_high_indices[pivot_high_indices > lookback_period]
 
@@ -469,14 +467,13 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         # [REGULAR BULLISH] Price Lower Low, RSI Higher Low
         if div_mode in ['Regular', 'Both']:
             min_price_in_window = np.min(lb_price)
-            # Is current pivot a New Price Low?
             if p2_price < min_price_in_window: 
-                # Compare to the RSI at that previous Price Low
                 p1_price_idx_rel = np.argmin(lb_price)
                 p1_price_idx_abs = lb_start + p1_price_idx_rel
                 p1_rsi_at_price_low = rsi_vals[p1_price_idx_abs]
                 
                 if p2_rsi > (p1_rsi_at_price_low + rsi_diff_threshold):
+                    # STRICT: RSI should not cross 50 between pivots for Regular Bull
                     subset_rsi = rsi_vals[p1_price_idx_abs : i + 1]
                     valid = not (strict_validation and np.any(subset_rsi > 50))
                     
@@ -486,17 +483,11 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
 
         # [HIDDEN BULLISH] Price Higher Low, RSI Lower Low
         if div_mode in ['Hidden', 'Both']:
-            # P1 is the Lowest RSI point. 
-            # Condition 1: RSI is making a Lower Low (P2 < P1)
             if p2_rsi < (p1_rsi - rsi_diff_threshold):
-                # Condition 2: Price is making a Higher Low (P2 > P1)
                 if p2_price > p1_price:
-                    # Optional: Ensure P1 was a significant low area
-                    valid = not (strict_validation and np.any(rsi_vals[p1_idx_abs:i] > 60)) 
-                    
-                    if valid:
-                        is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
-                        potential_signals.append({"index": i, "type": "Hid Bull", "p1_idx": p1_idx_abs, "vol_high": is_vol_high})
+                    # STRICT: Disabled for Hidden (Trend must cross 50)
+                    is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
+                    potential_signals.append({"index": i, "type": "Hid Bull", "p1_idx": p1_idx_abs, "vol_high": is_vol_high})
 
     # 2B. Bearish Scans (Swing Highs)
     for i in pivot_high_indices:
@@ -518,14 +509,13 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         # [REGULAR BEARISH] Price Higher High, RSI Lower High
         if div_mode in ['Regular', 'Both']:
             max_price_in_window = np.max(lb_price)
-            # Is current pivot a New Price High?
             if p2_price > max_price_in_window: 
-                # Compare to RSI at previous Price High
                 p1_price_idx_rel = np.argmax(lb_price)
                 p1_price_idx_abs = lb_start + p1_price_idx_rel
                 p1_rsi_at_price_high = rsi_vals[p1_price_idx_abs]
                 
                 if p2_rsi < (p1_rsi_at_price_high - rsi_diff_threshold):
+                    # STRICT: RSI should not cross 50 between pivots for Regular Bear
                     subset_rsi = rsi_vals[p1_price_idx_abs : i + 1]
                     valid = not (strict_validation and np.any(subset_rsi < 50))
                     
@@ -535,15 +525,11 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
 
         # [HIDDEN BEARISH] Price Lower High, RSI Higher High
         if div_mode in ['Hidden', 'Both']:
-            # P1 is Highest RSI.
-            # Condition 1: RSI Higher High (P2 > P1)
             if p2_rsi > (p1_rsi + rsi_diff_threshold): 
-                # Condition 2: Price Lower High (P2 < P1)
                 if p2_price < p1_price: 
-                    valid = not (strict_validation and np.any(rsi_vals[p1_idx_abs:i] < 40))
-                    if valid:
-                        is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
-                        potential_signals.append({"index": i, "type": "Hid Bear", "p1_idx": p1_idx_abs, "vol_high": is_vol_high})
+                    # STRICT: Disabled for Hidden (Trend must cross 50)
+                    is_vol_high = int(p2_vol > (p2_volsma * 1.5)) if not np.isnan(p2_volsma) else 0
+                    potential_signals.append({"index": i, "type": "Hid Bear", "p1_idx": p1_idx_abs, "vol_high": is_vol_high})
 
     # --- PASS 3: REPORT & METRICS ---
     display_threshold_idx = n_rows - recent_days_filter
@@ -551,7 +537,6 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
     bull_types = ['Reg Bull', 'Hid Bull']
     bear_types = ['Reg Bear', 'Hid Bear']
     
-    # Pre-calc lists for optimization
     bullish_indices = [x['index'] for x in potential_signals if x['type'] in bull_types]
     bearish_indices = [x['index'] for x in potential_signals if x['type'] in bear_types]
 
@@ -647,7 +632,6 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         divergences.append(div_obj)
             
     return divergences
-
 
 def prepare_data(df):
     # Standardize column names (removes spaces, dashes, converts to UPPER)
