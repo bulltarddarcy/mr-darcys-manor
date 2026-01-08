@@ -1204,8 +1204,6 @@ def run_rsi_scanner_app(df_global):
     # TAB 1: CONTEXTUAL BACKTESTER
     # --------------------------------------------------------------------------
     with tab_bot:
-        st.markdown('<div class="light-note">Now features <b>Market Regime</b> filters, <b>Auto-Optimized Entry</b> strategies, and <b>Historical Percentile</b> ranking.</div>', unsafe_allow_html=True)
-        
         # --- LAYOUT: INPUTS ---
         c_left, c_right = st.columns([1, 2.5])
         
@@ -1216,16 +1214,16 @@ def run_rsi_scanner_app(df_global):
             rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=10.0, value=2.0, step=0.5, help="Search for RSI +/- this value.")
             
         with c_right:
-            st.markdown("#### 2. Contextual Filters (The 'Edge')")
+            st.markdown("#### 2. Contextual Filters")
             f_c1, f_c2 = st.columns(2)
             with f_c1:
-                st.caption("Technical Condition")
+                # Technical Filters
                 filter_ma_200 = st.selectbox("Price vs 200 SMA", ["Any", "Above", "Below"], index=0)
                 filter_ma_50 = st.selectbox("Price vs 50 SMA", ["Any", "Above", "Below", "Below by > 5%"], index=0)
-                filter_vol = st.checkbox("Volume > 20d Avg", value=False, help="Only take trades on above-average volume (Capitulation).")
+                vol_days_filter = st.number_input("Volume Filter (Days)", min_value=0, value=0, step=1, help="If > 0, requires Current Volume > X-Day Average Volume. Set to 0 to disable.")
             
             with f_c2:
-                st.caption("Market Regime (SPY)")
+                # Regime Filters
                 filter_spy_200 = st.selectbox("SPY Trend (200 SMA)", ["Any", "Bull (Above)", "Bear (Below)"], index=0)
                 filter_vix = st.selectbox("VIX Filter", ["Any", "VIX > 20 (Fear)", "VIX < 20 (Calm)"], index=0)
 
@@ -1276,7 +1274,10 @@ def run_rsi_scanner_app(df_global):
                 # Calc MAs for Filters
                 df['SMA50'] = df[close_col].rolling(50).mean()
                 df['SMA200'] = df[close_col].rolling(200).mean()
-                df['Vol20'] = df[vol_col].rolling(20).mean()
+                
+                # Dynamic Volume Filter Calculation
+                if vol_days_filter > 0:
+                    df['Vol_Avg_User'] = df[vol_col].rolling(vol_days_filter).mean()
                 
                 # Trim to Lookback
                 cutoff_date = df[date_col].max() - timedelta(days=365*lookback_years)
@@ -1307,7 +1308,9 @@ def run_rsi_scanner_app(df_global):
                 elif filter_ma_50 == "Below": mask &= (df[close_col] < df['SMA50'])
                 elif filter_ma_50 == "Below by > 5%": mask &= (df[close_col] < (df['SMA50'] * 0.95))
                 
-                if filter_vol: mask &= (df[vol_col] > df['Vol20'])
+                # Volume Filter
+                if vol_days_filter > 0:
+                     mask &= (df[vol_col] > df['Vol_Avg_User'])
                 
                 # Regime Filters
                 if df_spy is not None:
@@ -1322,7 +1325,6 @@ def run_rsi_scanner_app(df_global):
                 matches = df.iloc[:-1][mask[:-1]].copy()
                 
                 # --- CALC PERCENTILE RANK ---
-                # "What % of history is lower than current RSI?"
                 rsi_rank = (df['RSI'] < current_rsi).mean() * 100
 
                 # --- DISPLAY CURRENT STATS ---
@@ -1330,7 +1332,7 @@ def run_rsi_scanner_app(df_global):
                 sc1, sc2, sc3, sc4 = st.columns(4)
                 sc1.metric("Current Price", f"${current_row[close_col]:.2f}")
                 sc2.metric("Current RSI", f"{current_rsi:.1f}")
-                sc3.metric("RSI Hist. Rank", f"{rsi_rank:.1f}%", help=f"The current RSI is higher than {rsi_rank:.1f}% of all trading days in the last {lookback_years} years.")
+                sc3.metric("RSI Hist. Rank", f"{rsi_rank:.1f}%", help=f"Percentile Rank: Bottom {rsi_rank:.1f}%. This means current RSI is lower than {100-rsi_rank:.1f}% of history.")
                 sc4.metric("Matches Found", f"{len(matches)}", f"in last {lookback_years}y")
                 
                 if not matches.empty:
@@ -1340,7 +1342,8 @@ def run_rsi_scanner_app(df_global):
                     total_len = len(full_closes)
                     
                     results = []
-                    periods = [5, 10, 21, 42, 63, 126]
+                    # Added 252 back
+                    periods = [5, 10, 21, 42, 63, 126, 252]
                     
                     # Spinner for optimization
                     with st.spinner("Optimizing entry strategies..."):
@@ -1416,7 +1419,8 @@ def run_rsi_scanner_app(df_global):
                                 "Best EV": best_dca_ev,
                                 "Avg DD": np.mean(dd_arr),
                                 "Median DD": np.median(dd_arr),
-                                "Max DD": np.min(dd_arr) # Min of negative numbers = Max Drawdown
+                                "Min DD": np.max(dd_arr), # Max of negative numbers is the number closest to 0 (Smallest DD)
+                                "Max DD": np.min(dd_arr)  # Min of negative numbers is the largest magnitude (Worst DD)
                             }
                             results.append(res)
                             
@@ -1436,16 +1440,21 @@ def run_rsi_scanner_app(df_global):
                         .format({
                             "Lump EV": "{:+.2f}%", "Lump WR": "{:.1f}%",
                             "Best EV": "{:+.2f}%",
-                            "Avg DD": "{:.1f}%", "Median DD": "{:.1f}%", "Max DD": "{:.1f}%"
+                            "Avg DD": "{:.1f}%", "Median DD": "{:.1f}%", 
+                            "Min DD": "{:.1f}%", "Max DD": "{:.1f}%"
                         })
                         .map(color_ev, subset=["Lump EV", "Best EV"])
                         .map(color_dd, subset=["Max DD", "Avg DD"]),
                         column_config={
-                            "Days": st.column_config.NumberColumn("Hold Period", help="Trading Days held"),
-                            "Lump EV": st.column_config.NumberColumn("Lump Sum EV", help="Avg Return if bought 100% on signal day."),
-                            "Best Strategy": st.column_config.TextColumn("Optimal Entry", help="The entry method (Lump Sum vs DCA) that produced the highest historical return."),
-                            "Best EV": st.column_config.NumberColumn("Optimized EV", help="The return generated by the Optimal Entry strategy."),
-                            "Max DD": st.column_config.NumberColumn("Max Drawdown", help="Worst case drawdown experienced in history."),
+                            "Days": st.column_config.NumberColumn("Hold Period", help="Number of trading days the position is held."),
+                            "Lump EV": st.column_config.NumberColumn("Lump Sum EV", help="Expected Value (Avg Return) if entering 100% on the signal day. Formula: Mean(Returns)."),
+                            "Lump WR": st.column_config.NumberColumn("Lump WR", help="Win Rate: Percentage of trades that ended profitable. Formula: (Wins / Total) * 100."),
+                            "Best Strategy": st.column_config.TextColumn("Optimal Entry", help="The specific entry method (Lump Sum vs 2-10 Day DCA) that yielded the highest historical return."),
+                            "Best EV": st.column_config.NumberColumn("Optimized EV", help="The average return produced by the 'Optimal Entry' strategy."),
+                            "Avg DD": st.column_config.NumberColumn("Avg Drawdown", help="The average peak-to-trough price drop experienced during the trade."),
+                            "Median DD": st.column_config.NumberColumn("Median Drawdown", help="The middle value of all drawdowns (typical pain)."),
+                            "Min DD": st.column_config.NumberColumn("Min Drawdown", help="The smallest (best case) drawdown experienced in history."),
+                            "Max DD": st.column_config.NumberColumn("Max Drawdown", help="The largest (worst case) peak-to-trough drop experienced in history."),
                         },
                         use_container_width=True,
                         hide_index=True,
