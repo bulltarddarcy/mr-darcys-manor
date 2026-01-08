@@ -402,6 +402,10 @@ def get_stock_indicators(sym: str):
     except: 
         return None, None, None, None, None
 
+import numpy as np
+import pandas as pd
+from scipy.signal import argrelextrema
+
 def find_divergences(df, ticker, timeframe, min_n=1, periods_input=None, lookback_period=60, 
                      price_source='High/Low', strict_validation=True, recent_days_filter=30, 
                      rsi_diff_threshold=1.0, optimize_for='PF', mode="Standard (Reversal)"):
@@ -413,14 +417,10 @@ def find_divergences(df, ticker, timeframe, min_n=1, periods_input=None, lookbac
         return []
 
     # --- FIX: COLUMN NAME NORMALIZATION ---
-    # Create a copy to avoid SettingWithCopy warnings on the original df
+    # Create a copy to avoid SettingWithCopy warnings
     df = df.copy()
     
-    # Map common variations to standard Title Case for internal logic
-    col_map = {c: c.title() for c in df.columns} # e.g. 'CLOSE' -> 'Close', 'rsi' -> 'Rsi'
-    
-    # Explicitly fix the specific ones we need if they exist in uppercase
-    # This handles 'CLOSE', 'HIGH', 'LOW', 'RSI', 'DATE'
+    # Explicitly fix specific columns if they exist in uppercase
     upper_cols = [c.upper() for c in df.columns]
     
     if 'CLOSE' in upper_cols and 'Close' not in df.columns:
@@ -429,11 +429,10 @@ def find_divergences(df, ticker, timeframe, min_n=1, periods_input=None, lookbac
         df.rename(columns={c: 'High' for c in df.columns if c.upper() == 'HIGH'}, inplace=True)
     if 'LOW' in upper_cols and 'Low' not in df.columns:
         df.rename(columns={c: 'Low' for c in df.columns if c.upper() == 'LOW'}, inplace=True)
-    if 'RSI' in upper_cols and 'RSI' not in df.columns: # Keep RSI uppercase if you prefer, or normalize
+    if 'RSI' in upper_cols and 'RSI' not in df.columns:
          df.rename(columns={c: 'RSI' for c in df.columns if c.upper() == 'RSI'}, inplace=True)
     if 'DATE' in upper_cols and 'Date' not in df.columns:
          df.rename(columns={c: 'Date' for c in df.columns if c.upper() == 'DATE'}, inplace=True)
-         
     # ----------------------------------------
 
     # 1. Setup Data Arrays
@@ -448,8 +447,8 @@ def find_divergences(df, ticker, timeframe, min_n=1, periods_input=None, lookbac
 
         rsi = df['RSI'].values
         dates = df['Date'].values if 'Date' in df.columns else df.index.values
-    except KeyError as e:
-        # If we still fail, return empty list so the app doesn't crash
+    except KeyError:
+        # If columns are still missing after normalization, return empty to prevent crash
         return []
     
     # 2. Find Peaks/Valleys
