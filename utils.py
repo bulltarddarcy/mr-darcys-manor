@@ -825,7 +825,7 @@ def analyze_trade_setup(ticker, t_df, global_df):
     
     return score, reasons, suggestions
 
-@st.cache_data(ttl=86400) # Cache for 24 hours
+@st.cache_data(ttl=43200) # Cache for 12 hours
 def get_market_cap(symbol: str) -> float:
     try:
         t = yf.Ticker(symbol)
