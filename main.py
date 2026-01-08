@@ -926,7 +926,6 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             
     return divergences
 
-
 def run_rsi_scanner_app(df_global):
     st.title("🤖 RSI Scanner")
 
