@@ -633,6 +633,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
             
     return divergences
 
+
 def prepare_data(df):
     # Standardize column names (removes spaces, dashes, converts to UPPER)
     df.columns = [col.strip().replace(' ', '').replace('-', '').upper() for col in df.columns]
