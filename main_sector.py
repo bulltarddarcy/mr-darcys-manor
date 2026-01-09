@@ -17,7 +17,7 @@ def get_ma_signal(price, ma_val):
 def run_sector_rotation_app(df_global=None):
     st.title("🔄 Sector Rotation")
     
-    st.error("🚧 **UNDER CONSTRUCTION** 🚧: This page is currently being optimized for faster performance.")
+    st.error("🚧 **UNDER CONSTRUCTION** 🚧: Don't use it now.")
 
     # 0. Benchmark Control (Session State)
     if "sector_benchmark" not in st.session_state: st.session_state.sector_benchmark = "SPY"
