@@ -21,7 +21,6 @@ def get_gdrive_binary_data(url):
             match = re.search(r'id=([a-zA-Z0-9_-]{25,})', url)
             
         if not match:
-            # It might be a direct link or invalid; return None or let caller handle
             return None
             
         file_id = match.group(1)
@@ -30,16 +29,18 @@ def get_gdrive_binary_data(url):
         # 2. First Attempt (Using Global Session)
         response = GLOBAL_SESSION.get(download_url, params={'id': file_id}, stream=True, timeout=30)
         
-        # 3. Check for "Virus Scan" HTML Page
+        # 3. Check for "Virus Scan" HTML Page (File > 100MB)
         if "text/html" in response.headers.get("Content-Type", "").lower():
             content = response.text
-            token_match = re.search(r'confirm=([a-zA-Z0-9_]+)', content)
+            # FIX: Added '-' to regex to capture full token
+            token_match = re.search(r'confirm=([a-zA-Z0-9_-]+)', content)
             
             if token_match:
                 token = token_match.group(1)
                 params = {'id': file_id, 'confirm': token}
                 response = GLOBAL_SESSION.get(download_url, params=params, stream=True, timeout=30)
             else:
+                # Fallback: Check cookies for confirmation warning
                 for key, value in GLOBAL_SESSION.cookies.items():
                     if key.startswith('download_warning'):
                         params = {'id': file_id, 'confirm': value}
