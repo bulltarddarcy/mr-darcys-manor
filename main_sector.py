@@ -133,42 +133,41 @@ def run_sector_rotation_app(df_global=None):
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
     view_key = timeframe_map[st.session_state.sector_view]
 
-    # 4. Filters & Momentum (Consolidated "Sidebar" content)
-    with st.expander("⚙️ Filters & Momentum Signals", expanded=False):
-        f_col1, f_col2 = st.columns([1, 2])
-        
-        with f_col1:
-            st.caption("Select Themes to Chart:")
-            all_themes = sorted(list(theme_map.keys()))
-            sel_themes = st.multiselect("Themes", all_themes, default=all_themes, key="sector_theme_filter", label_visibility="collapsed")
-            filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
+    # 4. Filters & Momentum (Visible directly on page)
+    f_col1, f_col2 = st.columns([1, 2])
+    
+    with f_col1:
+        st.caption("Select Themes to Chart:")
+        all_themes = sorted(list(theme_map.keys()))
+        sel_themes = st.multiselect("Themes", all_themes, default=all_themes, key="sector_theme_filter", label_visibility="collapsed")
+        filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
 
-        with f_col2:
-            st.caption("Momentum Scans:")
-            inc_mom, neut_mom, dec_mom = [], [], []
-            for theme, ticker in theme_map.items():
-                df = dm.load_ticker_data(ticker)
-                if df is None or df.empty or "RRG_Mom_Short" not in df.columns: continue
-                last = df.iloc[-1]
-                m5, m10, m20 = last.get("RRG_Mom_Short",0), last.get("RRG_Mom_Med",0), last.get("RRG_Mom_Long",0)
-                setup = classify_setup(df)
-                icon = setup.split()[0] if setup else ""
-                item = {"theme": theme, "shift": m5-m20, "icon": icon}
-                if m5 > m10 > m20: inc_mom.append(item)
-                elif m5 < m10 < m20: dec_mom.append(item)
-                else: neut_mom.append(item)
+    with f_col2:
+        st.caption("Momentum Scans:")
+        inc_mom, neut_mom, dec_mom = [], [], []
+        for theme, ticker in theme_map.items():
+            df = dm.load_ticker_data(ticker)
+            if df is None or df.empty or "RRG_Mom_Short" not in df.columns: continue
+            last = df.iloc[-1]
+            m5, m10, m20 = last.get("RRG_Mom_Short",0), last.get("RRG_Mom_Med",0), last.get("RRG_Mom_Long",0)
+            setup = classify_setup(df)
+            icon = setup.split()[0] if setup else ""
+            item = {"theme": theme, "shift": m5-m20, "icon": icon}
+            if m5 > m10 > m20: inc_mom.append(item)
+            elif m5 < m10 < m20: dec_mom.append(item)
+            else: neut_mom.append(item)
 
-            inc_mom.sort(key=lambda x: x['shift'], reverse=True)
-            cols_mom = st.columns(3)
-            with cols_mom[0]: 
-                st.markdown(f"**📈 Rising ({len(inc_mom)})**")
-                for i in inc_mom[:5]: st.caption(f"{i['theme']} {i['icon']}")
-            with cols_mom[1]:
-                st.markdown(f"**🔻 Falling ({len(dec_mom)})**")
-                for i in dec_mom[:5]: st.caption(f"{i['theme']} {i['icon']}")
-            with cols_mom[2]:
-                st.markdown("**🔑 Key**")
-                st.caption("🪝 J-Hook | 🚩 Flag | 🚀 Rocket")
+        inc_mom.sort(key=lambda x: x['shift'], reverse=True)
+        cols_mom = st.columns(3)
+        with cols_mom[0]: 
+            st.markdown(f"**📈 Rising ({len(inc_mom)})**")
+            for i in inc_mom[:5]: st.caption(f"{i['theme']} {i['icon']}")
+        with cols_mom[1]:
+            st.markdown(f"**🔻 Falling ({len(dec_mom)})**")
+            for i in dec_mom[:5]: st.caption(f"{i['theme']} {i['icon']}")
+        with cols_mom[2]:
+            st.markdown("**🔑 Key**")
+            st.caption("🪝 J-Hook | 🚩 Flag | 🚀 Rocket")
 
     st.divider()
 
@@ -230,23 +229,47 @@ def run_sector_rotation_app(df_global=None):
     stock_tickers = uni_df[(uni_df['Theme'] == st.session_state.sector_target) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
     ranking_data = []
     
+    # DEBUG COUNTERS
+    stats = {
+        "total_in_theme": len(stock_tickers),
+        "files_found": 0,
+        "passed_vol_filter": 0,
+        "missing_files": []
+    }
+    
     for stock in stock_tickers:
         sdf = dm.load_ticker_data(stock)
-        if sdf is None or sdf.empty: continue
         
-        # Volume Filter
-        if (sdf['Volume'].tail(20).mean() * sdf['Close'].tail(20).mean()) < us.MIN_DOLLAR_VOLUME: continue
+        if sdf is None or sdf.empty:
+            stats["missing_files"].append(stock)
+            continue
+            
+        stats["files_found"] += 1
         
-        last = sdf.iloc[-1]
-        ranking_data.append({
-            "Ticker": stock,
-            "Price": last['Close'],
-            "Alpha 5d": last.get("True_Alpha_Short", 0),
-            "RVOL 5d": last.get("RVOL_Short", 0),
-            "Alpha 10d": last.get("True_Alpha_Med", 0),
-            "Alpha 20d": last.get("True_Alpha_Long", 0),
-            "8 EMA": "✅" if last['Close'] > last.get('EMA_8', 0) else "❌"
-        })
+        # Volume Filter Logic
+        # Calculate recent average volume * price
+        try:
+            avg_vol = sdf['Volume'].tail(20).mean()
+            avg_price = sdf['Close'].tail(20).mean()
+            dollar_vol = avg_vol * avg_price
+            
+            if dollar_vol < us.MIN_DOLLAR_VOLUME:
+                continue
+                
+            stats["passed_vol_filter"] += 1
+            
+            last = sdf.iloc[-1]
+            ranking_data.append({
+                "Ticker": stock,
+                "Price": last['Close'],
+                "Alpha 5d": last.get("True_Alpha_Short", 0),
+                "RVOL 5d": last.get("RVOL_Short", 0),
+                "Alpha 10d": last.get("True_Alpha_Med", 0),
+                "Alpha 20d": last.get("True_Alpha_Long", 0),
+                "8 EMA": "✅" if last['Close'] > last.get('EMA_8', 0) else "❌"
+            })
+        except Exception:
+            continue
 
     if ranking_data:
         df_disp = pd.DataFrame(ranking_data).sort_values(by='Alpha 5d', ascending=False)
@@ -264,4 +287,17 @@ def run_sector_rotation_app(df_global=None):
             column_config={"Ticker": st.column_config.TextColumn("Ticker"), "8 EMA": st.column_config.TextColumn("8 EMA", width="small")}
         )
     else:
-        st.info("No stocks found or data missing. Try updating data.")
+        # DIAGNOSTIC MESSAGE IF EMPTY
+        st.error(f"⚠️ No stocks displayed for {st.session_state.sector_target}.")
+        st.caption(f"**Diagnostics:**")
+        st.caption(f"• Stocks listed in Universe CSV: {stats['total_in_theme']}")
+        st.caption(f"• Data files found on disk: {stats['files_found']}")
+        st.caption(f"• Stocks passed Volume Filter (>${us.MIN_DOLLAR_VOLUME/1_000_000:.1f}M): {stats['passed_vol_filter']}")
+        
+        if len(stats["missing_files"]) > 0:
+            st.caption(f"• **Missing Files:** {', '.join(stats['missing_files'][:10])}...")
+        
+        if stats['files_found'] == 0:
+            st.warning("👉 Suggestion: Click 'Update Data' to download price history.")
+        elif stats['passed_vol_filter'] == 0:
+            st.warning("👉 Suggestion: All stocks were filtered out due to low dollar volume.")
