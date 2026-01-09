@@ -108,22 +108,59 @@ def run_sector_rotation_app(df_global=None):
         st.warning("⚠️ SECTOR_UNIVERSE secret is missing or empty.")
         return
 
+    # --- GUIDES (EXPANDERS) ---
+    # Note: Copy your original text into these strings
+    with st.expander("📚 Page Information & User Guide", expanded=False):
+        st.write("This tool helps visualize the rotation of capital between different sectors and themes using Relative Rotation Graphs (RRG).")
+        st.write("• **X-Axis (Relative Trend):** Measures the relative strength of the trend compared to SPY.")
+        st.write("• **Y-Axis (Relative Momentum):** Measures the rate of change of that relative strength.")
+    
+    with st.expander("🔑 View Setup Key", expanded=False):
+        st.write("• **Leading (Green):** Strong Trend + Strong Momentum. Best for holding.")
+        st.write("• **Weakening (Yellow):** Strong Trend + Weak Momentum. Watch for potential pullback or reversal.")
+        st.write("• **Lagging (Red):** Weak Trend + Weak Momentum. Avoid or Short.")
+        st.write("• **Improving (Blue):** Weak Trend + Strong Momentum. Potential reversal candidates.")
+        st.write("---")
+        st.write("• **🪝 J-Hook:** Momentum turning up while still in a negative trend (Potential bottom).")
+        st.write("• **🚩 Bull Flag:** Strong trend consolidating momentum.")
+        st.write("• **🚀 Rocket:** Strong acceleration in both trend and momentum.")
+
+    with st.expander("📂 Category Guide", expanded=False):
+        st.write("**Defensive:** Utilities, Staples, Healthcare")
+        st.write("**Cyclical:** Discretionary, Materials, Industrials, Financials")
+        st.write("**Growth/Tech:** Technology, Communication Services")
+        st.write("**Sensitive:** Energy, Real Estate")
+
+    st.divider()
+
     # 2. Session State for Controls
     if "sector_view" not in st.session_state: st.session_state.sector_view = "5 Days"
     if "sector_trails" not in st.session_state: st.session_state.sector_trails = False
     if "sector_target" not in st.session_state: st.session_state.sector_target = sorted(list(theme_map.keys()))[0] if theme_map else ""
 
-    # 3. Top Controls (Timeframe & Update)
-    col_c1, col_c2, col_c3 = st.columns([2, 1, 1.5])
-    
-    with col_c1:
-        timeframe_label = st.radio("⏱️ Window", ["5 Days", "10 Days", "20 Days"], horizontal=True, key="sector_view_radio", label_visibility="collapsed")
-        st.session_state.sector_view = timeframe_label
-        
-    with col_c2:
-        st.session_state.sector_trails = st.checkbox("Trails", value=st.session_state.sector_trails)
+    # Ensure filter list is init
+    all_themes = sorted(list(theme_map.keys()))
+    if "sector_theme_filter" not in st.session_state:
+        st.session_state.sector_theme_filter = all_themes
 
-    with col_c3:
+    # 3. CONTROL SECTION
+    
+    # --- Row 1: Timeframe & Global Actions ---
+    col_time, col_btn = st.columns([2, 1])
+    with col_time:
+        st.markdown("##### ⏱️ Timeframe Window")
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.session_state.sector_view = st.radio(
+                "Window", ["5 Days", "10 Days", "20 Days"], 
+                horizontal=True, label_visibility="collapsed", key="timeframe_radio"
+            )
+        with c2:
+            st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
+            st.session_state.sector_trails = st.checkbox("Trails", value=st.session_state.sector_trails)
+
+    with col_btn:
+        st.markdown("##### Actions")
         if st.button("🔄 Update Data", use_container_width=True):
             status = st.empty()
             calc = us.SectorAlphaCalculator()
@@ -133,45 +170,74 @@ def run_sector_rotation_app(df_global=None):
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
     view_key = timeframe_map[st.session_state.sector_view]
 
-    # 4. Filters & Momentum (Visible directly on page)
-    f_col1, f_col2 = st.columns([1, 2])
+    st.markdown("---")
+
+    # --- Row 2: Sector Selection (Large Box) ---
+    st.markdown("##### Sectors Shown")
     
-    with f_col1:
-        st.caption("Select Themes to Chart:")
-        all_themes = sorted(list(theme_map.keys()))
-        sel_themes = st.multiselect("Themes", all_themes, default=all_themes, key="sector_theme_filter", label_visibility="collapsed")
-        filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
+    # Buttons for Add/Remove All
+    btn_col1, btn_col2, _ = st.columns([1, 1, 6])
+    with btn_col1:
+        if st.button("➕ Add All"):
+            st.session_state.sector_theme_filter = all_themes
+            st.rerun()
+    with btn_col2:
+        if st.button("➖ Remove All"):
+            st.session_state.sector_theme_filter = []
+            st.rerun()
+            
+    # The Multiselect
+    sel_themes = st.multiselect(
+        "Select Themes", 
+        all_themes, 
+        default=st.session_state.sector_theme_filter,
+        key="sector_theme_filter_widget", # Use a different key to avoid conflict if manual state set
+        label_visibility="collapsed"
+    )
+    
+    # Sync widget back to state if changed manually
+    st.session_state.sector_theme_filter = sel_themes
+    filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
 
-    with f_col2:
-        st.caption("Momentum Scans:")
-        inc_mom, neut_mom, dec_mom = [], [], []
-        for theme, ticker in theme_map.items():
-            df = dm.load_ticker_data(ticker)
-            if df is None or df.empty or "RRG_Mom_Short" not in df.columns: continue
-            last = df.iloc[-1]
-            m5, m10, m20 = last.get("RRG_Mom_Short",0), last.get("RRG_Mom_Med",0), last.get("RRG_Mom_Long",0)
-            setup = classify_setup(df)
-            icon = setup.split()[0] if setup else ""
-            item = {"theme": theme, "shift": m5-m20, "icon": icon}
-            if m5 > m10 > m20: inc_mom.append(item)
-            elif m5 < m10 < m20: dec_mom.append(item)
-            else: neut_mom.append(item)
+    st.markdown("---")
 
-        inc_mom.sort(key=lambda x: x['shift'], reverse=True)
-        cols_mom = st.columns(3)
-        with cols_mom[0]: 
-            st.markdown(f"**📈 Rising ({len(inc_mom)})**")
-            for i in inc_mom[:5]: st.caption(f"{i['theme']} {i['icon']}")
-        with cols_mom[1]:
-            st.markdown(f"**🔻 Falling ({len(dec_mom)})**")
-            for i in dec_mom[:5]: st.caption(f"{i['theme']} {i['icon']}")
-        with cols_mom[2]:
-            st.markdown("**🔑 Key**")
-            st.caption("🪝 J-Hook | 🚩 Flag | 🚀 Rocket")
+    # --- Row 3: Momentum Scans ---
+    st.markdown("##### Momentum Scans")
+    
+    # Calculate Momentum buckets
+    inc_mom, neut_mom, dec_mom = [], [], []
+    for theme, ticker in theme_map.items():
+        df = dm.load_ticker_data(ticker)
+        if df is None or df.empty or "RRG_Mom_Short" not in df.columns: continue
+        last = df.iloc[-1]
+        m5, m10, m20 = last.get("RRG_Mom_Short",0), last.get("RRG_Mom_Med",0), last.get("RRG_Mom_Long",0)
+        setup = classify_setup(df)
+        icon = setup.split()[0] if setup else ""
+        item = {"theme": theme, "shift": m5-m20, "icon": icon}
+        
+        # Momentum Logic
+        if m5 > m10 > m20: inc_mom.append(item)
+        elif m5 < m10 < m20: dec_mom.append(item)
+        else: neut_mom.append(item)
+
+    # Display Columns
+    m_col1, m_col2, m_col3 = st.columns(3)
+    
+    with m_col1: 
+        st.success(f"📈 Increasing ({len(inc_mom)})")
+        for i in inc_mom: st.caption(f"{i['theme']} {i['icon']}")
+        
+    with m_col2:
+        st.warning(f"⚖️ Neutral / Mixed ({len(neut_mom)})")
+        for i in neut_mom: st.caption(f"{i['theme']} {i['icon']}")
+        
+    with m_col3:
+        st.error(f"🔻 Decreasing ({len(dec_mom)})")
+        for i in dec_mom: st.caption(f"{i['theme']} {i['icon']}")
 
     st.divider()
 
-    # 5. RRG CHART
+    # 4. RRG CHART
     chart_placeholder = st.empty()
     with chart_placeholder:
         fig = plot_simple_rrg(dm, filtered_map, view_key, st.session_state.sector_trails)
@@ -187,7 +253,7 @@ def run_sector_rotation_app(df_global=None):
     
     st.divider()
 
-    # 6. THEME EXPLORER (Stock List)
+    # 5. THEME EXPLORER (Stock List)
     st.subheader(f"🔎 Explorer: {st.session_state.sector_target}")
     
     # Search Bar
@@ -246,8 +312,6 @@ def run_sector_rotation_app(df_global=None):
             
         stats["files_found"] += 1
         
-        # Volume Filter Logic
-        # Calculate recent average volume * price
         try:
             avg_vol = sdf['Volume'].tail(20).mean()
             avg_price = sdf['Close'].tail(20).mean()
@@ -274,7 +338,6 @@ def run_sector_rotation_app(df_global=None):
     if ranking_data:
         df_disp = pd.DataFrame(ranking_data).sort_values(by='Alpha 5d', ascending=False)
         
-        # Styling
         def style_rows(row):
             styles = [''] * len(row)
             if row['Alpha 5d'] > 0 and row['RVOL 5d'] > 1.2:
@@ -287,7 +350,6 @@ def run_sector_rotation_app(df_global=None):
             column_config={"Ticker": st.column_config.TextColumn("Ticker"), "8 EMA": st.column_config.TextColumn("8 EMA", width="small")}
         )
     else:
-        # DIAGNOSTIC MESSAGE IF EMPTY
         st.error(f"⚠️ No stocks displayed for {st.session_state.sector_target}.")
         st.caption(f"**Diagnostics:**")
         st.caption(f"• Stocks listed in Universe CSV: {stats['total_in_theme']}")
