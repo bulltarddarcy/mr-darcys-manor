@@ -222,130 +222,90 @@ class SectorAlphaCalculator:
 
 
 # ==========================================
-# 4. ORCHESTRATOR (FETCH & PROCESS)
+# 4. ORCHESTRATOR (OPTIMIZED SINGLE FILE)
 # ==========================================
-
-def _fetch_single_parquet(ticker, file_id):
-    """Helper to fetch one parquet file from Drive"""
-    if not file_id: return None
-    try:
-        url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        buffer = get_gdrive_binary_data(url)
-        if buffer:
-            df = pd.read_parquet(buffer)
-            # Normalize Index
-            if 'Date' in df.columns:
-                df['Date'] = pd.to_datetime(df['Date'])
-                df = df.set_index('Date').sort_index()
-            elif isinstance(df.index, pd.DatetimeIndex):
-                df = df.sort_index()
-            return df
-    except Exception:
-        pass
-    return None
 
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_and_process_universe(benchmark_ticker="SPY"):
     """
-    Main Data Pipeline:
-    1. Loads Universe & Ticker Map
-    2. Downloads Benchmark (SPY or QQQ) - Robust Lookup
-    3. Downloads All Sector Tickers (Parallel)
-    4. Calculates Relative Strength & Alpha
-    5. Returns Dictionary of DataFrames and Missing Tickers list
+    Optimized Data Pipeline:
+    1. Loads Universe Config (to know which stocks belong to which sector).
+    2. Downloads ONE large Parquet file (PARQUET_SECTOR_ROTATION) containing all history.
+    3. Filters data in memory to calculate RS/Alpha.
     """
     dm = SectorDataManager()
     uni_df, tickers, theme_map = dm.load_universe(benchmark_ticker)
-    t_map = dm.load_ticker_map()
     
-    if uni_df.empty or not t_map:
-        return {}, [], theme_map, uni_df
+    if uni_df.empty:
+        return {}, ["SECTOR_UNIVERSE is empty"], theme_map, uni_df
+
+    # --- 1. DOWNLOAD THE MASTER DB ---
+    db_url = st.secrets.get("PARQUET_SECTOR_ROTATION")
+    if not db_url:
+        st.error("⛔ Secret 'PARQUET_SECTOR_ROTATION' is missing.")
+        return {}, ["PARQUET_SECTOR_ROTATION secret missing"], theme_map, uni_df
+
+    try:
+        buffer = get_gdrive_binary_data(db_url)
+        if not buffer:
+            return {}, ["Failed to download Master DB (Check permissions/URL)"], theme_map, uni_df
+        
+        master_df = pd.read_parquet(buffer)
+        
+    except Exception as e:
+        return {}, [f"Error reading Parquet file: {e}"], theme_map, uni_df
+
+    # --- 2. STANDARDIZE MASTER DB ---
+    # Ensure columns are standardized (Ticker, Date, Close, etc.)
+    master_df.columns = [c.strip().title() for c in master_df.columns]
+    
+    # Handle common variations
+    if 'Symbol' in master_df.columns and 'Ticker' not in master_df.columns:
+        master_df.rename(columns={'Symbol': 'Ticker'}, inplace=True)
+        
+    if 'Date' in master_df.columns:
+        master_df['Date'] = pd.to_datetime(master_df['Date'])
+        master_df = master_df.set_index('Date').sort_index()
+    elif isinstance(master_df.index, pd.DatetimeIndex):
+        master_df = master_df.sort_index()
+    
+    # Ensure Ticker is uppercase for matching
+    if 'Ticker' in master_df.columns:
+        master_df['Ticker'] = master_df['Ticker'].astype(str).str.upper().str.strip()
+    else:
+        return {}, ["Critical: 'Ticker' or 'Symbol' column missing in Master DB"], theme_map, uni_df
 
     calc = SectorAlphaCalculator()
     data_cache = {}
     missing_tickers = []
 
-    # --- 1. ROBUST BENCHMARK LOOKUP ---
-    # Try all likely variations of the name
-    possible_keys = [
-        benchmark_ticker,                       # SPY
-        f"{benchmark_ticker}_PARQUET",          # SPY_PARQUET (User requested)
-        f"{benchmark_ticker}.PARQUET",          # SPY.PARQUET
-        f"PARQUET_{benchmark_ticker}"           # PARQUET_SPY
-    ]
+    # --- 3. PROCESS BENCHMARK ---
+    bench_df = master_df[master_df['Ticker'] == benchmark_ticker].copy()
     
-    bench_id = None
-    for key in possible_keys:
-        if key in t_map:
-            bench_id = t_map[key]
-            break
-            
-    # Final fallback: Look for key that CONTAINS ticker + PARQUET
-    if not bench_id:
-        for k, v in t_map.items():
-            if benchmark_ticker in k and "PARQUET" in k:
-                bench_id = v
-                break
+    if bench_df.empty:
+        # Fallback: Check if user has SPY_PARQUET or similar in the big file under a different name
+        # But usually, it should be there.
+        return {}, [f"Benchmark '{benchmark_ticker}' not found in PARQUET_SECTOR_ROTATION"], theme_map, uni_df
 
-    bench_df = _fetch_single_parquet(benchmark_ticker, bench_id)
-    if bench_df is None or bench_df.empty:
-        # Critical failure if Benchmark is missing, cannot calculate RS/Alpha
-        return {}, [f"CRITICAL: {benchmark_ticker} (Benchmark) not found. Tried keys: {possible_keys}"], theme_map, uni_df
-
-    # Process Benchmark
     bench_df = calc.process_dataframe(bench_df)
     data_cache[benchmark_ticker] = bench_df
 
-    # 2. Identify Missing Tickers (Using same robust logic)
-    valid_tickers = []
-    
-    for t in tickers:
-        # Skip benchmark as we already have it
-        if t == benchmark_ticker: continue
-        
-        # Robust lookup for universe tickers too
-        tid = None
-        # Order of preference: Exact -> _PARQUET -> PARQUET_
-        if t in t_map: tid = t_map[t]
-        elif f"{t}_PARQUET" in t_map: tid = t_map[f"{t}_PARQUET"]
-        elif f"PARQUET_{t}" in t_map: tid = t_map[f"PARQUET_{t}"]
-        
-        if tid:
-            valid_tickers.append((t, tid))
-        else:
-            missing_tickers.append(t)
-
-    # 3. Parallel Download
-    raw_dfs = {}
-    with ThreadPoolExecutor(max_workers=16) as executor:
-        future_to_ticker = {executor.submit(_fetch_single_parquet, t, fid): t for t, fid in valid_tickers}
-        
-        for future in as_completed(future_to_ticker):
-            t = future_to_ticker[future]
-            try:
-                df = future.result()
-                if df is not None and not df.empty:
-                    raw_dfs[t] = df
-                else:
-                    missing_tickers.append(t)
-            except:
-                missing_tickers.append(t)
-
-    # 4. Processing & Calculations
-    # A. Process ETFs (Themes) first for RRG
+    # --- 4. PROCESS ETFS (THEMES) ---
+    # We need these processed first so stocks can calculate Alpha against them
     etf_tickers = list(theme_map.values())
     
-    for theme, etf_ticker in theme_map.items():
-        if etf_ticker not in raw_dfs: continue
+    for etf in etf_tickers:
+        df = master_df[master_df['Ticker'] == etf].copy()
         
-        df = raw_dfs[etf_ticker]
-        df = calc.process_dataframe(df) # Standardize cols
-        df = calc.calculate_rrg_metrics(df, bench_df) # Calculate RRG vs Benchmark
-        
-        data_cache[etf_ticker] = df
+        if df.empty:
+            missing_tickers.append(etf)
+            continue
+            
+        df = calc.process_dataframe(df)
+        df = calc.calculate_rrg_metrics(df, bench_df) # RRG vs Benchmark
+        data_cache[etf] = df
 
-    # B. Process Individual Stocks (Alpha vs Sector ETF)
-    # We need the parent ETF data ready first (done above)
+    # --- 5. PROCESS STOCKS ---
     stocks = uni_df[uni_df['Role'] == 'Stock']
     
     for _, row in stocks.iterrows():
@@ -353,18 +313,23 @@ def fetch_and_process_universe(benchmark_ticker="SPY"):
         theme = row['Theme']
         parent_etf = theme_map.get(theme)
         
-        if stock not in raw_dfs: continue
+        # Pull from Master
+        df = master_df[master_df['Ticker'] == stock].copy()
         
-        s_df = raw_dfs[stock]
-        s_df = calc.process_dataframe(s_df)
+        if df.empty:
+            missing_tickers.append(stock)
+            continue
         
-        # Calculate Alpha relative to its Sector ETF (if available), else Benchmark
-        parent_df = data_cache.get(parent_etf, bench_df) 
-        s_df = calc.calculate_stock_alpha(s_df, parent_df)
+        df = calc.process_dataframe(df)
         
-        data_cache[stock] = s_df
+        # Calculate Alpha relative to Sector ETF (or Benchmark if Sector ETF is missing)
+        parent_df = data_cache.get(parent_etf, bench_df)
+        df = calc.calculate_stock_alpha(df, parent_df)
+        
+        data_cache[stock] = df
 
     return data_cache, missing_tickers, theme_map, uni_df
+
 
 # ==========================================
 # 5. VISUALIZATION HELPERS
