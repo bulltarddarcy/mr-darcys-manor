@@ -115,16 +115,6 @@ class SectorAlphaCalculator:
         """
         if df is None or df.empty: return None
 
-        # 1. Normalize Columns (Source Parquet -> App Standard)
-        # Source: EMA8, SMA50, Close | App: EMA_8, SMA_50, Close
-        col_map = {
-            'EMA8': 'EMA_8', 'EMA21': 'EMA_21',
-            'SMA50': 'SMA_50', 'SMA100': 'SMA_100', 'SMA200': 'SMA_200',
-            'RSI14': 'RSI_14', 'RSI': 'RSI_14'
-        }
-        # Rename only if they exist
-        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
-
         # Ensure 'Close' exists
         if 'Close' not in df.columns and 'CLOSE' in df.columns:
             df['Close'] = df['CLOSE']
