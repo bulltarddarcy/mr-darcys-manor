@@ -22,6 +22,26 @@ def classify_setup(df):
     if m5 > m10 and m10 > m20 and m20 > 100: return "🚀 Rocket"
     return None 
 
+def get_quadrant_label(df, timeframe_key):
+    """Returns a formatted string like 'Leading 🟢 (+3.3)'"""
+    if df is None or df.empty: return "N/A"
+    
+    col_r = f"RRG_Ratio_{timeframe_key}"
+    col_m = f"RRG_Mom_{timeframe_key}"
+    
+    if col_r not in df.columns: return "N/A"
+    
+    r = df[col_r].iloc[-1]
+    m = df[col_m].iloc[-1]
+    
+    if r >= 100 and m >= 100: txt, icn = "Leading", "🟢"
+    elif r < 100 and m >= 100: txt, icn = "Improving", "🔵"
+    elif r < 100 and m < 100: txt, icn = "Lagging", "🔴"
+    else: txt, icn = "Weakening", "🟡"
+    
+    diff = m - 100
+    return f"{icn} {txt} ({diff:+.1f})"
+
 def plot_simple_rrg(dm, target_map, view_key, show_trails):
     fig = go.Figure()
     all_x, all_y = [], []
@@ -158,110 +178,107 @@ def run_sector_rotation_app(df_global=None):
 
     with st.expander("📂 Category Guide", expanded=False):
         st.markdown("""
-        **📈 Increasing:** 5-Day Momentum > 20-Day Momentum.
-        * **Meaning:** The move is accelerating (Gas Pedal is down).
-
-        **🔻 Decreasing:** 5-Day Momentum < 20-Day Momentum.
-        * **Meaning:** The move is slowing down (Braking).
-
-        **⚖️ Neutral:** Mixed signals or consolidating.
+        * **📈 Increasing:** 5-Day Momentum > 20-Day Momentum. The move is accelerating (Gas Pedal is down).
+        * **🔻 Decreasing:** 5-Day Momentum < 20-Day Momentum. The move is slowing down (Braking).
+        * **⚖️ Neutral:** Mixed signals or consolidating.
         """)
 
     # 2. Session State for Controls
     if "sector_view" not in st.session_state: st.session_state.sector_view = "5 Days"
     if "sector_trails" not in st.session_state: st.session_state.sector_trails = False
     if "sector_target" not in st.session_state: st.session_state.sector_target = sorted(list(theme_map.keys()))[0] if theme_map else ""
-
+    
     # Ensure filter list is init for the widget
     all_themes = sorted(list(theme_map.keys()))
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
 
-    # 3. CONTROL SECTION
+    # 3. CONTROLS (TWO EXPANDERS SIDE BY SIDE)
+    c1, c2 = st.columns(2)
     
-    # --- Row 1: Timeframe & Global Actions ---
-    col_time, col_btn = st.columns([2, 1])
-    with col_time:
-        st.markdown("##### ⏱️ Timeframe Window")
-        c1, c2 = st.columns([2, 1])
-        with c1:
+    # --- COL 1: CHART INPUTS ---
+    with c1:
+        with st.expander("⚙️ Chart Inputs", expanded=True):
             st.session_state.sector_view = st.radio(
-                "Window", ["5 Days", "10 Days", "20 Days"], 
-                horizontal=True, label_visibility="collapsed", key="timeframe_radio"
+                "Timeframe Window", ["5 Days", "10 Days", "20 Days"], 
+                horizontal=True, key="timeframe_radio"
             )
-        with c2:
-            st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
-            st.session_state.sector_trails = st.checkbox("Trails", value=st.session_state.sector_trails)
+            
+            c_sub1, c_sub2 = st.columns([1, 1])
+            with c_sub1:
+                st.session_state.sector_trails = st.checkbox("Show 3-Day Trails", value=st.session_state.sector_trails)
+            with c_sub2:
+                if st.button("🔄 Update Data", use_container_width=True):
+                    status = st.empty()
+                    calc = us.SectorAlphaCalculator()
+                    calc.run_full_update(status)
+                    st.rerun()
 
-    with col_btn:
-        st.markdown("##### Actions")
-        if st.button("🔄 Update Data", use_container_width=True):
-            status = st.empty()
-            calc = us.SectorAlphaCalculator()
-            calc.run_full_update(status)
-            st.rerun()
-
+    # --- COL 2: SECTORS SHOWN ---
+    with c2:
+        with st.expander("👁️ Sectors Shown", expanded=True):
+            b_col1, b_col2 = st.columns(2)
+            with b_col1:
+                if st.button("➕ Add All", use_container_width=True):
+                    st.session_state.sector_theme_filter_widget = all_themes
+                    st.rerun()
+            with b_col2:
+                if st.button("➖ Remove All", use_container_width=True):
+                    st.session_state.sector_theme_filter_widget = []
+                    st.rerun()
+            
+            sel_themes = st.multiselect(
+                "Select Themes", 
+                all_themes, 
+                key="sector_theme_filter_widget", 
+                label_visibility="collapsed"
+            )
+    
+    filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
     view_key = timeframe_map[st.session_state.sector_view]
 
-    # --- Row 2: Sector Selection (EXPANDABLE) ---
-    with st.expander("👁️ Sectors Shown", expanded=True):
-        # Buttons for Add/Remove All
-        btn_col1, btn_col2, _ = st.columns([1, 1, 6])
-        
-        with btn_col1:
-            if st.button("➕ Add All"):
-                st.session_state.sector_theme_filter_widget = all_themes
-                st.rerun()
-        with btn_col2:
-            if st.button("➖ Remove All"):
-                st.session_state.sector_theme_filter_widget = []
-                st.rerun()
-                
-        # The Multiselect
-        sel_themes = st.multiselect(
-            "Select Themes", 
-            all_themes, 
-            key="sector_theme_filter_widget", 
-            label_visibility="collapsed"
-        )
-    
-    filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
-
-    # --- Row 3: Momentum Scans (EXPANDABLE) ---
+    # --- MOMENTUM SCANS ---
     with st.expander("🚀 Momentum Scans", expanded=True):
-        # Calculate Momentum buckets
         inc_mom, neut_mom, dec_mom = [], [], []
+        
         for theme, ticker in theme_map.items():
             df = dm.load_ticker_data(ticker)
             if df is None or df.empty or "RRG_Mom_Short" not in df.columns: continue
             last = df.iloc[-1]
             m5, m10, m20 = last.get("RRG_Mom_Short",0), last.get("RRG_Mom_Med",0), last.get("RRG_Mom_Long",0)
+            
+            # Differential Score (5d - 20d)
+            shift = m5 - m20
+            
             setup = classify_setup(df)
             icon = setup.split()[0] if setup else ""
-            item = {"theme": theme, "shift": m5-m20, "icon": icon}
+            item = {"theme": theme, "shift": shift, "icon": icon}
             
-            # Momentum Logic
             if m5 > m10 > m20: inc_mom.append(item)
             elif m5 < m10 < m20: dec_mom.append(item)
             else: neut_mom.append(item)
 
-        # Display Columns
+        # Sort High to Low by Shift
+        inc_mom.sort(key=lambda x: x['shift'], reverse=True)
+        neut_mom.sort(key=lambda x: x['shift'], reverse=True)
+        dec_mom.sort(key=lambda x: x['shift'], reverse=True)
+
         m_col1, m_col2, m_col3 = st.columns(3)
-        
         with m_col1: 
             st.success(f"📈 Increasing ({len(inc_mom)})")
             for i in inc_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
-            
         with m_col2:
             st.warning(f"⚖️ Neutral / Mixed ({len(neut_mom)})")
             for i in neut_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
-            
         with m_col3:
             st.error(f"🔻 Decreasing ({len(dec_mom)})")
             for i in dec_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
 
+    st.divider()
+
     # 4. RRG CHART
+    st.subheader("Sector Rotations")
     chart_placeholder = st.empty()
     with chart_placeholder:
         fig = plot_simple_rrg(dm, filtered_map, view_key, st.session_state.sector_trails)
@@ -275,9 +292,35 @@ def run_sector_rotation_app(df_global=None):
         elif "text" in point:
             st.session_state.sector_target = point["text"]
     
-    # 5. THEME EXPLORER (Stock List)
+    st.divider()
+
+    # 5. EXPLORER SECTION (NEW TABLE + STOCK LIST)
     st.subheader(f"🔎 Explorer: {st.session_state.sector_target}")
     
+    # --- TABLE: ALL THEMES STATUS ---
+    # Create a summary dataframe for ALL themes
+    summary_data = []
+    for theme in all_themes:
+        etf_ticker = theme_map.get(theme)
+        if not etf_ticker: continue
+        etf_df = dm.load_ticker_data(etf_ticker)
+        
+        row = {"Theme": theme}
+        row["Short (5d)"] = get_quadrant_label(etf_df, "Short")
+        row["Med (10d)"] = get_quadrant_label(etf_df, "Med")
+        row["Long (20d)"] = get_quadrant_label(etf_df, "Long")
+        summary_data.append(row)
+        
+    if summary_data:
+        st.dataframe(
+            pd.DataFrame(summary_data),
+            hide_index=True,
+            use_container_width=True
+        )
+
+    st.markdown("---")
+
+    # --- STOCK EXPLORER ---
     # Search Bar
     search_c1, search_c2 = st.columns([1, 3])
     with search_c1:
@@ -290,59 +333,25 @@ def run_sector_rotation_app(df_global=None):
     
     with search_c2:
         # Update Target Dropdown
-        all_sorted = sorted(list(theme_map.keys()))
         curr_idx = all_sorted.index(st.session_state.sector_target) if st.session_state.sector_target in all_sorted else 0
-        new_target = st.selectbox("Select Theme", all_sorted, index=curr_idx, label_visibility="collapsed")
+        new_target = st.selectbox("Select Theme to View Stocks", all_sorted, index=curr_idx)
         if new_target != st.session_state.sector_target:
             st.session_state.sector_target = new_target
-
-    # Quadrant Stats for ETF
-    etf_ticker = theme_map.get(st.session_state.sector_target)
-    if etf_ticker:
-        etf_df = dm.load_ticker_data(etf_ticker)
-        if etf_df is not None and not etf_df.empty:
-            last = etf_df.iloc[-1]
-            q_cols = st.columns(3)
-            for i, (l, k) in enumerate([("Short (5d)", "Short"), ("Med (10d)", "Med"), ("Long (20d)", "Long")]):
-                r = last.get(f"RRG_Ratio_{k}", 100)
-                m = last.get(f"RRG_Mom_{k}", 100)
-                if r >= 100 and m >= 100: txt, clr, icn = "Leading", "green", "🟢"
-                elif r < 100 and m >= 100: txt, clr, icn = "Improving", "blue", "🔵"
-                elif r < 100 and m < 100: txt, clr, icn = "Lagging", "red", "🔴"
-                else: txt, clr, icn = "Weakening", "orange", "🟡"
-                with q_cols[i]:
-                    st.markdown(f"**{l}**: :{clr}[{txt} {icn}] ({m-100:+.1f})")
 
     # Stock Table
     stock_tickers = uni_df[(uni_df['Theme'] == st.session_state.sector_target) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
     ranking_data = []
     
-    # DEBUG COUNTERS
-    stats = {
-        "total_in_theme": len(stock_tickers),
-        "files_found": 0,
-        "passed_vol_filter": 0,
-        "missing_files": []
-    }
-    
     for stock in stock_tickers:
         sdf = dm.load_ticker_data(stock)
         
-        if sdf is None or sdf.empty:
-            stats["missing_files"].append(stock)
-            continue
-            
-        stats["files_found"] += 1
+        if sdf is None or sdf.empty: continue
         
+        # Volume Filter
         try:
             avg_vol = sdf['Volume'].tail(20).mean()
             avg_price = sdf['Close'].tail(20).mean()
-            dollar_vol = avg_vol * avg_price
-            
-            if dollar_vol < us.MIN_DOLLAR_VOLUME:
-                continue
-                
-            stats["passed_vol_filter"] += 1
+            if (avg_vol * avg_price) < us.MIN_DOLLAR_VOLUME: continue
             
             last = sdf.iloc[-1]
             ranking_data.append({
@@ -351,7 +360,9 @@ def run_sector_rotation_app(df_global=None):
                 "Alpha 5d": last.get("True_Alpha_Short", 0),
                 "RVOL 5d": last.get("RVOL_Short", 0),
                 "Alpha 10d": last.get("True_Alpha_Med", 0),
+                "RVOL 10d": last.get("RVOL_Med", 0),
                 "Alpha 20d": last.get("True_Alpha_Long", 0),
+                "RVOL 20d": last.get("RVOL_Long", 0),
                 "8 EMA": "✅" if last['Close'] > last.get('EMA_8', 0) else "❌"
             })
         except Exception:
@@ -367,21 +378,17 @@ def run_sector_rotation_app(df_global=None):
             return styles
 
         st.dataframe(
-            df_disp.style.apply(style_rows, axis=1).format({"Price": "$%.2f", "Alpha 5d": "%+.2f%%", "RVOL 5d": "%.1fx", "Alpha 10d": "%+.2f%%", "Alpha 20d": "%+.2f%%"}),
+            df_disp.style.apply(style_rows, axis=1).format({
+                "Price": "$%.2f", 
+                "Alpha 5d": "%+.2f%%", "RVOL 5d": "%.1fx",
+                "Alpha 10d": "%+.2f%%", "RVOL 10d": "%.1fx",
+                "Alpha 20d": "%+.2f%%", "RVOL 20d": "%.1fx"
+            }),
             hide_index=True, use_container_width=True,
-            column_config={"Ticker": st.column_config.TextColumn("Ticker"), "8 EMA": st.column_config.TextColumn("8 EMA", width="small")}
+            column_config={
+                "Ticker": st.column_config.TextColumn("Ticker"), 
+                "8 EMA": st.column_config.TextColumn("8 EMA", width="small")
+            }
         )
     else:
-        st.error(f"⚠️ No stocks displayed for {st.session_state.sector_target}.")
-        st.caption(f"**Diagnostics:**")
-        st.caption(f"• Stocks listed in Universe CSV: {stats['total_in_theme']}")
-        st.caption(f"• Data files found on disk: {stats['files_found']}")
-        st.caption(f"• Stocks passed Volume Filter (>${us.MIN_DOLLAR_VOLUME/1_000_000:.1f}M): {stats['passed_vol_filter']}")
-        
-        if len(stats["missing_files"]) > 0:
-            st.caption(f"• **Missing Files:** {', '.join(stats['missing_files'][:10])}...")
-        
-        if stats['files_found'] == 0:
-            st.warning("👉 Suggestion: Click 'Update Data' to download price history.")
-        elif stats['passed_vol_filter'] == 0:
-            st.warning("👉 Suggestion: All stocks were filtered out due to low dollar volume.")
+        st.info(f"No stocks found for {st.session_state.sector_target} (or filtered by volume).")
