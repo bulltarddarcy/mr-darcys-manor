@@ -7,6 +7,7 @@ import yfinance as yf
 import math
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from main_sector import run_sector_rotation_app # Sector Trends Import
 
 # --- IMPORT UTILS ---
 # Import everything we moved to utils.py
@@ -2469,35 +2470,40 @@ try:
     df_global = load_and_clean_data(sheet_url)
     
     # 1. Database Date (from Google Sheet)
-    # Checks the latest "Trade Date" in your manual entry sheet
     if not df_global.empty and "Trade Date" in df_global.columns:
         db_date = df_global["Trade Date"].max().strftime("%d %b %y")
     else:
         db_date = "No Data"
     
-    # 2. Price History Date (Check max date in PARQUET_SP100)
-    # Checks the absolute latest date in your combined SP100 parquet file
+    # 2. Price History Date
     price_date = "Syncing..."
     try:
-        # Load the combined SP100 parquet file
         df_sp100_check = load_parquet_and_clean("PARQUET_SP100")
-        
         if df_sp100_check is not None and not df_sp100_check.empty:
-            # Find date column regardless of case (Date, DATE, etc.)
             date_col_check = next((c for c in df_sp100_check.columns if 'DATE' in c.upper()), None)
-            
             if date_col_check:
-                # Get the absolute latest date in the entire file
                 price_date = pd.to_datetime(df_sp100_check[date_col_check]).max().strftime("%d %b %y")
             else:
                 price_date = "Date Error"
         else:
             price_date = "Read Error"
-
     except Exception:
         price_date = "Offline"
 
-    # 3. Navigation Setup
+    # =========================================================================
+    # 3. SECTOR ROTATION MODULE (The "Hidden" Page)
+    # =========================================================================
+    # This allows your friend to work on main_sector.py and utils_sector.py
+    # without affecting your production sidebar.
+    from main_sector import run_sector_rotation_app
+    sector_page = st.Page(
+        run_sector_rotation_app, 
+        title="Sector Rotation", 
+        icon="🌊", 
+        url_path="sector_dev"
+    )
+
+    # 4. Navigation Setup (Production Sidebar)
     pg = st.navigation([
         st.Page(lambda: run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
         st.Page(lambda: run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
@@ -2509,14 +2515,21 @@ try:
         st.Page(lambda: run_ema_distance_app(df_global), title="EMA Distance", icon="📏", url_path="ema_distance"),
     ])
 
-    # 4. Sidebar Captions
+    # 5. Routing Logic
+    # If the URL contains "sector_dev", run the development page.
+    # Otherwise, run the standard navigation.
+    if st.query_params.get("page") == "sector_dev":
+        sector_page.run()
+    else:
+        pg.run()
+
+    # 6. Sidebar Captions
     st.sidebar.caption("🖥️ Wide monitor & light mode.")
     st.sidebar.caption(f"💾 **JB Database:** {db_date}")
     st.sidebar.caption(f"📈 **Price/RSIs:** {price_date}")
     
-    # 5. 🏥 NEW DATA HEALTH WIDGET (UPDATED)
+    # 7. Data Health Widget
     with st.sidebar.expander("🏥 Data Health Check", expanded=False):
-        # A. Check Ticker Map
         tm_key = "URL_TICKER_MAP"
         tm_url = st.secrets.get(tm_key, "")
         if not tm_url:
@@ -2526,13 +2539,11 @@ try:
         else:
              st.markdown(f"✅ **Ticker Map**: Connected")
 
-        # B. Check Parquet Files
         health_config = get_parquet_config()
         all_good = True
         
         for name, key in health_config.items():
             url = st.secrets.get(key, "")
-            
             if not url:
                 st.markdown(f"❌ **{name}**: Secret Missing")
                 all_good = False
@@ -2540,7 +2551,6 @@ try:
                  st.markdown(f"⚠️ **{name}**: Invalid URL Format")
                  all_good = False
             else:
-                # Warn if using 'drive_link' vs 'sharing'
                 status_icon = "✅"
                 note = ""
                 if "usp=drive_link" in url:
@@ -2553,9 +2563,7 @@ try:
         else:
             st.error("Configuration errors detected.")
     
-    pg.run()
-    
-    # Global padding at the bottom of the page
+    # Global padding at the bottom
     st.markdown("<br><br><br><br>", unsafe_allow_html=True)
     
 except Exception as e: 
