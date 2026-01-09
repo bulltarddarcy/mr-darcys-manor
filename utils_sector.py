@@ -1,24 +1,21 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
 import plotly.graph_objects as go
 import json
-from io import StringIO
+from io import StringIO, BytesIO
 from pathlib import Path
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# --- IMPORT SHARED UTILS ---
+from utils_shared import get_gdrive_binary_data
 
 # ==========================================
 # 1. CONFIGURATION & CONSTANTS
 # ==========================================
 HISTORY_YEARS = 1             
 BENCHMARK_TICKER = "SPY"      
-
-# Moving Averages
-MA_FAST = 8         # EMA
-MA_MEDIUM = 21      # EMA
-MA_SLOW = 50        # SMA
-MA_BASE = 200       # SMA
 
 # Volatility & Normalization
 ATR_WINDOW = 20               
@@ -35,17 +32,13 @@ TIMEFRAMES = {
 # Filters
 MIN_DOLLAR_VOLUME = 2_000_000
 
-# Paths
-DATA_DIR = Path("sector_data")
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-META_FILE = DATA_DIR / "meta.json"
-
 # ==========================================
 # 2. DATA MANAGER
 # ==========================================
 class SectorDataManager:
     def __init__(self):
-        self.data_path = DATA_DIR
+        self.universe = pd.DataFrame()
+        self.ticker_map = {}
 
     def load_universe(self):
         """Reads the universe from st.secrets['SECTOR_UNIVERSE']"""
@@ -55,25 +48,18 @@ class SectorDataManager:
             return pd.DataFrame(), [], {}
             
         try:
+            # Handle Google Sheet Links or Raw CSV
             if secret_val.strip().startswith("http"):
-                # CASE 1: Google Sheets (Native) -> docs.google.com
                 if "docs.google.com/spreadsheets" in secret_val:
-                    # Extract ID between /d/ and /
                     file_id = secret_val.split("/d/")[1].split("/")[0]
                     csv_source = f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=csv"
-                
-                # CASE 2: Google Drive File (Uploaded CSV) -> drive.google.com
                 elif "drive.google.com" in secret_val and "/d/" in secret_val:
                     file_id = secret_val.split("/d/")[1].split("/")[0]
                     csv_source = f"https://drive.google.com/uc?id={file_id}&export=download"
-                
-                # CASE 3: Standard Direct URL
                 else:
                     csv_source = secret_val
-                
                 df = pd.read_csv(csv_source)
             else:
-                # CASE 4: Raw CSV String inside Secrets
                 df = pd.read_csv(StringIO(secret_val))
             
             required_cols = ['Ticker', 'Theme']
@@ -92,191 +78,269 @@ class SectorDataManager:
             etf_rows = df[df['Role'] == 'Etf']
             theme_map = dict(zip(etf_rows['Theme'], etf_rows['Ticker'])) if not etf_rows.empty else {}
             
+            self.universe = df
             return df, tickers, theme_map
             
         except Exception as e:
             st.error(f"Error loading SECTOR_UNIVERSE: {e}")
             return pd.DataFrame(), [], {}
 
-    def get_file_path(self, ticker):
-        return self.data_path / f"{ticker}.parquet"
-
-    def save_ticker_data(self, ticker, df):
-        if df is None or df.empty: return
+    def load_ticker_map(self):
+        """Loads the Global Ticker Map to find Parquet IDs"""
         try:
-            df.to_parquet(self.get_file_path(ticker))
-        except Exception as e:
-            print(f"Failed to save {ticker}: {e}")
+            url = st.secrets.get("URL_TICKER_MAP")
+            if not url: return {}
 
-    def load_ticker_data(self, ticker):
-        path = self.get_file_path(ticker)
-        if path.exists():
-            return pd.read_parquet(path)
-        return None
-
-    def load_batch_data(self, tickers):
-        """Optimized loading: Loads multiple tickers into a memory dictionary to reduce I/O."""
-        cache = {}
-        for t in tickers:
-            df = self.load_ticker_data(t)
-            if df is not None and not df.empty:
-                cache[t] = df
-        return cache
-
-    def set_last_updated(self):
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        with open(META_FILE, "w") as f:
-            json.dump({"last_updated": now_str}, f)
-
-    def get_last_updated(self):
-        if META_FILE.exists():
-            try:
-                with open(META_FILE, "r") as f:
-                    data = json.load(f)
-                return data.get("last_updated", "Unknown")
-            except:
-                return "Unknown"
-        return "Never"
+            buffer = get_gdrive_binary_data(url)
+            if buffer:
+                df = pd.read_csv(buffer, engine='c')
+                # Assume Col 0 = Ticker, Col 1 = File ID
+                if len(df.columns) >= 2:
+                    t_map = dict(zip(df.iloc[:, 0].astype(str).str.strip().str.upper(), 
+                                     df.iloc[:, 1].astype(str).str.strip()))
+                    self.ticker_map = t_map
+                    return t_map
+        except Exception:
+            pass
+        return {}
 
 # ==========================================
-# 3. CALCULATOR & UPDATE ENGINE
+# 3. CALCULATOR & PIPELINE
 # ==========================================
 class SectorAlphaCalculator:
-    def __init__(self):
-        self.dm = SectorDataManager()
+    def process_dataframe(self, df):
+        """
+        Prepares a raw Parquet dataframe for the app.
+        Renames source columns (EMA8 -> EMA_8) and calcs missing metrics (RVOL).
+        """
+        if df is None or df.empty: return None
 
-    def calculate_technical_indicators(self, df):
-        if df.empty: return df
-        if 'Close' not in df.columns and 'Adj Close' in df.columns:
-             df['Close'] = df['Adj Close']
+        # 1. Normalize Columns (Source Parquet -> App Standard)
+        # Source: EMA8, SMA50, Close | App: EMA_8, SMA_50, Close
+        col_map = {
+            'EMA8': 'EMA_8', 'EMA21': 'EMA_21',
+            'SMA50': 'SMA_50', 'SMA100': 'SMA_100', 'SMA200': 'SMA_200',
+            'RSI14': 'RSI_14', 'RSI': 'RSI_14'
+        }
+        # Rename only if they exist
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
 
-        df['EMA_8'] = df['Close'].ewm(span=MA_FAST, adjust=False).mean()
-        df['EMA_21'] = df['Close'].ewm(span=MA_MEDIUM, adjust=False).mean()
-        df['SMA_50'] = df['Close'].rolling(window=MA_SLOW).mean()
-        df['SMA_200'] = df['Close'].rolling(window=MA_BASE).mean()
+        # Ensure 'Close' exists
+        if 'Close' not in df.columns and 'CLOSE' in df.columns:
+            df['Close'] = df['CLOSE']
         
-        daily_range_pct = ((df['High'] - df['Low']) / df['Low']) * 100
-        df['ADR_Pct'] = daily_range_pct.rolling(window=ATR_WINDOW).mean()
+        # 2. Calculate Missing Technicals (RVOL, ADR)
+        # We assume EMA/SMA are already in the parquet, so we skip those to save time.
         
-        avg_vol = df["Volume"].rolling(window=AVG_VOLUME_WINDOW).mean()
-        df["RVOL"] = df["Volume"] / avg_vol
+        # Daily Range % (ADR)
+        if 'High' in df.columns and 'Low' in df.columns:
+            daily_range_pct = ((df['High'] - df['Low']) / df['Low']) * 100
+            df['ADR_Pct'] = daily_range_pct.rolling(window=ATR_WINDOW).mean()
+        
+        # RVOL
+        if 'Volume' in df.columns:
+            avg_vol = df["Volume"].rolling(window=AVG_VOLUME_WINDOW).mean()
+            df["RVOL"] = df["Volume"] / avg_vol
 
-        for label, time_window in TIMEFRAMES.items():
-            df[f"RVOL_{label}"] = df["RVOL"].rolling(window=time_window).mean()
+            for label, time_window in TIMEFRAMES.items():
+                df[f"RVOL_{label}"] = df["RVOL"].rolling(window=time_window).mean()
         
         return df
 
     def _calc_slope(self, series, window):
         x = np.arange(window)
+        # Weighted linear regression for slope
         weights = np.ones(window) if window < 10 else np.linspace(1.0, 3.0, window)
-        def slope_func(y): return np.polyfit(x, y, 1, w=weights)[0]
+        def slope_func(y): 
+            try:
+                return np.polyfit(x, y, 1, w=weights)[0]
+            except: return 0.0
         return series.rolling(window=window).apply(slope_func, raw=True)
 
     def calculate_rrg_metrics(self, df, bench_df):
-        if df.empty or bench_df.empty: return df
-        common_index = df.index.intersection(bench_df.index)
-        df = df.loc[common_index].copy()
-        bench = bench_df.loc[common_index].copy()
+        if df is None or df.empty or bench_df is None or bench_df.empty: return df
         
-        asset_col = 'Adj Close' if 'Adj Close' in df.columns else 'Close'
+        # Align dates
+        common_index = df.index.intersection(bench_df.index)
+        if common_index.empty: return df
+        
+        df_aligned = df.loc[common_index].copy()
+        bench_aligned = bench_df.loc[common_index].copy()
+        
+        # Determine Close columns
+        asset_col = 'Adj Close' if 'Adj Close' in df_aligned.columns else 'Close'
         bench_col = 'Adj Close' if 'Adj Close' in bench_df.columns else 'Close'
         
-        raw_ratio = df[asset_col] / bench[bench_col]
+        # Relative Ratio
+        raw_ratio = df_aligned[asset_col] / bench_aligned[bench_col]
         
+        # RRG Logic
         for label, time_window in TIMEFRAMES.items():
             ratio_mean = raw_ratio.rolling(window=time_window).mean()
-            col_ratio = f"RRG_Ratio_{label}"
-            df[col_ratio] = ((raw_ratio - ratio_mean) / ratio_mean) * 100 + 100
             
+            # Trend (Ratio)
+            col_ratio = f"RRG_Ratio_{label}"
+            # Normalized around 100
+            df_aligned[col_ratio] = ((raw_ratio - ratio_mean) / ratio_mean) * 100 + 100
+            
+            # Momentum (Velocity of the Ratio)
             raw_slope = self._calc_slope(raw_ratio, time_window)
             velocity = (raw_slope / ratio_mean) * time_window * 100
+            
             col_mom = f"RRG_Mom_{label}"
-            df[col_mom] = 100 + velocity
-        return df
+            df_aligned[col_mom] = 100 + velocity
+            
+        return df_aligned
 
     def calculate_stock_alpha(self, df, parent_df):
-        if df.empty or parent_df.empty: return df
+        if df is None or df.empty or parent_df is None or parent_df.empty: return df
+        
         common_index = df.index.intersection(parent_df.index)
-        df = df.loc[common_index].copy()
-        parent = parent_df.loc[common_index].copy()
+        if common_index.empty: return df
         
-        df['Pct_Change'] = df['Close'].pct_change(fill_method=None)
-        parent['Pct_Change'] = parent['Close'].pct_change(fill_method=None)
+        df_aligned = df.loc[common_index].copy()
+        parent_aligned = parent_df.loc[common_index].copy()
         
-        rolling_cov = df['Pct_Change'].rolling(window=BETA_WINDOW).cov(parent['Pct_Change'])
-        rolling_var = parent['Pct_Change'].rolling(window=BETA_WINDOW).var()
-        df['Beta'] = (rolling_cov / rolling_var).fillna(1.0)
+        # Returns
+        df_aligned['Pct_Change'] = df_aligned['Close'].pct_change(fill_method=None)
+        parent_aligned['Pct_Change'] = parent_aligned['Close'].pct_change(fill_method=None)
         
-        df['Expected_Return'] = parent['Pct_Change'] * df['Beta']
-        df['True_Alpha_1D'] = df['Pct_Change'] - df['Expected_Return']
+        # Beta
+        rolling_cov = df_aligned['Pct_Change'].rolling(window=BETA_WINDOW).cov(parent_aligned['Pct_Change'])
+        rolling_var = parent_aligned['Pct_Change'].rolling(window=BETA_WINDOW).var()
+        df_aligned['Beta'] = (rolling_cov / rolling_var).fillna(1.0)
+        
+        # Alpha
+        df_aligned['Expected_Return'] = parent_aligned['Pct_Change'] * df_aligned['Beta']
+        df_aligned['True_Alpha_1D'] = df_aligned['Pct_Change'] - df_aligned['Expected_Return']
         
         for label, time_window in TIMEFRAMES.items():
             col_alpha = f"True_Alpha_{label}"
-            df[col_alpha] = df['True_Alpha_1D'].fillna(0).rolling(window=time_window).sum() * 100
-        return df
-
-    def run_full_update(self, status_placeholder=None):
-        uni_df, tickers, theme_map = self.dm.load_universe()
-        if not tickers: return
-
-        end_date = datetime.today()
-        start_date = end_date - timedelta(days=HISTORY_YEARS * 365)
-        
-        if status_placeholder: status_placeholder.write(f"⬇️ Downloading {len(tickers)} tickers...")
-        
-        # INCREASED CHUNK SIZE FOR PERFORMANCE
-        chunk_size = 100 
-        data_cache = {}
-        
-        for i in range(0, len(tickers), chunk_size):
-            chunk = tickers[i:i + chunk_size]
-            try:
-                data = yf.download(chunk, start=start_date, end=end_date, group_by='ticker', auto_adjust=False, threads=True, progress=False)
-                for t in chunk:
-                    if len(chunk) == 1: t_df = data
-                    else: 
-                        try: t_df = data[t]
-                        except KeyError: continue
-                    if not t_df.empty:
-                        t_df.index.name = 'Date'
-                        data_cache[t] = t_df
-            except Exception: continue
-
-        if status_placeholder: status_placeholder.write("🧮 Calculating Benchmarks...")
-        spy_df = data_cache.get(BENCHMARK_TICKER)
-        if spy_df is None: 
-            st.error("Benchmark SPY download failed.")
-            return
-
-        spy_df = self.calculate_technical_indicators(spy_df)
-        self.dm.save_ticker_data(BENCHMARK_TICKER, spy_df)
-
-        themes = uni_df[uni_df['Role'] == 'Etf']['Theme'].unique()
-        
-        for theme in themes:
-            etf_ticker = theme_map.get(theme)
-            if not etf_ticker or etf_ticker not in data_cache: continue
+            df_aligned[col_alpha] = df_aligned['True_Alpha_1D'].fillna(0).rolling(window=time_window).sum() * 100
             
-            etf_df = data_cache[etf_ticker]
-            etf_df = self.calculate_technical_indicators(etf_df)
-            etf_df = self.calculate_rrg_metrics(etf_df, spy_df)
-            self.dm.save_ticker_data(etf_ticker, etf_df)
-            
-            stocks = uni_df[(uni_df['Theme'] == theme) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
-            for stock in stocks:
-                if stock not in data_cache: continue
-                s_df = data_cache[stock]
-                s_df = self.calculate_technical_indicators(s_df)
-                s_df = self.calculate_stock_alpha(s_df, etf_df)
-                
-                if 'True_Alpha_1D' in s_df.columns and not s_df['True_Alpha_1D'].dropna().empty:
-                    self.dm.save_ticker_data(stock, s_df)
+        return df_aligned
 
-        self.dm.set_last_updated()
-        if status_placeholder: status_placeholder.write("✅ Update Complete.")
 
 # ==========================================
-# 4. VISUALIZATION & SIGNAL LOGIC (MOVED FROM MAIN)
+# 4. ORCHESTRATOR (FETCH & PROCESS)
+# ==========================================
+
+def _fetch_single_parquet(ticker, file_id):
+    """Helper to fetch one parquet file from Drive"""
+    if not file_id: return None
+    try:
+        url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        buffer = get_gdrive_binary_data(url)
+        if buffer:
+            df = pd.read_parquet(buffer)
+            # Normalize Index
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'])
+                df = df.set_index('Date').sort_index()
+            elif isinstance(df.index, pd.DatetimeIndex):
+                df = df.sort_index()
+            return df
+    except Exception:
+        pass
+    return None
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_and_process_universe():
+    """
+    Main Data Pipeline:
+    1. Loads Universe & Ticker Map
+    2. Downloads SPY (Benchmark)
+    3. Downloads All Sector Tickers (Parallel)
+    4. Calculates Relative Strength & Alpha
+    5. Returns Dictionary of DataFrames and Missing Tickers list
+    """
+    dm = SectorDataManager()
+    uni_df, tickers, theme_map = dm.load_universe()
+    t_map = dm.load_ticker_map()
+    
+    if uni_df.empty or not t_map:
+        return {}, [], theme_map, uni_df
+
+    calc = SectorAlphaCalculator()
+    data_cache = {}
+    missing_tickers = []
+
+    # 1. Fetch Benchmark (SPY) First
+    # Check both raw ticker and _PARQUET suffix conventions if specific key logic exists,
+    # but here we assume t_map has "SPY" -> "ID"
+    spy_id = t_map.get(BENCHMARK_TICKER, t_map.get(f"{BENCHMARK_TICKER}_PARQUET"))
+    
+    spy_df = _fetch_single_parquet(BENCHMARK_TICKER, spy_id)
+    if spy_df is None or spy_df.empty:
+        # Critical failure if SPY is missing, cannot calculate RS/Alpha
+        return {}, ["CRITICAL: SPY (Benchmark) not found"], theme_map, uni_df
+
+    # Process Benchmark
+    spy_df = calc.process_dataframe(spy_df)
+    data_cache[BENCHMARK_TICKER] = spy_df
+
+    # 2. Identify Missing Tickers immediately
+    # We only care about tickers in our Universe
+    valid_tickers = []
+    for t in tickers:
+        # Check Ticker or Ticker_PARQUET
+        if t in t_map: valid_tickers.append((t, t_map[t]))
+        elif f"{t}_PARQUET" in t_map: valid_tickers.append((t, t_map[f"{t}_PARQUET"]))
+        else: missing_tickers.append(t)
+
+    # 3. Parallel Download
+    raw_dfs = {}
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        future_to_ticker = {executor.submit(_fetch_single_parquet, t, fid): t for t, fid in valid_tickers}
+        
+        for future in as_completed(future_to_ticker):
+            t = future_to_ticker[future]
+            try:
+                df = future.result()
+                if df is not None and not df.empty:
+                    raw_dfs[t] = df
+                else:
+                    missing_tickers.append(t)
+            except:
+                missing_tickers.append(t)
+
+    # 4. Processing & Calculations
+    # A. Process ETFs (Themes) first for RRG
+    etf_tickers = list(theme_map.values())
+    
+    for theme, etf_ticker in theme_map.items():
+        if etf_ticker not in raw_dfs: continue
+        
+        df = raw_dfs[etf_ticker]
+        df = calc.process_dataframe(df) # Standardize cols
+        df = calc.calculate_rrg_metrics(df, spy_df) # Calculate RRG vs SPY
+        
+        data_cache[etf_ticker] = df
+
+    # B. Process Individual Stocks (Alpha vs Sector ETF)
+    # We need the parent ETF data ready first (done above)
+    stocks = uni_df[uni_df['Role'] == 'Stock']
+    
+    for _, row in stocks.iterrows():
+        stock = row['Ticker']
+        theme = row['Theme']
+        parent_etf = theme_map.get(theme)
+        
+        if stock not in raw_dfs: continue
+        
+        s_df = raw_dfs[stock]
+        s_df = calc.process_dataframe(s_df)
+        
+        # Calculate Alpha relative to its Sector ETF (if available), else SPY
+        parent_df = data_cache.get(parent_etf, spy_df) 
+        s_df = calc.calculate_stock_alpha(s_df, parent_df)
+        
+        data_cache[stock] = s_df
+
+    return data_cache, missing_tickers, theme_map, uni_df
+
+# ==========================================
+# 5. VISUALIZATION HELPERS
 # ==========================================
 
 def classify_setup(df):

@@ -11,49 +11,47 @@ def get_ma_signal(price, ma_val):
         return "⚠️" 
     return "✅" if price > ma_val else "❌"
 
-@st.cache_data(ttl=3600)
-def get_universe_cached():
-    """Caches the universe loading to prevent re-reading CSV on every rerun"""
-    dm = us.SectorDataManager()
-    return dm.load_universe()
-
 # ==========================================
 # MAIN PAGE FUNCTION
 # ==========================================
 def run_sector_rotation_app(df_global=None):
     st.title("🔄 Sector Rotation")
     
-    # 1. Init Data Manager
-    dm = us.SectorDataManager()
-    
-    # 2. Load Universe (Cached)
-    uni_df, tickers, theme_map = get_universe_cached()
-    
+    # 1. Automatic Data Fetch (Cached 10m)
+    # This replaces the old logic. It fetches from Drive Parquets, processes RRG/Alpha, and returns the cache.
+    with st.spinner("Syncing Sector Data..."):
+        etf_data_cache, missing_tickers, theme_map, uni_df = us.fetch_and_process_universe()
+
     if uni_df.empty:
         st.warning("⚠️ SECTOR_UNIVERSE secret is missing or empty.")
         return
 
-    # 3. PERFORMANCE OPTIMIZATION: Bulk Load ETF Data
-    # Instead of reading files in a loop later, we load all ETFs into memory once.
-    etf_tickers = list(theme_map.values())
-    etf_data_cache = dm.load_batch_data(etf_tickers)
+    # 2. Check for Missing Data
+    if missing_tickers:
+        with st.expander(f"⚠️ Missing Data for {len(missing_tickers)} Tickers", expanded=False):
+            st.caption("The following tickers were in your Universe list but no matching Parquet file was found in the Ticker Map.")
+            st.write(", ".join(missing_tickers))
 
-    # 4. Session State for Controls
+    # 3. Session State for Controls
     if "sector_view" not in st.session_state: st.session_state.sector_view = "5 Days"
     if "sector_trails" not in st.session_state: st.session_state.sector_trails = False
-    if "sector_target" not in st.session_state: st.session_state.sector_target = sorted(list(theme_map.keys()))[0] if theme_map else ""
     
+    # Ensure target is valid
     all_themes = sorted(list(theme_map.keys()))
+    if not all_themes:
+        st.error("No valid themes found. Check data sources.")
+        return
+
+    if "sector_target" not in st.session_state or st.session_state.sector_target not in all_themes: 
+        st.session_state.sector_target = all_themes[0]
+    
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
 
     # --- MAIN SECTION START ---
-    # (2) Rename Sector Rotations section to Rotation Quadrant Graphic
     st.subheader("Rotation Quadrant Graphic")
 
     # 1. GRAPHIC USER GUIDE
-    # (1) Add emoji to "graphic user guide" expander
-    # (6) Have all expanders on the entire page default to being closed
     with st.expander("🗺️ Graphic User Guide", expanded=False):
         st.markdown("""
         **🧮 How It Works (The Math)**
@@ -75,69 +73,50 @@ def run_sector_rotation_app(df_global=None):
         """)
 
     # CONTROLS
-    # (6) Have all expanders on the entire page default to being closed
     with st.expander("⚙️ Chart Inputs & Filters", expanded=False):
-        # We split into two main columns to organize inputs better
         col_inputs, col_filters = st.columns([1, 1])
         
-        # --- LEFT COLUMN: Timeframe, Trails, Updates ---
+        # --- LEFT COLUMN: Timeframe, Trails ---
         with col_inputs:
-            # (3) Make Timeframe Window the same font as Sectors Shown just below
             st.markdown("**Timeframe Window**") 
             st.session_state.sector_view = st.radio(
                 "Timeframe Window", 
                 ["5 Days", "10 Days", "20 Days"], 
                 horizontal=True, 
                 key="timeframe_radio",
-                label_visibility="collapsed" # Hide default label to use Markdown header
+                label_visibility="collapsed"
             )
             
-            # (4) Put 3-Day Trails just under 5/10/20 toggles
             st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
             st.session_state.sector_trails = st.checkbox("Show 3-Day Trails", value=st.session_state.sector_trails)
             
-            st.markdown("---")
-
-            # (5) Put Update Data and the most recent date just under that also in this box.
-            last_update = dm.get_last_updated()
-            st.caption(f"📅 Data last updated: {last_update}")
-            
-            if st.button("🔄 Update Data", use_container_width=True):
-                status = st.empty()
-                calc = us.SectorAlphaCalculator()
-                calc.run_full_update(status)
-                st.cache_data.clear() # Clear cache after update
-                st.rerun()
+            # Display Last Data Date (Check SPY)
+            if "SPY" in etf_data_cache and not etf_data_cache["SPY"].empty:
+                last_dt = etf_data_cache["SPY"].index[-1].strftime("%Y-%m-%d")
+                st.caption(f"📅 Data Date: {last_dt}")
 
         # --- RIGHT COLUMN: Sector Filters ---
         with col_filters:
             st.markdown("**Sectors Shown**")
-            # Changed to 3 columns to accommodate the new button
             btn_col1, btn_col2, btn_col3 = st.columns(3)
             
             with btn_col1:
-                # Renamed 'Add All' to 'Everything'
                 if st.button("➕ Everything", use_container_width=True):
                     st.session_state.sector_theme_filter_widget = all_themes
                     st.rerun()
 
             with btn_col2:
-                # New 'Big 11' Button
                 if st.button("⭐ Big 11", use_container_width=True):
-                    # The specific themes you provided
                     big_11_list = [
                         "Communications", "Consumer Discretionary", "Consumer Staples", 
                         "Energy", "Financials", "Healthcare", "Industrials", 
                         "Materials", "Real Estate", "Technology", "Utilities"
                     ]
-                    
-                    # Logic: Filter to ensure we only select themes that exist in your current data
                     valid_themes = [t for t in big_11_list if t in all_themes]
                     st.session_state.sector_theme_filter_widget = valid_themes
                     st.rerun()
 
             with btn_col3:
-                # Renamed 'Remove All' to 'Clear'
                 if st.button("➖ Clear", use_container_width=True):
                     st.session_state.sector_theme_filter_widget = []
                     st.rerun()
@@ -152,7 +131,6 @@ def run_sector_rotation_app(df_global=None):
     view_key = timeframe_map[st.session_state.sector_view]
 
     # --- MOMENTUM SCANS ---
-    # (6) Have all expanders on the entire page default to being closed
     with st.expander("🚀 Momentum Scans", expanded=False):
         inc_mom, neut_mom, dec_mom = [], [], []
         
@@ -167,7 +145,6 @@ def run_sector_rotation_app(df_global=None):
             m20 = last.get("RRG_Mom_Long",0)
             
             shift = m5 - m20
-            # Use util function
             setup = us.classify_setup(df)
             icon = setup.split()[0] if setup else ""
             item = {"theme": theme, "shift": shift, "icon": icon}
@@ -191,7 +168,7 @@ def run_sector_rotation_app(df_global=None):
             st.error(f"🔻 Decreasing ({len(dec_mom)})")
             for i in dec_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
 
-    # RRG CHART (Using Utils function)
+    # RRG CHART
     chart_placeholder = st.empty()
     with chart_placeholder:
         # Pass the cache into the plotting function
@@ -210,7 +187,6 @@ def run_sector_rotation_app(df_global=None):
     # --- ALL THEMES PERFORMANCE ---
     st.subheader("All Themes Performance")
     
-    # (7) Add some text All Themes Performance section header, explaining Rel Perf and Mom
     st.markdown("""
     * **Rel Perf (Relative Performance):** Measures the strength of the trend against the S&P 500. 
       Values positive (>0) indicate outperformance; negative (<0) indicate underperformance.
@@ -256,7 +232,6 @@ def run_sector_rotation_app(df_global=None):
     st.markdown("---")
 
     # --- EXPLORER SECTION ---
-    # (8) Rename Explorer Header
     st.subheader(f"🔎 Explorer: Theme Drilldown")
     
     search_t = st.text_input("Input a ticker to find its theme(s)", placeholder="NVDA...").strip().upper()
@@ -274,21 +249,21 @@ def run_sector_rotation_app(df_global=None):
     if new_target != st.session_state.sector_target:
         st.session_state.sector_target = new_target
 
-    # --- STOCK TABLE (Optimized) ---
+    # --- STOCK TABLE ---
+    # Filter tickers for current theme
     stock_tickers = uni_df[(uni_df['Theme'] == st.session_state.sector_target) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
-    
-    # BATCH LOAD STOCKS FOR THIS SECTOR ONLY
-    stock_cache = dm.load_batch_data(stock_tickers)
     
     ranking_data = []
     
     for stock in stock_tickers:
-        sdf = stock_cache.get(stock) # Use Cache
+        sdf = etf_data_cache.get(stock) # Already fetched in initial batch
         
         if sdf is None or sdf.empty: continue
         
         try:
-            # Volume Filter
+            # Volume Filter (Assuming min 20 days data available)
+            if len(sdf) < 20: continue
+            
             avg_vol = sdf['Volume'].tail(20).mean()
             avg_price = sdf['Close'].tail(20).mean()
             if (avg_vol * avg_price) < us.MIN_DOLLAR_VOLUME: continue
