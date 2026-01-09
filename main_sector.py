@@ -290,8 +290,6 @@ def run_sector_rotation_app(df_global=None):
         
         row = {"Theme": theme}
         
-        # Calculate Deviation from 100 for proper display
-        
         # Short (5d)
         row["Status (5d)"] = get_quadrant_status(etf_df, "Short")
         row["Rel Perf (5d)"] = last.get("RRG_Ratio_Short", 100) - 100
@@ -395,10 +393,10 @@ def run_sector_rotation_app(df_global=None):
 
         st.dataframe(
             df_disp.style.apply(style_rows, axis=1).format({
-                "Price": "$%.2f", 
-                "Alpha 5d": "%+.2f%%", "RVOL 5d": "%.1fx",
-                "Alpha 10d": "%+.2f%%", "RVOL 10d": "%.1fx",
-                "Alpha 20d": "%+.2f%%", "RVOL 20d": "%.1fx"
+                "Price": "${:.2f}", 
+                "Alpha 5d": "{:+.2f}%", "RVOL 5d": "{:.1f}x",
+                "Alpha 10d": "{:+.2f}%", "RVOL 10d": "{:.1f}x",
+                "Alpha 20d": "{:+.2f}%", "RVOL 20d": "{:.1f}x"
             }),
             hide_index=True, use_container_width=True,
             column_config={
