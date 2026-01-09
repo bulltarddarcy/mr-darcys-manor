@@ -109,39 +109,73 @@ def run_sector_rotation_app(df_global=None):
         return
 
     # --- GUIDES (EXPANDERS) ---
-    # Note: Copy your original text into these strings
     with st.expander("📚 Page Information & User Guide", expanded=False):
-        st.write("This tool helps visualize the rotation of capital between different sectors and themes using Relative Rotation Graphs (RRG).")
-        st.write("• **X-Axis (Relative Trend):** Measures the relative strength of the trend compared to SPY.")
-        st.write("• **Y-Axis (Relative Momentum):** Measures the rate of change of that relative strength.")
+        st.markdown("""
+        **⏱️ Understanding Timeframes**
+        * **5 Days (Short):** The Tactical View. (~1 Week). Highly sensitive. Use this for precise entries (buying dips) or exits.
+        * **10 Days (Med):** The Balance. (~2 Weeks). A middle ground that smooths out daily noise but reacts faster than the monthly trend.
+        * **20 Days (Long):** The Strategic View. (~1 Month). This is your primary trend. Major moves happen here.
+
+        **🧮 How It Works (The Math)**
+        This chart does **not** show price. It shows **Relative Performance** against the S&P 500 (SPY).
+        * **X-Axis (Trend):** Are we beating the market?
+            * `> 100`: Outperforming the S&P 500.
+            * `< 100`: Underperforming the S&P 500.
+        * **Y-Axis (Momentum):** How fast is the trend changing?
+            * `> 100`: Gaining speed (Acceleration).
+            * `< 100`: Losing speed (Deceleration).
+        
+        *Note: Calculations use Weighted Regression, meaning today's price action is weighted 3x more than data from 20 days ago. This eliminates lag.*
+
+        **📊 How to Read the Quadrants**
+        * 🟢 **LEADING (Top Right):** Strong Trend + Accelerating Momentum. The Winners.
+        * 🟡 **WEAKENING (Bottom Right):** Strong Trend, but losing steam. Often a place to take profits or wait for a pullback.
+        * 🔴 **LAGGING (Bottom Left):** Weak Trend + Decelerating. The Losers. Avoid unless hunting for bottoms.
+        * 🔵 **IMPROVING (Top Left):** Weak Trend, but Momentum is waking up. This is where "Turnarounds" happen.
+
+        **🐍 Using Tails (History)**
+        * **The Dot:** Represents Today's score.
+        * **The Tail:** Shows the path of the last 3 days.
+        * **Long Tail:** = High Velocity. The move is strong and decisive.
+        * **Short Tail:** = Indecision. The sector is stuck.
+        * **J-Hook:** If the tail is in the bottom left but "Hooks" sharply up and right, smart money is rotating in aggressively.
+        """)
     
     with st.expander("🔑 View Setup Key", expanded=False):
-        st.write("• **Leading (Green):** Strong Trend + Strong Momentum. Best for holding.")
-        st.write("• **Weakening (Yellow):** Strong Trend + Weak Momentum. Watch for potential pullback or reversal.")
-        st.write("• **Lagging (Red):** Weak Trend + Weak Momentum. Avoid or Short.")
-        st.write("• **Improving (Blue):** Weak Trend + Strong Momentum. Potential reversal candidates.")
-        st.write("---")
-        st.write("• **🪝 J-Hook:** Momentum turning up while still in a negative trend (Potential bottom).")
-        st.write("• **🚩 Bull Flag:** Strong trend consolidating momentum.")
-        st.write("• **🚀 Rocket:** Strong acceleration in both trend and momentum.")
+        st.markdown("""
+        **🪝 J-Hook (Turnaround)**
+        * **Definition:** Long-term trend is weak, but Short-term is exploding higher.
+        * **Action:** Aggressive bottom fishing.
+
+        **🚩 Bull Flag (Dip Buy)**
+        * **Definition:** Long-term trend is strong. Short-term rested and is turning back up.
+        * **Action:** Safe entry into leader.
+
+        **🚀 Rocket (Thrust)**
+        * **Definition:** Perfect alignment (5 > 10 > 20). Accelerating velocity.
+        * **Action:** Chase the strength (FOMO).
+        """)
 
     with st.expander("📂 Category Guide", expanded=False):
-        st.write("**Defensive:** Utilities, Staples, Healthcare")
-        st.write("**Cyclical:** Discretionary, Materials, Industrials, Financials")
-        st.write("**Growth/Tech:** Technology, Communication Services")
-        st.write("**Sensitive:** Energy, Real Estate")
+        st.markdown("""
+        **📈 Increasing:** 5-Day Momentum > 20-Day Momentum.
+        * **Meaning:** The move is accelerating (Gas Pedal is down).
 
-    st.divider()
+        **🔻 Decreasing:** 5-Day Momentum < 20-Day Momentum.
+        * **Meaning:** The move is slowing down (Braking).
+
+        **⚖️ Neutral:** Mixed signals or consolidating.
+        """)
 
     # 2. Session State for Controls
     if "sector_view" not in st.session_state: st.session_state.sector_view = "5 Days"
     if "sector_trails" not in st.session_state: st.session_state.sector_trails = False
     if "sector_target" not in st.session_state: st.session_state.sector_target = sorted(list(theme_map.keys()))[0] if theme_map else ""
 
-    # Ensure filter list is init
+    # Ensure filter list is init for the widget
     all_themes = sorted(list(theme_map.keys()))
-    if "sector_theme_filter" not in st.session_state:
-        st.session_state.sector_theme_filter = all_themes
+    if "sector_theme_filter_widget" not in st.session_state:
+        st.session_state.sector_theme_filter_widget = all_themes
 
     # 3. CONTROL SECTION
     
@@ -170,36 +204,31 @@ def run_sector_rotation_app(df_global=None):
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
     view_key = timeframe_map[st.session_state.sector_view]
 
-    st.markdown("---")
-
     # --- Row 2: Sector Selection (Large Box) ---
     st.markdown("##### Sectors Shown")
     
     # Buttons for Add/Remove All
     btn_col1, btn_col2, _ = st.columns([1, 1, 6])
+    
+    # FIX: Update the specific widget key 'sector_theme_filter_widget'
     with btn_col1:
         if st.button("➕ Add All"):
-            st.session_state.sector_theme_filter = all_themes
+            st.session_state.sector_theme_filter_widget = all_themes
             st.rerun()
     with btn_col2:
         if st.button("➖ Remove All"):
-            st.session_state.sector_theme_filter = []
+            st.session_state.sector_theme_filter_widget = []
             st.rerun()
             
     # The Multiselect
     sel_themes = st.multiselect(
         "Select Themes", 
         all_themes, 
-        default=st.session_state.sector_theme_filter,
-        key="sector_theme_filter_widget", # Use a different key to avoid conflict if manual state set
+        key="sector_theme_filter_widget", 
         label_visibility="collapsed"
     )
     
-    # Sync widget back to state if changed manually
-    st.session_state.sector_theme_filter = sel_themes
     filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
-
-    st.markdown("---")
 
     # --- Row 3: Momentum Scans ---
     st.markdown("##### Momentum Scans")
@@ -235,8 +264,6 @@ def run_sector_rotation_app(df_global=None):
         st.error(f"🔻 Decreasing ({len(dec_mom)})")
         for i in dec_mom: st.caption(f"{i['theme']} {i['icon']}")
 
-    st.divider()
-
     # 4. RRG CHART
     chart_placeholder = st.empty()
     with chart_placeholder:
@@ -251,8 +278,6 @@ def run_sector_rotation_app(df_global=None):
         elif "text" in point:
             st.session_state.sector_target = point["text"]
     
-    st.divider()
-
     # 5. THEME EXPLORER (Stock List)
     st.subheader(f"🔎 Explorer: {st.session_state.sector_target}")
     
