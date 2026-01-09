@@ -50,18 +50,25 @@ def run_sector_rotation_app(df_global=None):
     # --- MAIN SECTION START ---
     st.subheader("Sector Rotations")
 
-    # GRAPHIC USER GUIDE
+    # 1. GRAPHIC USER GUIDE (Moved Here)
     with st.expander("Graphic User Guide", expanded=False):
         st.markdown("""
-        **🧮 How It Works**
-        * **X-Axis (Trend):** `> 100` = Outperforming SPY.
-        * **Y-Axis (Momentum):** `> 100` = Accelerating.
+        **🧮 How It Works (The Math)**
+        This chart does **not** show price. It shows **Relative Performance** against the S&P 500 (SPY).
+        * **X-Axis (Trend):** Are we beating the market?
+            * `> 100`: Outperforming the S&P 500.
+            * `< 100`: Underperforming the S&P 500.
+        * **Y-Axis (Momentum):** How fast is the trend changing?
+            * `> 100`: Gaining speed (Acceleration).
+            * `< 100`: Losing speed (Deceleration).
+        
+        *Note: Calculations use Weighted Regression (Today's price weighted 3x vs 20 days ago).*
         
         **📊 Quadrant Guide**
-        * 🟢 **LEADING:** Strong Trend + Accelerating.
-        * 🟡 **WEAKENING:** Strong Trend, losing steam.
-        * 🔴 **LAGGING:** Weak Trend + Decelerating.
-        * 🔵 **IMPROVING:** Turnarounds (Weak Trend, Accelerating).
+        * 🟢 **LEADING (Top Right):** Strong Trend + Accelerating Momentum. The Winners.
+        * 🟡 **WEAKENING (Bottom Right):** Strong Trend, but losing steam. Often a place to take profits.
+        * 🔴 **LAGGING (Bottom Left):** Weak Trend + Decelerating. The Losers.
+        * 🔵 **IMPROVING (Top Left):** Weak Trend, but Momentum is waking up. "Turnarounds".
         """)
 
     # CONTROLS
