@@ -204,65 +204,62 @@ def run_sector_rotation_app(df_global=None):
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
     view_key = timeframe_map[st.session_state.sector_view]
 
-    # --- Row 2: Sector Selection (Large Box) ---
-    st.markdown("##### Sectors Shown")
-    
-    # Buttons for Add/Remove All
-    btn_col1, btn_col2, _ = st.columns([1, 1, 6])
-    
-    # FIX: Update the specific widget key 'sector_theme_filter_widget'
-    with btn_col1:
-        if st.button("➕ Add All"):
-            st.session_state.sector_theme_filter_widget = all_themes
-            st.rerun()
-    with btn_col2:
-        if st.button("➖ Remove All"):
-            st.session_state.sector_theme_filter_widget = []
-            st.rerun()
-            
-    # The Multiselect
-    sel_themes = st.multiselect(
-        "Select Themes", 
-        all_themes, 
-        key="sector_theme_filter_widget", 
-        label_visibility="collapsed"
-    )
+    # --- Row 2: Sector Selection (EXPANDABLE) ---
+    with st.expander("👁️ Sectors Shown", expanded=True):
+        # Buttons for Add/Remove All
+        btn_col1, btn_col2, _ = st.columns([1, 1, 6])
+        
+        with btn_col1:
+            if st.button("➕ Add All"):
+                st.session_state.sector_theme_filter_widget = all_themes
+                st.rerun()
+        with btn_col2:
+            if st.button("➖ Remove All"):
+                st.session_state.sector_theme_filter_widget = []
+                st.rerun()
+                
+        # The Multiselect
+        sel_themes = st.multiselect(
+            "Select Themes", 
+            all_themes, 
+            key="sector_theme_filter_widget", 
+            label_visibility="collapsed"
+        )
     
     filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
 
-    # --- Row 3: Momentum Scans ---
-    st.markdown("##### Momentum Scans")
-    
-    # Calculate Momentum buckets
-    inc_mom, neut_mom, dec_mom = [], [], []
-    for theme, ticker in theme_map.items():
-        df = dm.load_ticker_data(ticker)
-        if df is None or df.empty or "RRG_Mom_Short" not in df.columns: continue
-        last = df.iloc[-1]
-        m5, m10, m20 = last.get("RRG_Mom_Short",0), last.get("RRG_Mom_Med",0), last.get("RRG_Mom_Long",0)
-        setup = classify_setup(df)
-        icon = setup.split()[0] if setup else ""
-        item = {"theme": theme, "shift": m5-m20, "icon": icon}
-        
-        # Momentum Logic
-        if m5 > m10 > m20: inc_mom.append(item)
-        elif m5 < m10 < m20: dec_mom.append(item)
-        else: neut_mom.append(item)
+    # --- Row 3: Momentum Scans (EXPANDABLE) ---
+    with st.expander("🚀 Momentum Scans", expanded=True):
+        # Calculate Momentum buckets
+        inc_mom, neut_mom, dec_mom = [], [], []
+        for theme, ticker in theme_map.items():
+            df = dm.load_ticker_data(ticker)
+            if df is None or df.empty or "RRG_Mom_Short" not in df.columns: continue
+            last = df.iloc[-1]
+            m5, m10, m20 = last.get("RRG_Mom_Short",0), last.get("RRG_Mom_Med",0), last.get("RRG_Mom_Long",0)
+            setup = classify_setup(df)
+            icon = setup.split()[0] if setup else ""
+            item = {"theme": theme, "shift": m5-m20, "icon": icon}
+            
+            # Momentum Logic
+            if m5 > m10 > m20: inc_mom.append(item)
+            elif m5 < m10 < m20: dec_mom.append(item)
+            else: neut_mom.append(item)
 
-    # Display Columns
-    m_col1, m_col2, m_col3 = st.columns(3)
-    
-    with m_col1: 
-        st.success(f"📈 Increasing ({len(inc_mom)})")
-        for i in inc_mom: st.caption(f"{i['theme']} {i['icon']}")
+        # Display Columns
+        m_col1, m_col2, m_col3 = st.columns(3)
         
-    with m_col2:
-        st.warning(f"⚖️ Neutral / Mixed ({len(neut_mom)})")
-        for i in neut_mom: st.caption(f"{i['theme']} {i['icon']}")
-        
-    with m_col3:
-        st.error(f"🔻 Decreasing ({len(dec_mom)})")
-        for i in dec_mom: st.caption(f"{i['theme']} {i['icon']}")
+        with m_col1: 
+            st.success(f"📈 Increasing ({len(inc_mom)})")
+            for i in inc_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
+            
+        with m_col2:
+            st.warning(f"⚖️ Neutral / Mixed ({len(neut_mom)})")
+            for i in neut_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
+            
+        with m_col3:
+            st.error(f"🔻 Decreasing ({len(dec_mom)})")
+            for i in dec_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
 
     # 4. RRG CHART
     chart_placeholder = st.empty()
