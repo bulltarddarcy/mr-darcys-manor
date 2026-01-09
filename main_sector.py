@@ -290,37 +290,38 @@ def run_sector_rotation_app(df_global=None):
         
         row = {"Theme": theme}
         
+        # Calculate Deviation from 100 for proper display
+        
         # Short (5d)
         row["Status (5d)"] = get_quadrant_status(etf_df, "Short")
-        row["Rel Perf (5d)"] = last.get("RRG_Ratio_Short", 0)
-        row["Mom (5d)"] = last.get("RRG_Mom_Short", 0)
+        row["Rel Perf (5d)"] = last.get("RRG_Ratio_Short", 100) - 100
+        row["Mom (5d)"] = last.get("RRG_Mom_Short", 100) - 100
         
         # Med (10d)
         row["Status (10d)"] = get_quadrant_status(etf_df, "Med")
-        row["Rel Perf (10d)"] = last.get("RRG_Ratio_Med", 0)
-        row["Mom (10d)"] = last.get("RRG_Mom_Med", 0)
+        row["Rel Perf (10d)"] = last.get("RRG_Ratio_Med", 100) - 100
+        row["Mom (10d)"] = last.get("RRG_Mom_Med", 100) - 100
         
         # Long (20d)
         row["Status (20d)"] = get_quadrant_status(etf_df, "Long")
-        row["Rel Perf (20d)"] = last.get("RRG_Ratio_Long", 0)
-        row["Mom (20d)"] = last.get("RRG_Mom_Long", 0)
+        row["Rel Perf (20d)"] = last.get("RRG_Ratio_Long", 100) - 100
+        row["Mom (20d)"] = last.get("RRG_Mom_Long", 100) - 100
 
         summary_data.append(row)
         
     if summary_data:
-        # Config for numeric sorting and frozen column
         st.dataframe(
             pd.DataFrame(summary_data),
             hide_index=True,
             use_container_width=True,
             column_config={
-                "Theme": st.column_config.TextColumn("Theme"), # Removed frozen=True
-                "Rel Perf (5d)": st.column_config.NumberColumn("Rel Perf (5d)", format="%.1f"),
-                "Mom (5d)": st.column_config.NumberColumn("Mom (5d)", format="%.1f"),
-                "Rel Perf (10d)": st.column_config.NumberColumn("Rel Perf (10d)", format="%.1f"),
-                "Mom (10d)": st.column_config.NumberColumn("Mom (10d)", format="%.1f"),
-                "Rel Perf (20d)": st.column_config.NumberColumn("Rel Perf (20d)", format="%.1f"),
-                "Mom (20d)": st.column_config.NumberColumn("Mom (20d)", format="%.1f"),
+                "Theme": st.column_config.TextColumn("Theme"), 
+                "Rel Perf (5d)": st.column_config.NumberColumn("Rel Perf (5d)", format="%+.2f%%"),
+                "Mom (5d)": st.column_config.NumberColumn("Mom (5d)", format="%+.2f"),
+                "Rel Perf (10d)": st.column_config.NumberColumn("Rel Perf (10d)", format="%+.2f%%"),
+                "Mom (10d)": st.column_config.NumberColumn("Mom (10d)", format="%+.2f"),
+                "Rel Perf (20d)": st.column_config.NumberColumn("Rel Perf (20d)", format="%+.2f%%"),
+                "Mom (20d)": st.column_config.NumberColumn("Mom (20d)", format="%+.2f"),
             }
         )
 
@@ -337,7 +338,12 @@ def run_sector_rotation_app(df_global=None):
         matches = uni_df[uni_df['Ticker'] == search_t]
         if not matches.empty:
             found = matches['Theme'].unique()
+            # SHOW SUCCESS MSG
+            st.success(f"📍 Found **{search_t}** in: **{', '.join(found)}**")
+            
             if len(found) > 0: st.session_state.sector_target = found[0]
+        else:
+            st.warning(f"Ticker {search_t} not found in the Sector Universe.")
 
     # 2. Dropdown Selector
     curr_idx = all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0
