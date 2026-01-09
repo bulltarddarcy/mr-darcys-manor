@@ -15,6 +15,9 @@ TIMEFRAMES = {
 }
 MIN_DOLLAR_VOLUME = 2_000_000
 BETA_WINDOW = 60
+# Optimization: Since technicals are pre-calculated, we only need enough history 
+# to calc Beta (60d) + RRG Smoothing (20d) + a safety buffer.
+MAX_LOOKBACK_DAYS = 150 
 
 # ==========================================
 # 2. DATA LOADING (LAYER 1 - RAW IO)
@@ -55,6 +58,8 @@ def load_universe_config():
 def load_raw_sector_data():
     """
     Downloads Parquet and renames pre-calculated columns.
+    Optimization: Does NOT filter date here to ensure cache hits are stable,
+    but date filtering happens immediately in processing.
     """
     db_url = st.secrets.get("PARQUET_SECTOR_ROTATION")
     if not db_url: return None
@@ -85,7 +90,6 @@ def load_raw_sector_data():
         
         if 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date'])
-            df = df.sort_values(['Ticker', 'Date'])
             
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
         
@@ -97,95 +101,190 @@ def load_raw_sector_data():
 # 3. PROCESSING (LAYER 2 - MATH)
 # ==========================================
 
-def _calc_rrg_metrics(close_series, bench_series):
-    """Vectorized RRG calculation."""
-    ratio = close_series / bench_series
-    results = {}
+def _calc_rrg_metrics_vectorized(close_df, benchmark_series):
+    """
+    Vectorized RRG calculation for multiple tickers at once.
+    close_df: DataFrame of Close prices (Date x Tickers)
+    benchmark_series: Series of Benchmark Close prices
+    """
+    # Align
+    ratio_df = close_df.div(benchmark_series, axis=0)
+    
+    metrics = {}
     
     for label, w in TIMEFRAMES.items():
         # Trend: Ratio vs Moving Average of Ratio
-        ma_ratio = ratio.rolling(window=w).mean()
-        results[f"RRG_Ratio_{label}"] = ((ratio - ma_ratio) / ma_ratio) * 100 + 100
+        ma_ratio = ratio_df.rolling(window=w).mean()
+        # Normalized Deviation
+        metrics[f"RRG_Ratio_{label}"] = ((ratio_df - ma_ratio) / ma_ratio) * 100 + 100
         
         # Momentum: ROC of the Ratio
-        results[f"RRG_Mom_{label}"] = (ratio.pct_change(periods=w) * 100) + 100
+        metrics[f"RRG_Mom_{label}"] = (ratio_df.pct_change(periods=w) * 100) + 100
         
-    return pd.DataFrame(results, index=close_series.index)
+    return metrics, ratio_df
 
-@st.cache_data(ttl=1200, show_spinner="Calculating Alpha & Beta...")
+@st.cache_data(ttl=1200, show_spinner="Computing Sector Metrics...")
 def get_computed_sector_data(benchmark_ticker):
     """
-    Uses pre-calculated technicals from parquet. 
-    Only calculates Alpha/Beta/RVOL on the fly.
+    Optimized:
+    1. Filters data to recent history immediately.
+    2. Uses Matrix/Vector operations for Alpha/Beta/RVOL.
+    3. Builds cache efficiently.
     """
     master_df = load_raw_sector_data()
     uni_df, theme_map = load_universe_config()
     
     if master_df is None or uni_df.empty: return {}, [], theme_map, uni_df
 
-    # 1. Calculate RVOL (Vectorized)
-    # We assume Volume is there, but RVOL isn't pre-calc
-    if 'RVOL' not in master_df.columns:
-        master_df['Vol_Avg'] = master_df.groupby('Ticker')['Volume'].transform(lambda x: x.rolling(20).mean())
-        master_df['RVOL'] = master_df['Volume'] / master_df['Vol_Avg']
+    # --- OPTIMIZATION 1: DATE SLICING ---
+    # We only need the last X days for current rotation analysis
+    if 'Date' in master_df.columns:
+        max_date = master_df['Date'].max()
+        cutoff_date = max_date - pd.Timedelta(days=MAX_LOOKBACK_DAYS)
+        master_df = master_df[master_df['Date'] >= cutoff_date].copy()
+        master_df.sort_values(['Ticker', 'Date'], inplace=True)
 
-    # 2. Pivot for Fast Alpha Math (Wide Format)
-    df_close_wide = master_df.pivot(index='Date', columns='Ticker', values='Close').ffill()
-    df_rets_wide = df_close_wide.pct_change()
+    # --- OPTIMIZATION 2: WIDE FORMAT CONVERSION ---
+    # Pivot once to get matrices (Date x Ticker)
+    df_close = master_df.pivot(index='Date', columns='Ticker', values='Close').ffill()
+    df_vol = master_df.pivot(index='Date', columns='Ticker', values='Volume').fillna(0)
     
-    if benchmark_ticker not in df_close_wide.columns:
+    if benchmark_ticker not in df_close.columns:
         return {}, [f"{benchmark_ticker} missing"], theme_map, uni_df
 
-    bench_series = df_close_wide[benchmark_ticker]
-    data_cache = {}
+    bench_series = df_close[benchmark_ticker]
+    df_rets = df_close.pct_change()
+    bench_rets = df_rets[benchmark_ticker]
+    
+    # --- OPTIMIZATION 3: VECTORIZED RVOL ---
+    # Calc Average Volume for ALL tickers at once
+    df_vol_avg = df_vol.rolling(20).mean()
+    df_rvol = df_vol / df_vol_avg
+    
+    # Pre-calculate Rolling RVOLs (Dictionary of DataFrames)
+    rvol_metrics = {}
+    for k, w in TIMEFRAMES.items():
+        rvol_metrics[f"RVOL_{k}"] = df_rvol.rolling(w).mean()
 
-    # 3. Process ETFs (RRG)
+    # --- PROCESS ETFs (RRG) ---
     etf_tickers = list(theme_map.values())
-    for etf in etf_tickers:
-        if etf not in df_close_wide.columns: continue
-        
-        subset = master_df[master_df['Ticker'] == etf].copy().set_index('Date').sort_index()
-        
-        # Calc RRG Metrics vs Benchmark
-        aligned_bench = bench_series.loc[subset.index]
-        rrg_metrics = _calc_rrg_metrics(subset['Close'], aligned_bench)
-        
-        data_cache[etf] = pd.concat([subset, rrg_metrics], axis=1)
+    valid_etfs = [t for t in etf_tickers if t in df_close.columns]
+    
+    # Vectorized RRG Calculation for all ETFs
+    if valid_etfs:
+        etf_closes = df_close[valid_etfs]
+        rrg_results, _ = _calc_rrg_metrics_vectorized(etf_closes, bench_series)
+    else:
+        rrg_results = {}
 
-    # 4. Process Stocks (Alpha/Beta)
+    # --- PROCESS STOCKS (Alpha/Beta) ---
     stocks = uni_df[uni_df['Role'] == 'Stock']
     
-    # Pre-calculate Rolling RVOLs for display
-    for k, w in TIMEFRAMES.items():
-        master_df[f"RVOL_{k}"] = master_df.groupby('Ticker')['RVOL'].transform(lambda x: x.rolling(w).mean())
-
+    # Map stocks to their parent ETF (Theme)
+    # We group stocks by Theme to vectorize Beta calculation per Sector
+    theme_groups = {}
     for _, row in stocks.iterrows():
-        stock = row['Ticker']
-        theme = row['Theme']
-        parent_etf = theme_map.get(theme, benchmark_ticker)
-        
-        if stock not in df_close_wide.columns: continue
-        if parent_etf not in df_close_wide.columns: parent_etf = benchmark_ticker
-        
-        subset = master_df[master_df['Ticker'] == stock].copy().set_index('Date').sort_index()
-        
-        # Alpha/Beta Calculation
-        stock_rets = df_rets_wide[stock]
-        parent_rets = df_rets_wide[parent_etf]
-        
-        rolling_cov = stock_rets.rolling(BETA_WINDOW).cov(parent_rets)
-        rolling_var = parent_rets.rolling(BETA_WINDOW).var()
-        beta = (rolling_cov / rolling_var).fillna(1.0)
-        
-        true_alpha = stock_rets - (parent_rets * beta)
-        
-        subset['Beta'] = beta
-        subset['True_Alpha_1D'] = true_alpha
-        
-        for k, w in TIMEFRAMES.items():
-            subset[f"True_Alpha_{k}"] = true_alpha.rolling(w).sum() * 100
+        t = row['Ticker']
+        if t in df_close.columns:
+            theme = row['Theme']
+            parent = theme_map.get(theme, benchmark_ticker)
+            # Ensure parent exists in data, else fallback to SPY
+            if parent not in df_close.columns: parent = benchmark_ticker
             
-        data_cache[stock] = subset
+            if parent not in theme_groups: theme_groups[parent] = []
+            theme_groups[parent].append(t)
+
+    # Dictionaries to hold final computed series (Ticker -> Series)
+    beta_map = {}
+    alpha_map = {} # Key: Ticker, Value: Series of 1D Alpha
+    rolling_alpha_maps = {k: {} for k in TIMEFRAMES}
+
+    # Vectorized Beta Loop (Loop over ~11 Sectors instead of ~500 Stocks)
+    for parent_etf, stock_list in theme_groups.items():
+        if not stock_list: continue
+        
+        # Get Returns for this cluster
+        sector_stock_rets = df_rets[stock_list]
+        parent_ret_series = df_rets[parent_etf]
+        
+        # Vectorized Rolling Covariance
+        # rolling().cov() between a DF and a Series broadcasts the Series
+        rolling_cov = sector_stock_rets.rolling(BETA_WINDOW).cov(parent_ret_series)
+        rolling_var = parent_ret_series.rolling(BETA_WINDOW).var()
+        
+        # Beta = Cov / Var
+        # We need to divide column-wise
+        betas = rolling_cov.div(rolling_var, axis=0).fillna(1.0)
+        
+        # Alpha = R_stock - (Beta * R_benchmark)
+        # multiply matrix by vector (broadcast)
+        expected_ret = betas.multiply(parent_ret_series, axis=0)
+        true_alphas = sector_stock_rets - expected_ret
+        
+        # Store results
+        for t in stock_list:
+            beta_map[t] = betas[t]
+            alpha_map[t] = true_alphas[t]
+            
+            # Rolling Alphas
+            for k, w in TIMEFRAMES.items():
+                # We calculate sum of alpha over window
+                # Note: Doing this inside the loop on the Series is fast enough 
+                # or could vectorise rolling sum on `true_alphas` DF
+                pass 
+        
+        # Vectorized Rolling Alpha Sums for this batch
+        for k, w in TIMEFRAMES.items():
+            rolled = true_alphas.rolling(w).sum() * 100
+            for t in stock_list:
+                rolling_alpha_maps[k][t] = rolled[t]
+
+    # --- REASSEMBLE DATA CACHE ---
+    # We now have all metrics in wide dictionaries/dataframes. 
+    # We reconstruct the per-ticker DataFrames expected by the UI.
+    # To speed this up, we just group the master_df by Ticker once.
+    
+    data_cache = {}
+    grouped_master = master_df.groupby('Ticker')
+    
+    # 1. ETFs Assembly
+    for etf in valid_etfs:
+        if etf not in grouped_master.groups: continue
+        d = grouped_master.get_group(etf).set_index('Date').sort_index()
+        
+        # Inject RRG
+        for k, val_df in rrg_results.items():
+            if etf in val_df.columns:
+                d[k] = val_df[etf]
+        
+        data_cache[etf] = d
+        
+    # 2. Stocks Assembly
+    # We iterate stocks found in the groups
+    all_processed_stocks = []
+    for s_list in theme_groups.values(): all_processed_stocks.extend(s_list)
+    
+    for stock in all_processed_stocks:
+        if stock not in grouped_master.groups: continue
+        d = grouped_master.get_group(stock).set_index('Date').sort_index()
+        
+        # Inject Alpha/Beta
+        if stock in beta_map: d['Beta'] = beta_map[stock]
+        if stock in alpha_map: d['True_Alpha_1D'] = alpha_map[stock]
+        
+        # Inject Rolling Alphas
+        for k in TIMEFRAMES:
+            if stock in rolling_alpha_maps[k]:
+                d[f"True_Alpha_{k}"] = rolling_alpha_maps[k][stock]
+                
+        # Inject RVOL
+        # Note: RVOL isn't in master_df natively in this approach, we computed it
+        if stock in df_rvol.columns:
+            d['RVOL'] = df_rvol[stock]
+            for k in TIMEFRAMES:
+                 d[f"RVOL_{k}"] = rvol_metrics[f"RVOL_{k}"][stock]
+
+        data_cache[stock] = d
 
     return data_cache, [], theme_map, uni_df
 
@@ -201,19 +300,19 @@ def classify_setup(df):
     m20 = last.get("RRG_Mom_Long", 0)
     r20 = last.get("RRG_Ratio_Long", 100)
     
-    if m20 < 100 and m5 > 100 and m5 > (m20 + 2): return "🪝 J-Hook"
-    if r20 > 100 and m5 > 100 and m5 > m10: return "🚩 Bull Flag"
-    if m5 > m10 and m10 > m20 and m20 > 100: return "🚀 Rocket"
+    if m20 < 100 and m5 > 100 and m5 > (m20 + 2): return "ｪJ-Hook"
+    if r20 > 100 and m5 > 100 and m5 > m10: return "圸 Bull Flag"
+    if m5 > m10 and m10 > m20 and m20 > 100: return "噫 Rocket"
     return None 
 
 def get_quadrant_status(df, key):
     if df is None or df.empty: return "N/A"
     r = df[f"RRG_Ratio_{key}"].iloc[-1]
     m = df[f"RRG_Mom_{key}"].iloc[-1]
-    if r >= 100 and m >= 100: return "🟢 Leading"
-    elif r < 100 and m >= 100: return "🔵 Improving"
-    elif r < 100 and m < 100: return "🔴 Lagging"
-    return "🟡 Weakening"
+    if r >= 100 and m >= 100: return "泙 Leading"
+    elif r < 100 and m >= 100: return "鳩 Improving"
+    elif r < 100 and m < 100: return "閥 Lagging"
+    return "泯 Weakening"
 
 def plot_simple_rrg(data_cache, target_map, view_key, show_trails):
     fig = go.Figure()
