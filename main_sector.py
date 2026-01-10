@@ -255,39 +255,38 @@ def run_sector_rotation_app(df_global=None):
     
     st.divider()
 
-    # --- 7. ACTIONABLE THEME SCORECARD ---
+    # --- 7. CONSENSUS SECTOR SCORECARD ---
     st.subheader("📊 Sector Scorecard")
+    
+    st.info("💡 **Multi-Timeframe Consensus Scoring for Swing Trading** - Combines 5-day, 10-day, and 20-day analysis with emphasis on longer-term trends")
     
     # Help section for theme scoring
     col_help_theme1, col_help_theme2, col_help_theme3 = st.columns([1, 1, 1])
     with col_help_theme1:
-        st.markdown("**📈 Score:** Position (40%) + Momentum (30%) + Trajectory (20%) + Stability (10%)")
+        st.markdown("**📈 Consensus Score:** 20% weight on 5d + 30% on 10d + 50% on 20d")
     with col_help_theme2:
-        st.markdown("**🏷️ Labels:** 🆕 Fresh • ⭐ Early • 🕐 Established • 🚀 Accelerating")
+        st.markdown("**✅ High Conviction:** All 3 timeframes bullish • **🎯 Medium:** 2 of 3 bullish")
     with col_help_theme3:
-        with st.popover("📖 How Theme Scoring Works", use_container_width=True):
+        with st.popover("📖 How Consensus Scoring Works", use_container_width=True):
             st.markdown("""
-            ### Theme Score Breakdown
+            ### Multi-Timeframe Consensus
             
-            **40 pts - Position:**
-            - Leading quadrant = Best
-            - Distance from center = Strength
+            **Why Consensus?**
+            For swing trading (weeks to months), you need confirmation across timeframes.
             
-            **30 pts - Momentum:**
-            - Consistent across 5d/10d/20d
-            - Accelerating over time
+            **Weighting:**
+            - 5-day: 20% (short-term)
+            - 10-day: 30% (medium-term)
+            - 20-day: 50% (long-term) ← Most Important
             
-            **20 pts - Trajectory:**
-            - 3-day path analysis
-            - Improving vs declining
+            **Conviction Levels:**
+            - ✅ High: All 3 timeframes bullish
+            - 🎯 Medium: 2 of 3 timeframes bullish
+            - ⚠️ Low: 1 of 3 or mixed signals
+            - 🚫 None: All timeframes weak
             
-            **10 pts - Stability:**
-            - Smooth = Good
-            - Choppy = Risky
-            
-            **Freshness:**
-            - Days in current quadrant
-            - Fresh = Early opportunity
+            **Best Signals:**
+            High conviction + score 70+ = strongest trades
             """)
             st.markdown("---")
             if st.button("📖 View Complete Theme Guide", use_container_width=True):
@@ -307,99 +306,105 @@ def run_sector_rotation_app(df_global=None):
             except FileNotFoundError:
                 st.error("THEME_SCORING_GUIDE.md not found. Please ensure it's in the repo root directory.")
     
-    # Get actionable theme summary
-    timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
-    view_key = timeframe_map[st.session_state.sector_view]
+    # Get consensus theme summary
+    categories = us.get_actionable_theme_summary(etf_data_cache, theme_map)
     
-    categories = us.get_actionable_theme_summary(etf_data_cache, theme_map, view_key)
-    
-    # Display in actionable groups
-    if categories['momentum']:
-        st.success(f"🚀 **MOMENTUM SECTORS** ({len(categories['momentum'])} themes) - Action: ✅ Actively Allocate")
+    # Display in conviction-based groups
+    if categories['high_conviction']:
+        st.success(f"✅ **HIGH CONVICTION** ({len(categories['high_conviction'])} sectors) - All timeframes bullish")
         
-        momentum_data = []
-        for theme_info in categories['momentum']:
-            momentum_data.append({
-                "Theme": theme_info['theme'],
-                "Score": theme_info['score'],
+        high_data = []
+        for theme_info in categories['high_conviction']:
+            high_data.append({
+                "Sector": theme_info['theme'],
+                "Score": theme_info['consensus_score'],
                 "Grade": theme_info['grade'],
-                "Status": theme_info['quadrant'],
-                "Fresh": theme_info['freshness'],
-                "Path": theme_info['trajectory'],
+                "5d": theme_info['tf_5d'],
+                "10d": theme_info['tf_10d'],
+                "20d": theme_info['tf_20d'],
+                "Fresh": theme_info['freshness_detail'],
                 "Action": theme_info['action']
             })
         
         st.dataframe(
-            pd.DataFrame(momentum_data),
+            pd.DataFrame(high_data),
             hide_index=True,
             use_container_width=True,
             column_config={
                 "Score": st.column_config.NumberColumn("Score", format="%.0f"),
                 "Grade": st.column_config.TextColumn("Grade", width="small"),
+                "Fresh": st.column_config.TextColumn("Fresh", width="small"),
             }
         )
+        st.caption("✅ **Trading Action:** Actively enter positions - highest quality signals")
     
-    if categories['rotation']:
-        st.info(f"💎 **ROTATION OPPORTUNITIES** ({len(categories['rotation'])} themes) - Action: 🎯 Watch & Prepare")
+    if categories['medium_conviction']:
+        st.info(f"🎯 **MEDIUM CONVICTION** ({len(categories['medium_conviction'])} sectors) - 2 of 3 timeframes bullish")
         
-        rotation_data = []
-        for theme_info in categories['rotation']:
-            rotation_data.append({
-                "Theme": theme_info['theme'],
-                "Score": theme_info['score'],
+        medium_data = []
+        for theme_info in categories['medium_conviction']:
+            medium_data.append({
+                "Sector": theme_info['theme'],
+                "Score": theme_info['consensus_score'],
                 "Grade": theme_info['grade'],
-                "Status": theme_info['quadrant'],
-                "Fresh": theme_info['freshness'],
-                "Path": theme_info['trajectory'],
+                "5d": theme_info['tf_5d'],
+                "10d": theme_info['tf_10d'],
+                "20d": theme_info['tf_20d'],
+                "Fresh": theme_info['freshness_detail'],
                 "Action": theme_info['action']
             })
         
         st.dataframe(
-            pd.DataFrame(rotation_data),
+            pd.DataFrame(medium_data),
             hide_index=True,
             use_container_width=True,
             column_config={
                 "Score": st.column_config.NumberColumn("Score", format="%.0f"),
                 "Grade": st.column_config.TextColumn("Grade", width="small"),
+                "Fresh": st.column_config.TextColumn("Fresh", width="small"),
             }
         )
+        st.caption("🎯 **Trading Action:** Watch for confirmation or enter smaller positions")
     
-    if categories['hold']:
-        st.warning(f"⚠️ **WEAKENING SECTORS** ({len(categories['hold'])} themes) - Action: ⚠️ Reduce / Hold")
+    if categories['low_conviction']:
+        st.warning(f"⚠️ **LOW CONVICTION** ({len(categories['low_conviction'])} sectors) - Mixed or conflicting signals")
         
-        hold_data = []
-        for theme_info in categories['hold']:
-            hold_data.append({
-                "Theme": theme_info['theme'],
-                "Score": theme_info['score'],
+        low_data = []
+        for theme_info in categories['low_conviction']:
+            low_data.append({
+                "Sector": theme_info['theme'],
+                "Score": theme_info['consensus_score'],
                 "Grade": theme_info['grade'],
-                "Status": theme_info['quadrant'],
-                "Fresh": theme_info['freshness'],
-                "Path": theme_info['trajectory'],
+                "5d": theme_info['tf_5d'],
+                "10d": theme_info['tf_10d'],
+                "20d": theme_info['tf_20d'],
+                "Fresh": theme_info['freshness_detail'],
                 "Action": theme_info['action']
             })
         
         st.dataframe(
-            pd.DataFrame(hold_data),
+            pd.DataFrame(low_data),
             hide_index=True,
             use_container_width=True,
             column_config={
                 "Score": st.column_config.NumberColumn("Score", format="%.0f"),
                 "Grade": st.column_config.TextColumn("Grade", width="small"),
+                "Fresh": st.column_config.TextColumn("Fresh", width="small"),
             }
         )
+        st.caption("⚠️ **Trading Action:** Be selective - wait for better setup or pass")
     
     if categories['avoid']:
-        with st.expander(f"🚫 **AVOID SECTORS** ({len(categories['avoid'])} themes) - Action: 🚫 Zero Allocation", expanded=False):
+        with st.expander(f"🚫 **AVOID** ({len(categories['avoid'])} sectors) - Weak across timeframes", expanded=False):
             avoid_data = []
             for theme_info in categories['avoid']:
                 avoid_data.append({
-                    "Theme": theme_info['theme'],
-                    "Score": theme_info['score'],
+                    "Sector": theme_info['theme'],
+                    "Score": theme_info['consensus_score'],
                     "Grade": theme_info['grade'],
-                    "Status": theme_info['quadrant'],
-                    "Fresh": theme_info['freshness'],
-                    "Path": theme_info['trajectory']
+                    "5d": theme_info['tf_5d'],
+                    "10d": theme_info['tf_10d'],
+                    "20d": theme_info['tf_20d']
                 })
             
             st.dataframe(
@@ -411,6 +416,7 @@ def run_sector_rotation_app(df_global=None):
                     "Grade": st.column_config.TextColumn("Grade", width="small"),
                 }
             )
+            st.caption("🚫 **Trading Action:** Stay away - no allocation")
 
     st.markdown("---")
 
