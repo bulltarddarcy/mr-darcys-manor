@@ -582,14 +582,12 @@ def calculate_comprehensive_stock_score(
         rvol_10d = last.get('RVOL_Med', 0)
         rvol_20d = last.get('RVOL_Long', 0)
         
-        # Calculate days in current alpha state
+        # Calculate days in current alpha state (CUMULATIVE, not consecutive)
         days_positive = 0
-        for i in range(len(df) - 1, max(0, len(df) - 21), -1):
-            row_alpha = df.iloc[i].get(f"Alpha_Short_{theme_suffix}", 0)
+        for i in range(min(20, len(df))):
+            row_alpha = df.iloc[-(i+1)].get(f"Alpha_Short_{theme_suffix}", 0)
             if row_alpha > 0:
                 days_positive += 1
-            else:
-                break
         
         # --- FACTOR 1: Setup Quality (40 points) ---
         setup_score = 0
@@ -837,6 +835,7 @@ def calculate_comprehensive_stock_score(
         
         # EXTENDED WARNING: -15 PENALTY
         if (alpha_5d > 5.0 or 
+            (alpha_5d > 3.0 and days_positive >= 13) or  # 13/20 days = 65% of time
             (alpha_5d > 4.0 and days_positive >= 10) or
             dist_from_ema21 > 0.10):
             total_score -= 15
