@@ -956,30 +956,11 @@ def calculate_consensus_theme_score(
         # Apply alignment bonus
         consensus_score = min(100, max(0, consensus_score + alignment_bonus))
         
-        # Action recommendation based on consensus and conviction
-        if consensus_score >= 70 and conviction in ["High", "Medium"]:
-            action = "✅ BUY"
-            action_detail = "Strong signal - enter positions"
-        elif consensus_score >= 60 and conviction == "High":
-            action = "✅ BUY"
-            action_detail = "All timeframes bullish - enter"
-        elif consensus_score >= 50 and conviction in ["High", "Medium"]:
-            action = "🎯 WATCH"
-            action_detail = "Developing - prepare to enter"
-        elif consensus_score >= 40:
-            action = "⚠️ CAUTION"
-            action_detail = "Mixed signals - stay selective"
-        else:
-            action = "🚫 AVOID"
-            action_detail = "Weak across timeframes"
-        
         return {
             'consensus_score': round(consensus_score, 1),
             'grade': _score_to_grade(consensus_score),
             'conviction': conviction,
             'conviction_emoji': conviction_emoji,
-            'action': action,
-            'action_detail': action_detail,
             'timeframes': {
                 '5d': {
                     'score': score_5d['total_score'],
@@ -1405,65 +1386,6 @@ def get_actionable_theme_summary(
     except Exception as e:
         logger.error(f"Error calculating theme score: {e}")
         return None
-
-def get_actionable_theme_summary(
-    etf_data_cache: Dict,
-    theme_map: Dict,
-    view_key: str = 'Short'
-) -> Dict[str, List[Dict]]:
-    """
-    Group themes by actionability for easy decision-making.
-    
-    Args:
-        etf_data_cache: Cache of theme dataframes
-        theme_map: Dict mapping theme names to tickers
-        view_key: Timeframe to analyze
-        
-    Returns:
-        Dict with themes grouped by action category
-    """
-    categories = {
-        'momentum': [],  # Buy/Strong
-        'rotation': [],  # Watch/Building
-        'hold': [],      # Hold/Reduce
-        'avoid': []      # Avoid/Weak
-    }
-    
-    for theme, ticker in theme_map.items():
-        df = etf_data_cache.get(ticker)
-        if df is None or df.empty:
-            continue
-        
-        score_data = calculate_theme_score(df, view_key)
-        if not score_data:
-            continue
-        
-        theme_info = {
-            'theme': theme,
-            'score': score_data['total_score'],
-            'grade': score_data['grade'],
-            'quadrant': score_data['quadrant'],
-            'freshness': score_data['freshness'],
-            'trajectory': score_data['trajectory_label'],
-            'action': score_data['action'],
-            'action_detail': score_data['action_detail']
-        }
-        
-        # Categorize
-        if score_data['action'] == "✅ BUY":
-            categories['momentum'].append(theme_info)
-        elif score_data['action'] == "🎯 WATCH":
-            categories['rotation'].append(theme_info)
-        elif score_data['action'] in ["⚠️ HOLD", "⚠️ REDUCE"]:
-            categories['hold'].append(theme_info)
-        else:
-            categories['avoid'].append(theme_info)
-    
-    # Sort each category by score
-    for category in categories:
-        categories[category].sort(key=lambda x: x['score'], reverse=True)
-    
-    return categories
 
 # ==========================================
 # 5. ORCHESTRATOR (OPTIMIZED)
