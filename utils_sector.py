@@ -139,7 +139,7 @@ class SectorAlphaCalculator:
             df['Volume'] = df['VOLUME']
             
         if 'Close' not in df.columns:
-            logger.error("No 'Close' column found in dataframe")
+            # logger.error("No 'Close' column found in dataframe") 
             return None
 
         # --- SHARED TECHNICALS ---
@@ -429,7 +429,6 @@ def _score_to_grade(score: float) -> str:
 def _load_single_parquet(url):
     """
     Internal helper to cache INDIVIDUAL file downloads.
-    This prevents re-downloading 1300 files if the loop reruns.
     """
     if not url: return None
     try:
@@ -447,6 +446,10 @@ def _load_single_parquet(url):
             
             if date_col:
                 df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+                # If Ticker column exists, this is likely a bulk file, don't set index yet if we want to filter
+                if 'Ticker' in df.columns or 'Symbol' in df.columns:
+                     return df.sort_values(date_col)
+                
                 df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate').set_index('ChartDate')
                 return df
     except: pass
@@ -454,7 +457,13 @@ def _load_single_parquet(url):
 
 @st.cache_data(ttl=600)
 def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
-    """Main data fetching pipeline."""
+    """
+    Main Data Pipeline.
+    1. Loads Universe.
+    2. CHECKS FOR BULK DATASET KEY (SECTOR_ROTATION).
+    3. If found, downloads 1 file and splits it.
+    4. If not found, falls back to individual file loading.
+    """
     mgr = SectorDataManager()
     uni_df, tickers, theme_map = mgr.load_universe(benchmark_ticker)
     
@@ -473,40 +482,91 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
                      config[parts[0]] = parts[1]
     except: config = {}
     
-    # Load all tickers
     data_cache = {}
-    missing_tickers = []
-    
     calc = SectorAlphaCalculator()
     
-    # Load and process components
-    for ticker in tickers:
-        # Determine Parquet Key
-        key = f"{ticker}_PARQUET"
-        if key not in config:
-             missing_tickers.append(ticker)
-             continue
+    # --- STEP 1: LOAD BENCHMARK ---
+    bench_df = None
+    if benchmark_ticker in config:
+         bench_df = _load_single_parquet(st.secrets[config[benchmark_ticker]])
+         if bench_df is not None:
+             if 'ChartDate' not in bench_df.columns and isinstance(bench_df.index, pd.DatetimeIndex):
+                  bench_df.index.name = 'ChartDate'
              
-        url = st.secrets[config[key]]
+             # Ensure index is set
+             if 'ChartDate' in bench_df.columns:
+                 bench_df = bench_df.set_index('ChartDate')
+
+             bench_df = calc.process_dataframe(bench_df)
+             data_cache[benchmark_ticker] = bench_df
+
+    # --- STEP 2: CHECK FOR MASTER/BULK FILE ---
+    # We look for common keys for the bulk sector file
+    bulk_key = None
+    if "SECTOR_ROTATION" in config: bulk_key = config["SECTOR_ROTATION"]
+    elif "PARQUET_SECTOR_ROTATION" in config: bulk_key = config["PARQUET_SECTOR_ROTATION"]
+    
+    bulk_loaded = False
+    
+    if bulk_key and bulk_key in st.secrets:
+        # Download ONE single file
+        logger.info("Attempting bulk download...")
+        bulk_df = _load_single_parquet(st.secrets[bulk_key])
         
-        # USE CACHED LOADER for individual file
-        df = _load_single_parquet(url)
-        
-        if df is not None:
-             # Process basic techs
-             df = calc.process_dataframe(df)
-             data_cache[ticker] = df
-        else:
-             missing_tickers.append(ticker)
+        if bulk_df is not None:
+            # Normalize Ticker Column
+            t_col = next((c for c in bulk_df.columns if c.upper() in ['TICKER', 'SYMBOL']), None)
+            d_col = next((c for c in bulk_df.columns if 'DATE' in c.upper() or 'ChartDate' in c), None)
 
-    # Late-binding Benchmark (if it wasn't in ticker list or failed)
-    if benchmark_ticker not in data_cache and benchmark_ticker in config:
-         df = _load_single_parquet(st.secrets[config[benchmark_ticker]])
-         if df is not None: data_cache[benchmark_ticker] = df
+            if t_col and d_col:
+                bulk_df[t_col] = bulk_df[t_col].astype(str).str.strip().str.upper()
+                bulk_df[d_col] = pd.to_datetime(bulk_df[d_col], errors='coerce')
+                
+                # Split and Store
+                grouped = bulk_df.groupby(t_col)
+                for ticker, group in grouped:
+                    if ticker in tickers or ticker in theme_map.values():
+                        # Format for processing
+                        clean_df = group.copy().rename(columns={d_col: 'ChartDate'}).sort_values('ChartDate').set_index('ChartDate')
+                        clean_df = calc.process_dataframe(clean_df)
+                        if clean_df is not None:
+                            data_cache[ticker] = clean_df
+                
+                bulk_loaded = True
 
-    bench_df = data_cache.get(benchmark_ticker)
+    # --- STEP 3: INDIVIDUAL FILE FALLBACK (For ETFs or if Bulk missing) ---
+    # Even if bulk loaded, we might need ETFs if they weren't in the bulk file
+    missing_tickers = []
+    
+    # Process ETFs first (needed for Alpha)
+    etf_tickers = list(theme_map.values())
+    for ticker in etf_tickers:
+        if ticker in data_cache: continue # Already found in bulk
+        if ticker == benchmark_ticker: continue
 
-    # Process RRG & Alpha
+        key = f"{ticker}_PARQUET"
+        if key in config:
+             df = _load_single_parquet(st.secrets[config[key]])
+             if df is not None:
+                 if 'ChartDate' in df.columns: df = df.set_index('ChartDate')
+                 df = calc.process_dataframe(df)
+                 data_cache[ticker] = df
+    
+    # Process Stocks (only if bulk didn't load them)
+    if not bulk_loaded:
+        for ticker in tickers:
+            if ticker in data_cache: continue
+            key = f"{ticker}_PARQUET"
+            if key in config:
+                df = _load_single_parquet(st.secrets[config[key]])
+                if df is not None:
+                    if 'ChartDate' in df.columns: df = df.set_index('ChartDate')
+                    df = calc.process_dataframe(df)
+                    data_cache[ticker] = df
+            else:
+                 missing_tickers.append(ticker)
+
+    # --- STEP 4: CALCULATIONS (RRG & ALPHA) ---
     for ticker, df in data_cache.items():
         if ticker == benchmark_ticker: continue
         
@@ -515,26 +575,40 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
             df = calc.calculate_rrg_metrics(df, bench_df)
             data_cache[ticker] = df
 
-    # Second pass for Alpha Calculation (Stocks against their Sector ETFs)
-    # Ensure ETFs are in cache
+    # Theme Alpha
     for theme, etf_ticker in theme_map.items():
         if etf_ticker not in data_cache: continue
         etf_df = data_cache[etf_ticker]
         
-        # Calculate ETF Alpha vs SPY
+        # ETF Alpha vs Benchmark
         if bench_df is not None:
              etf_df = calc.calculate_stock_alpha_multi_theme(etf_df, bench_df, benchmark_ticker)
              data_cache[etf_ticker] = etf_df
 
-        # Find stocks in this theme
+        # Stock Alpha vs ETF
         theme_stocks = uni_df[(uni_df['Theme'] == theme) & (uni_df['Role'] == 'Stock')]['Ticker'].unique()
-        
         for stock in theme_stocks:
             if stock in data_cache:
-                # Calc alpha against the Sector ETF
                 data_cache[stock] = calc.calculate_stock_alpha_multi_theme(data_cache[stock], etf_df, theme)
     
     return data_cache, missing_tickers, theme_map, uni_df, {}
+
+@st.cache_data(ttl=300)
+def load_stocks_for_theme(theme: str, uni_df: pd.DataFrame, etf_data_cache: Dict, benchmark_ticker="SPY"):
+    """
+    Retrieves stocks for a theme. 
+    Now primarily acts as a filter on the already-loaded cache (since we load bulk now).
+    """
+    if uni_df.empty or theme not in uni_df['Theme'].values: return {}
+    
+    stock_tickers = uni_df[(uni_df['Theme'] == theme) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
+    theme_cache = {}
+    
+    for stock in stock_tickers:
+        if stock in etf_data_cache:
+            theme_cache[stock] = etf_data_cache[stock]
+            
+    return theme_cache
 
 def get_quadrant_status(df: pd.DataFrame, timeframe_label: str) -> str:
     """Determine RRG quadrant text."""
