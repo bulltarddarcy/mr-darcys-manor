@@ -426,6 +426,33 @@ def _score_to_grade(score: float) -> str:
 # ==========================================
 
 @st.cache_data(ttl=600)
+def _load_single_parquet(url):
+    """
+    Internal helper to cache INDIVIDUAL file downloads.
+    This prevents re-downloading 1300 files if the loop reruns.
+    """
+    if not url: return None
+    try:
+        buffer = get_gdrive_binary_data(url)
+        if buffer:
+            df = pd.read_parquet(buffer, engine='pyarrow')
+            if isinstance(df.index, pd.DatetimeIndex): df.reset_index(inplace=True)
+            elif 'DATE' in str(df.index.name).upper(): df.reset_index(inplace=True)
+            df.columns = [str(c).strip() for c in df.columns]
+            
+            # Date fix
+            cols_upper = [c.upper() for c in df.columns]
+            date_col = next((df.columns[i] for i, c in enumerate(cols_upper) if 'DATE' in c), None)
+            if not date_col and 'index' in df.columns: date_col = 'index'
+            
+            if date_col:
+                df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+                df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate').set_index('ChartDate')
+                return df
+    except: pass
+    return None
+
+@st.cache_data(ttl=600)
 def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
     """Main data fetching pipeline."""
     mgr = SectorDataManager()
@@ -450,37 +477,10 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
     data_cache = {}
     missing_tickers = []
     
-    # Pre-fetch benchmark
-    bench_df = None
-    if benchmark_ticker in config:
-        url = st.secrets[config[benchmark_ticker]] if config[benchmark_ticker] in st.secrets else ""
-        if url:
-            buffer = get_gdrive_binary_data(url)
-            if buffer:
-                try:
-                    df = pd.read_parquet(buffer, engine='pyarrow')
-                    if isinstance(df.index, pd.DatetimeIndex): df.reset_index(inplace=True)
-                    elif 'DATE' in str(df.index.name).upper(): df.reset_index(inplace=True)
-                    df.columns = [str(c).strip() for c in df.columns]
-                    
-                    # Date fix
-                    cols_upper = [c.upper() for c in df.columns]
-                    date_col = next((df.columns[i] for i, c in enumerate(cols_upper) if 'DATE' in c), None)
-                    if not date_col and 'index' in df.columns: date_col = 'index'
-                    
-                    if date_col:
-                        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-                        df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate').set_index('ChartDate')
-                        bench_df = df
-                        data_cache[benchmark_ticker] = bench_df
-                except: pass
-
     calc = SectorAlphaCalculator()
-
+    
     # Load and process components
     for ticker in tickers:
-        if ticker == benchmark_ticker: continue
-        
         # Determine Parquet Key
         key = f"{ticker}_PARQUET"
         if key not in config:
@@ -488,51 +488,32 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
              continue
              
         url = st.secrets[config[key]]
-        buffer = get_gdrive_binary_data(url)
         
-        if not buffer:
-            missing_tickers.append(ticker)
-            continue
-            
-        try:
-            df = pd.read_parquet(buffer, engine='pyarrow')
-            if isinstance(df.index, pd.DatetimeIndex): df.reset_index(inplace=True)
-            elif 'DATE' in str(df.index.name).upper(): df.reset_index(inplace=True)
-            df.columns = [str(c).strip() for c in df.columns]
-            
-            # Date fix
-            cols_upper = [c.upper() for c in df.columns]
-            date_col = next((df.columns[i] for i, c in enumerate(cols_upper) if 'DATE' in c), None)
-            if not date_col and 'index' in df.columns: date_col = 'index'
-            
-            if date_col:
-                df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-                df = df.rename(columns={date_col: 'ChartDate'}).sort_values('ChartDate').set_index('ChartDate')
-                
-                # Process basic techs
-                df = calc.process_dataframe(df)
-                
-                # Process RRG if benchmark exists
-                if bench_df is not None:
-                    df = calc.calculate_rrg_metrics(df, bench_df)
-                
-                # Process Theme Alpha
-                # Identify themes for this ticker
-                themes = uni_df[uni_df['Ticker'] == ticker]['Theme'].unique()
-                for theme in themes:
-                    if theme in theme_map:
-                        etf_ticker = theme_map[theme]
-                        # Only calc alpha if we have the ETF data loaded
-                        # (Need to ensure ETFs are loaded first or in second pass)
-                        # Simplified: assuming we load everything then do alpha? 
-                        # For efficiency in this script we often load ETFs first.
-                        pass # Alpha calc needs parent ETF data
-                
-                data_cache[ticker] = df
-            else:
-                missing_tickers.append(ticker)
-        except:
-            missing_tickers.append(ticker)
+        # USE CACHED LOADER for individual file
+        df = _load_single_parquet(url)
+        
+        if df is not None:
+             # Process basic techs
+             df = calc.process_dataframe(df)
+             data_cache[ticker] = df
+        else:
+             missing_tickers.append(ticker)
+
+    # Late-binding Benchmark (if it wasn't in ticker list or failed)
+    if benchmark_ticker not in data_cache and benchmark_ticker in config:
+         df = _load_single_parquet(st.secrets[config[benchmark_ticker]])
+         if df is not None: data_cache[benchmark_ticker] = df
+
+    bench_df = data_cache.get(benchmark_ticker)
+
+    # Process RRG & Alpha
+    for ticker, df in data_cache.items():
+        if ticker == benchmark_ticker: continue
+        
+        # RRG
+        if bench_df is not None:
+            df = calc.calculate_rrg_metrics(df, bench_df)
+            data_cache[ticker] = df
 
     # Second pass for Alpha Calculation (Stocks against their Sector ETFs)
     # Ensure ETFs are in cache

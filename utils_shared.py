@@ -6,9 +6,6 @@ import re
 import numpy as np
 from io import BytesIO
 
-# --- PERFORMANCE OPTIMIZATION: GLOBAL SESSION ---
-GLOBAL_SESSION = requests.Session()
-
 # --- CONSTANTS ---
 VOL_SMA_PERIOD = 30
 EMA8_PERIOD = 8
@@ -16,8 +13,9 @@ EMA21_PERIOD = 21
 
 def get_gdrive_binary_data(url):
     """
-    Robust Google Drive downloader using a global session for speed.
-    Handles 'virus scan' confirmation pages and various URL formats.
+    Robust Google Drive downloader.
+    Removed Global Session to prevent Google Drive rate-limiting/blocking 
+    during bulk downloads (1000+ files).
     """
     try:
         match = re.search(r'/d/([a-zA-Z0-9_-]{25,})', url)
@@ -30,7 +28,9 @@ def get_gdrive_binary_data(url):
         file_id = match.group(1)
         download_url = "https://drive.google.com/uc?export=download"
         
-        response = GLOBAL_SESSION.get(download_url, params={'id': file_id}, stream=True, timeout=30)
+        # Use a fresh session per request to avoid accumulating cookies that trigger bot detection
+        session = requests.Session()
+        response = session.get(download_url, params={'id': file_id}, stream=True, timeout=30)
         
         if "text/html" in response.headers.get("Content-Type", "").lower():
             content = response.text
@@ -39,12 +39,12 @@ def get_gdrive_binary_data(url):
             if token_match:
                 token = token_match.group(1)
                 params = {'id': file_id, 'confirm': token}
-                response = GLOBAL_SESSION.get(download_url, params=params, stream=True, timeout=30)
+                response = session.get(download_url, params=params, stream=True, timeout=30)
             else:
-                for key, value in GLOBAL_SESSION.cookies.items():
+                for key, value in session.cookies.items():
                     if key.startswith('download_warning'):
                         params = {'id': file_id, 'confirm': value}
-                        response = GLOBAL_SESSION.get(download_url, params=params, stream=True, timeout=30)
+                        response = session.get(download_url, params=params, stream=True, timeout=30)
                         break
 
         if response.status_code == 200:
@@ -185,7 +185,6 @@ def prepare_data(df):
     w_close_candidates = [c for c in df.columns if c.startswith('W_') and 'CLOSE' in c]
     
     if not w_close_candidates:
-        # If no pre-calc weekly data, return None (or we could resample, but logic prefers pre-calc)
         return df_d, None
 
     cols_w = [c for c in df.columns if c.startswith('W_')]
@@ -373,7 +372,6 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
                         potential_signals.append({"index": i, "type": "Bearish", "p1_idx": idx_p1_abs, "vol_high": is_vol_high})
 
     # PASS 3: REPORT & METRICS
-    # Allow looking back further if we just want "last signal", but usually filter by recent
     display_threshold_idx = n_rows - recent_days_filter
     
     # Pre-calculate indices for stats
@@ -430,7 +428,7 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         rsi_display = f"{int(round(rsi_p1))} {'↗' if rsi_p2 > rsi_p1 else '↘'} {int(round(rsi_p2))}"
         price_display = f"${price_p1:,.2f} ↗ ${price_p2:,.2f}" if price_p2 > price_p1 else f"${price_p1:,.2f} ↘ ${price_p2:,.2f}"
 
-        # Optimization Stats (Optional if calculating history)
+        # Optimization Stats
         if periods_input is not None:
             hist_list = bullish_indices if s_type == 'Bullish' else bearish_indices
             best_stats = calculate_optimal_signal_stats(hist_list, close_vals, i, signal_type=s_type, timeframe=timeframe, periods_input=periods_input, optimize_for=optimize_for)
@@ -467,20 +465,18 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
                     div_obj[col_vol] = vol_vals[future_idx]
                     
                     entry = close_vals[i]
-                    # Logic: Long return for Bullish, Short return for Bearish
                     if s_type == 'Bullish':
                         ret_pct = (f_price - entry) / entry
                     else:
                         ret_pct = (entry - f_price) / entry 
                         
                     div_obj[col_ret] = ret_pct * 100
-                    
                 else:
                     div_obj[col_price] = "n/a"
                     div_obj[col_vol] = "n/a"
                     div_obj[col_ret] = np.nan
         else:
-             # Minimal object for scanners
+             # Minimal object
              div_obj.update({
                 'Tags': tags, 
                 'Date_Display': date_display,
