@@ -26,7 +26,8 @@ def run_sector_rotation_app(df_global=None):
     # 1. Automatic Data Fetch (Cached 10m)
     # Passed the benchmark ticker to the fetch function
     with st.spinner(f"Syncing Sector Data ({st.session_state.sector_benchmark})..."):
-        etf_data_cache, missing_tickers, theme_map, uni_df = us.fetch_and_process_universe(st.session_state.sector_benchmark)
+        etf_data_cache, missing_tickers, theme_map, uni_df, stock_themes = \
+    us.fetch_and_process_universe(st.session_state.sector_benchmark)
 
     if uni_df.empty:
         st.warning("⚠️ SECTOR_UNIVERSE secret is missing or empty.")
