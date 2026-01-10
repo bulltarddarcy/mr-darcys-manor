@@ -1010,20 +1010,45 @@ def get_actionable_theme_summary(
     theme_map: Dict
 ) -> Dict[str, List[Dict]]:
     """
-    Group themes by conviction level using multi-timeframe consensus.
+    Group themes by lifecycle stage using momentum trends and score quality.
+    
+    Categorization Logic (in plain English):
+    
+    EARLY STAGE (Best new entries):
+    - Fresh position (Day 1-3 in current quadrant)
+    - 2+ timeframes bullish (Leading or Improving)
+    - Score 60+ (decent quality)
+    - Momentum accelerating (5d > 10d > 20d) OR at least stable
+    
+    ESTABLISHED (Hold but don't chase):
+    - NOT fresh (Day 4+)
+    - High score (65+)
+    - 2+ timeframes bullish
+    - Even if momentum stable/declining - it's mature
+    
+    TOPPING (Take profits):
+    - Momentum declining (5d < 10d or 5d < 20d) 
+    - OR 5-day showing weakness (Weakening quadrant)
+    - OR was bullish on 20d but losing on 5d
+    - Score typically 40-65 range
+    
+    WEAK (Avoid):
+    - Low score (<40) OR
+    - Fewer than 2 timeframes bullish OR
+    - All timeframes showing Lagging
     
     Args:
         etf_data_cache: Cache of theme dataframes
         theme_map: Dict mapping theme names to tickers
         
     Returns:
-        Dict with themes grouped by conviction level
+        Dict with themes grouped by lifecycle stage + explanation
     """
     categories = {
-        'high_conviction': [],    # All timeframes bullish
-        'medium_conviction': [],  # 2 of 3 timeframes bullish
-        'low_conviction': [],     # Mixed or weak
-        'avoid': []               # Weak across all timeframes
+        'early_stage': [],        # Fresh bullish - BEST NEW ENTRIES
+        'established': [],        # Mature leadership - HOLD
+        'topping': [],           # Losing momentum - TAKE PROFITS
+        'weak': []               # Lagging - AVOID
     }
     
     for theme, ticker in theme_map.items():
@@ -1035,30 +1060,110 @@ def get_actionable_theme_summary(
         if not consensus:
             continue
         
+        # Extract data
+        score = consensus['consensus_score']
+        
+        # Get scores for each timeframe (not just quadrant!)
+        score_5d = consensus['timeframes']['5d']['score']
+        score_10d = consensus['timeframes']['10d']['score']
+        score_20d = consensus['timeframes']['20d']['score']
+        
+        # Get quadrants
+        quad_5d = consensus['timeframes']['5d']['quadrant']
+        quad_10d = consensus['timeframes']['10d']['quadrant']
+        quad_20d = consensus['timeframes']['20d']['quadrant']
+        
+        # Check freshness
+        freshness = consensus['freshness']
+        is_fresh = freshness in ["🆕 Fresh", "⭐ Early"]
+        
+        # Check if bullish (Leading or Improving)
+        bullish_quads = ['🟢 Leading', '🔵 Improving']
+        is_5d_bullish = quad_5d in bullish_quads
+        is_10d_bullish = quad_10d in bullish_quads
+        is_20d_bullish = quad_20d in bullish_quads
+        bullish_count = sum([is_5d_bullish, is_10d_bullish, is_20d_bullish])
+        
+        # CRITICAL: Check momentum trend (is it accelerating or declining?)
+        momentum_accelerating = score_5d > score_10d > score_20d
+        momentum_stable = score_5d >= score_10d >= score_20d
+        momentum_declining = score_5d < score_10d or score_5d < score_20d
+        
+        # Determine reason for categorization
+        reason = ""
+        
         theme_info = {
             'theme': theme,
-            'consensus_score': consensus['consensus_score'],
+            'consensus_score': score,
             'grade': consensus['grade'],
-            'conviction': consensus['conviction'],
-            'conviction_emoji': consensus['conviction_emoji'],
-            'action': consensus['action'],
-            'action_detail': consensus['action_detail'],
             'freshness': consensus['freshness'],
             'freshness_detail': consensus['freshness_detail'],
-            'tf_5d': consensus['timeframes']['5d']['quadrant'],
-            'tf_10d': consensus['timeframes']['10d']['quadrant'],
-            'tf_20d': consensus['timeframes']['20d']['quadrant']
+            'tf_5d': quad_5d,
+            'tf_10d': quad_10d,
+            'tf_20d': quad_20d,
+            'score_5d': score_5d,
+            'score_10d': score_10d,
+            'score_20d': score_20d
         }
         
-        # Categorize by conviction
-        if consensus['conviction'] == "High":
-            categories['high_conviction'].append(theme_info)
-        elif consensus['conviction'] == "Medium":
-            categories['medium_conviction'].append(theme_info)
-        elif consensus['conviction'] == "Low":
-            categories['low_conviction'].append(theme_info)
+        # ═══════════════════════════════════════════════════════
+        # CATEGORIZATION LOGIC
+        # ═══════════════════════════════════════════════════════
+        
+        # --- EARLY STAGE: Fresh + Building + Good Score ---
+        if (
+            is_fresh and 
+            bullish_count >= 2 and 
+            score >= 60 and
+            (momentum_accelerating or momentum_stable)
+        ):
+            if momentum_accelerating:
+                reason = f"Fresh position (Day {consensus['freshness_detail'].split()[-1]}), 2+ timeframes bullish, momentum accelerating ({score_5d:.0f} > {score_10d:.0f} > {score_20d:.0f})"
+            else:
+                reason = f"Fresh position (Day {consensus['freshness_detail'].split()[-1]}), 2+ timeframes bullish, momentum stable ({score_5d:.0f} ≈ {score_10d:.0f})"
+            
+            theme_info['reason'] = reason
+            categories['early_stage'].append(theme_info)
+        
+        # --- TOPPING: Momentum declining OR 5d weakening ---
+        elif (
+            momentum_declining and
+            score >= 40 and
+            (is_20d_bullish or is_10d_bullish)
+        ):
+            reason = f"Momentum declining ({score_5d:.0f} < {score_10d:.0f} or {score_20d:.0f})"
+            if quad_5d == '🟡 Weakening':
+                reason += f", 5-day already weakening"
+            
+            theme_info['reason'] = reason
+            categories['topping'].append(theme_info)
+        
+        # --- ESTABLISHED: High score but not fresh OR declining momentum ---
+        elif (
+            bullish_count >= 2 and
+            score >= 65 and
+            not is_fresh
+        ):
+            days = consensus['freshness_detail']
+            if momentum_declining:
+                reason = f"Strong score ({score:.0f}) but momentum declining ({score_5d:.0f} < {score_10d:.0f}), been leading for {days}"
+            else:
+                reason = f"Strong score ({score:.0f}), established position ({days}), mature trend"
+            
+            theme_info['reason'] = reason
+            categories['established'].append(theme_info)
+        
+        # --- WEAK: Everything else ---
         else:
-            categories['avoid'].append(theme_info)
+            if score < 40:
+                reason = f"Low score ({score:.0f}), weak positioning"
+            elif bullish_count < 2:
+                reason = f"Only {bullish_count} of 3 timeframes bullish, insufficient confirmation"
+            else:
+                reason = f"Mixed signals, score {score:.0f} with {bullish_count} bullish timeframes"
+            
+            theme_info['reason'] = reason
+            categories['weak'].append(theme_info)
     
     # Sort each category by score
     for category in categories:
