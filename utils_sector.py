@@ -462,7 +462,7 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
     1. Loads Universe.
     2. CHECKS FOR BULK DATASET KEY (SECTOR_ROTATION).
     3. If found, downloads 1 file and splits it.
-    4. If not found, falls back to individual file loading (which might fail if too many).
+    4. If not found, falls back to individual file loading.
     """
     mgr = SectorDataManager()
     uni_df, tickers, theme_map = mgr.load_universe(benchmark_ticker)
@@ -485,7 +485,7 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
     data_cache = {}
     calc = SectorAlphaCalculator()
     
-    # --- STEP 1: LOAD BENCHMARK ---
+    # --- STEP 1: LOAD BENCHMARK (INDIVIDUAL) ---
     bench_df = None
     if benchmark_ticker in config:
          bench_df = _load_single_parquet(st.secrets[config[benchmark_ticker]])
@@ -540,11 +540,19 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
                 
                 bulk_loaded = True
 
-    # --- STEP 3: INDIVIDUAL FILE FALLBACK ---
-    # If bulk failed or missed ETFs, try loading individual files
+    # --- STEP 3: BENCHMARK RESCUE (Check Bulk) ---
+    if bench_df is None or bench_df.empty:
+        if benchmark_ticker in data_cache:
+             bench_df = data_cache[benchmark_ticker]
+        else:
+             # Critical failure if no benchmark
+             st.error(f"Benchmark {benchmark_ticker} could not be loaded. Please check data.")
+             return {}, [], theme_map, uni_df, {}
+
+    # --- STEP 4: INDIVIDUAL FILE FALLBACK ---
     missing_tickers = []
     
-    # Check ETFs
+    # Process ETFs first (needed for Alpha)
     etf_tickers = list(theme_map.values())
     for ticker in etf_tickers:
         if ticker in data_cache: continue
@@ -558,20 +566,31 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
                  df = calc.process_dataframe(df)
                  data_cache[ticker] = df
     
-    # Check Stocks (only if bulk didn't work)
+    # Process Stocks (only if bulk didn't work)
     if not bulk_loaded:
-        # If bulk failed, we can't load 1300 files without hitting limits.
-        # We mark them as missing here, but the app handles this via Lazy Loading later
+        # If bulk failed, we assume lazy loading will pick it up later in main_sector
         pass 
 
-    # --- STEP 4: CALCULATIONS (RRG & ALPHA) ---
+    # --- STEP 5: CALCULATIONS & VALIDATION ---
+    final_cache = {}
+    
+    # RRG
     for ticker, df in data_cache.items():
-        if ticker == benchmark_ticker: continue
+        if ticker == benchmark_ticker:
+            final_cache[ticker] = df
+            continue
         
-        # RRG
-        if bench_df is not None:
-            df = calc.calculate_rrg_metrics(df, bench_df)
-            data_cache[ticker] = df
+        # Calculate RRG metrics
+        df_rrg = calc.calculate_rrg_metrics(df, bench_df)
+        
+        # VALIDATION: Only keep if RRG calculation succeeded
+        if df_rrg is not None and 'RRG_Ratio_Short' in df_rrg.columns:
+            final_cache[ticker] = df_rrg
+        else:
+            missing_tickers.append(ticker)
+
+    # Re-assign to ensure we only use validated DFs
+    data_cache = final_cache
 
     # Theme Alpha
     for theme, etf_ticker in theme_map.items():
@@ -603,8 +622,6 @@ def load_stocks_for_theme(theme: str, uni_df: pd.DataFrame, etf_data_cache: Dict
     stock_tickers = uni_df[(uni_df['Theme'] == theme) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
     theme_cache = {}
     
-    # Check if we already have them (Bulk Load)
-    # This assumes etf_data_cache actually contains ALL data, which is how fetch_and_process_universe is designed now
     for stock in stock_tickers:
         if stock in etf_data_cache:
             theme_cache[stock] = etf_data_cache[stock]
@@ -613,7 +630,6 @@ def load_stocks_for_theme(theme: str, uni_df: pd.DataFrame, etf_data_cache: Dict
         # Fallback: Lazy Load individual file
         try:
             raw_config = st.secrets.get("PARQUET_CONFIG", "")
-            # (Parse config logic simplified for speed)
             config = {}
             if raw_config:
                  lines = [line.strip() for line in raw_config.strip().split('\n') if line.strip()]
@@ -626,11 +642,9 @@ def load_stocks_for_theme(theme: str, uni_df: pd.DataFrame, etf_data_cache: Dict
             if key in config:
                 df = _load_single_parquet(st.secrets[config[key]])
                 if df is not None:
-                    # Need to process on the fly
                     calc = SectorAlphaCalculator()
                     df = calc.process_dataframe(df)
                     
-                    # Need ETF for Alpha
                     etf_ticker = uni_df[uni_df['Theme'] == theme]['Ticker'].iloc[0]
                     etf_df = etf_data_cache.get(etf_ticker)
                     
