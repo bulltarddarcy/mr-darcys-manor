@@ -671,6 +671,306 @@ def _score_to_grade(score: float) -> str:
     return 'F'
 
 # ==========================================
+# 6. THEME SCORING & ANALYSIS
+# ==========================================
+
+def calculate_theme_score(df: pd.DataFrame, view_key: str = 'Short') -> Optional[Dict]:
+    """
+    Calculate comprehensive score for a theme/sector (0-100 with grade).
+    
+    Scoring Breakdown:
+    - Current Position (40 pts): Quadrant strength
+    - Momentum Quality (30 pts): Consistency + acceleration
+    - Trajectory (20 pts): 3-day path analysis
+    - Stability (10 pts): Smoothness of movement
+    
+    Args:
+        df: Theme dataframe with RRG metrics
+        view_key: Timeframe to analyze ('Short', 'Med', 'Long')
+        
+    Returns:
+        Dict with score, grade, components, and actionability
+    """
+    if df is None or df.empty or len(df) < 4:
+        return None
+    
+    try:
+        col_ratio = f"RRG_Ratio_{view_key}"
+        col_mom = f"RRG_Mom_{view_key}"
+        
+        if col_ratio not in df.columns or col_mom not in df.columns:
+            return None
+        
+        # Get last 4 days (today + 3-day trail)
+        recent = df.tail(4)
+        if len(recent) < 4:
+            return None
+        
+        last = recent.iloc[-1]
+        ratio = last[col_ratio]
+        mom = last[col_mom]
+        
+        score_breakdown = {}
+        
+        # --- FACTOR 1: Current Position (40 points) ---
+        # Based on which quadrant and how deep into it
+        
+        # Quadrant base score
+        if ratio >= 100 and mom >= 100:  # Leading
+            quadrant_base = 30
+            quadrant_name = "🟢 Leading"
+        elif ratio < 100 and mom >= 100:  # Improving
+            quadrant_base = 20
+            quadrant_name = "🔵 Improving"
+        elif ratio >= 100 and mom < 100:  # Weakening
+            quadrant_base = 15
+            quadrant_name = "🟡 Weakening"
+        else:  # Lagging
+            quadrant_base = 5
+            quadrant_name = "🔴 Lagging"
+        
+        # Distance from center (magnitude bonus)
+        distance = abs(ratio - 100) + abs(mom - 100)
+        if distance > 10:
+            magnitude_bonus = 10
+        elif distance > 5:
+            magnitude_bonus = 5
+        else:
+            magnitude_bonus = 0
+        
+        score_breakdown['position'] = min(40, quadrant_base + magnitude_bonus)
+        
+        # --- FACTOR 2: Momentum Quality (30 points) ---
+        
+        # Check all three timeframes
+        mom_short = last.get('RRG_Mom_Short', 0)
+        mom_med = last.get('RRG_Mom_Med', 0)
+        mom_long = last.get('RRG_Mom_Long', 0)
+        
+        # Consistency (15 points)
+        positive_count = sum([mom_short > 100, mom_med > 100, mom_long > 100])
+        if positive_count == 3:
+            consistency_score = 15
+        elif positive_count == 2:
+            consistency_score = 10
+        elif positive_count == 1:
+            consistency_score = 5
+        else:
+            consistency_score = 0
+        
+        # Acceleration (15 points)
+        if mom_short > mom_med > mom_long:
+            acceleration_score = 15
+        elif mom_short > mom_med or mom_short > mom_long:
+            acceleration_score = 8
+        else:
+            acceleration_score = 0
+        
+        score_breakdown['momentum_quality'] = consistency_score + acceleration_score
+        
+        # --- FACTOR 3: Trajectory (20 points) ---
+        # Analyze the 3-day path
+        
+        trajectory_data = []
+        for i in range(4):
+            row = recent.iloc[i]
+            r = row[col_ratio]
+            m = row[col_mom]
+            
+            if r >= 100 and m >= 100:
+                quad = "Leading"
+            elif r < 100 and m >= 100:
+                quad = "Improving"
+            elif r >= 100 and m < 100:
+                quad = "Weakening"
+            else:
+                quad = "Lagging"
+            
+            trajectory_data.append({
+                'quadrant': quad,
+                'ratio': r,
+                'mom': m
+            })
+        
+        # Improvement trajectory (10 points)
+        quadrant_rank = {"Lagging": 0, "Weakening": 1, "Improving": 2, "Leading": 3}
+        
+        trajectory_path = [quadrant_rank[t['quadrant']] for t in trajectory_data]
+        
+        if trajectory_path[-1] > trajectory_path[0]:  # Improved over 3 days
+            if all(trajectory_path[i] <= trajectory_path[i+1] for i in range(3)):
+                trajectory_improvement = 10  # Consistent improvement each day
+            else:
+                trajectory_improvement = 5  # Improved but not smoothly
+        elif trajectory_path[-1] == trajectory_path[0]:
+            trajectory_improvement = 3  # Stayed same
+        else:
+            trajectory_improvement = 0  # Deteriorated
+        
+        # Momentum acceleration in trail (10 points)
+        mom_values = [t['mom'] for t in trajectory_data]
+        mom_change = mom_values[-1] - mom_values[0]
+        
+        if mom_change > 5:
+            momentum_acceleration = 10
+        elif mom_change > 2:
+            momentum_acceleration = 5
+        elif mom_change > 0:
+            momentum_acceleration = 3
+        else:
+            momentum_acceleration = 0
+        
+        score_breakdown['trajectory'] = trajectory_improvement + momentum_acceleration
+        
+        # --- FACTOR 4: Stability (10 points) ---
+        # Reward smooth movement, penalize whipsaws
+        
+        # Check if bouncing between quadrants
+        unique_quadrants = len(set([t['quadrant'] for t in trajectory_data]))
+        
+        if unique_quadrants == 1:
+            stability_score = 10  # Rock solid
+        elif unique_quadrants == 2:
+            # Check if it's a smooth progression vs whipsaw
+            if trajectory_path == sorted(trajectory_path) or trajectory_path == sorted(trajectory_path, reverse=True):
+                stability_score = 7  # Smooth transition
+            else:
+                stability_score = 3  # Some chop
+        else:
+            stability_score = 0  # Very choppy
+        
+        score_breakdown['stability'] = stability_score
+        
+        # --- CALCULATE TOTAL ---
+        total_score = sum(score_breakdown.values())
+        total_score = min(100, max(0, total_score))
+        
+        # --- FRESHNESS INDICATOR ---
+        # Count how many days it's been in current quadrant
+        current_quad = trajectory_data[-1]['quadrant']
+        days_in_quadrant = 1
+        for i in range(len(trajectory_data) - 2, -1, -1):
+            if trajectory_data[i]['quadrant'] == current_quad:
+                days_in_quadrant += 1
+            else:
+                break
+        
+        if days_in_quadrant <= 2:
+            freshness = "🆕 Fresh"
+            freshness_detail = f"Just entered (Day {days_in_quadrant})"
+        elif days_in_quadrant == 3:
+            freshness = "⭐ Early"
+            freshness_detail = f"Early stage (Day {days_in_quadrant})"
+        else:
+            freshness = "🕐 Established"
+            freshness_detail = f"Established (Day {days_in_quadrant}+)"
+        
+        # --- ACTIONABILITY ---
+        if total_score >= 70 and quadrant_name in ["🟢 Leading", "🔵 Improving"]:
+            action = "✅ BUY"
+            action_detail = "Strong momentum - actively allocate"
+        elif total_score >= 50 and quadrant_name == "🔵 Improving":
+            action = "🎯 WATCH"
+            action_detail = "Building momentum - prepare to enter"
+        elif total_score >= 40 and quadrant_name == "🟢 Leading":
+            action = "⚠️ HOLD"
+            action_detail = "Still positive but momentum fading"
+        elif quadrant_name == "🟡 Weakening":
+            action = "⚠️ REDUCE"
+            action_detail = "Losing momentum - take profits"
+        else:
+            action = "🚫 AVOID"
+            action_detail = "Weak positioning - stay away"
+        
+        # --- TRAJECTORY DESCRIPTION ---
+        if trajectory_path[-1] > trajectory_path[0]:
+            trajectory_label = "🚀 Accelerating"
+        elif trajectory_path[-1] == trajectory_path[0]:
+            if stability_score >= 7:
+                trajectory_label = "➡️ Stable"
+            else:
+                trajectory_label = "⚡ Choppy"
+        else:
+            trajectory_label = "📉 Declining"
+        
+        return {
+            'total_score': total_score,
+            'grade': _score_to_grade(total_score),
+            'quadrant': quadrant_name,
+            'freshness': freshness,
+            'freshness_detail': freshness_detail,
+            'trajectory_label': trajectory_label,
+            'action': action,
+            'action_detail': action_detail,
+            'breakdown': score_breakdown,
+            'days_in_quadrant': days_in_quadrant,
+            'stability': "Smooth" if stability_score >= 7 else "Choppy"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error calculating theme score: {e}")
+        return None
+
+def get_actionable_theme_summary(
+    etf_data_cache: Dict,
+    theme_map: Dict,
+    view_key: str = 'Short'
+) -> Dict[str, List[Dict]]:
+    """
+    Group themes by actionability for easy decision-making.
+    
+    Args:
+        etf_data_cache: Cache of theme dataframes
+        theme_map: Dict mapping theme names to tickers
+        view_key: Timeframe to analyze
+        
+    Returns:
+        Dict with themes grouped by action category
+    """
+    categories = {
+        'momentum': [],  # Buy/Strong
+        'rotation': [],  # Watch/Building
+        'hold': [],      # Hold/Reduce
+        'avoid': []      # Avoid/Weak
+    }
+    
+    for theme, ticker in theme_map.items():
+        df = etf_data_cache.get(ticker)
+        if df is None or df.empty:
+            continue
+        
+        score_data = calculate_theme_score(df, view_key)
+        if not score_data:
+            continue
+        
+        theme_info = {
+            'theme': theme,
+            'score': score_data['total_score'],
+            'grade': score_data['grade'],
+            'quadrant': score_data['quadrant'],
+            'freshness': score_data['freshness'],
+            'trajectory': score_data['trajectory_label'],
+            'action': score_data['action'],
+            'action_detail': score_data['action_detail']
+        }
+        
+        # Categorize
+        if score_data['action'] == "✅ BUY":
+            categories['momentum'].append(theme_info)
+        elif score_data['action'] == "🎯 WATCH":
+            categories['rotation'].append(theme_info)
+        elif score_data['action'] in ["⚠️ HOLD", "⚠️ REDUCE"]:
+            categories['hold'].append(theme_info)
+        else:
+            categories['avoid'].append(theme_info)
+    
+    # Sort each category by score
+    for category in categories:
+        categories[category].sort(key=lambda x: x['score'], reverse=True)
+    
+    return categories
+
+# ==========================================
 # 5. ORCHESTRATOR (OPTIMIZED)
 # ==========================================
 
