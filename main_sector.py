@@ -255,38 +255,42 @@ def run_sector_rotation_app(df_global=None):
     
     st.divider()
 
-    # --- 7. CONSENSUS SECTOR SCORECARD ---
-    st.subheader("📊 Sector Scorecard")
+    # --- 7. SECTOR LIFECYCLE ANALYSIS ---
+    st.subheader("📊 Sector Lifecycle Dashboard")
     
-    st.info("💡 **Multi-Timeframe Consensus Scoring for Swing Trading** - Combines 5-day, 10-day, and 20-day analysis with emphasis on longer-term trends")
+    st.info("💡 **Where to Deploy Capital** - Sectors grouped by lifecycle stage to identify best entries, holdings to keep, and positions to exit")
     
-    # Help section for theme scoring
+    # Help section
     col_help_theme1, col_help_theme2, col_help_theme3 = st.columns([1, 1, 1])
     with col_help_theme1:
-        st.markdown("**📈 Consensus Score:** 20% weight on 5d + 30% on 10d + 50% on 20d")
+        st.markdown("**🎯 Early Stage:** Fresh momentum - best new entries")
     with col_help_theme2:
-        st.markdown("**✅ High Conviction:** All 3 timeframes bullish • **🎯 Medium:** 2 of 3 bullish")
+        st.markdown("**⚖️ Established:** Mature trends - hold but don't add")
     with col_help_theme3:
-        with st.popover("📖 How Consensus Scoring Works", use_container_width=True):
+        with st.popover("📖 How Lifecycle Works", use_container_width=True):
             st.markdown("""
-            ### Multi-Timeframe Consensus
+            ### Sector Lifecycle Stages
             
-            **Why Consensus?**
-            For swing trading (weeks to months), you need confirmation across timeframes.
+            **🎯 Early Stage Leadership**
+            - Just entered bullish quadrants
+            - 2+ timeframes confirming
+            - Score 60+
+            → **Action:** Best time to enter new positions
             
-            **Weighting:**
-            - 5-day: 20% (short-term)
-            - 10-day: 30% (medium-term)
-            - 20-day: 50% (long-term) ← Most Important
+            **⚖️ Established Leadership**  
+            - Strong but been leading for days
+            - High score but not fresh
+            → **Action:** Hold positions, don't chase
             
-            **Conviction Levels:**
-            - ✅ High: All 3 timeframes bullish
-            - 🎯 Medium: 2 of 3 timeframes bullish
-            - ⚠️ Low: 1 of 3 or mixed signals
-            - 🚫 None: All timeframes weak
+            **📉 Topping/Weakening**
+            - Was strong, now losing momentum
+            - 5d weaker than 20d
+            → **Action:** Take profits, exit positions
             
-            **Best Signals:**
-            High conviction + score 70+ = strongest trades
+            **🚫 Weak/Lagging**
+            - Poor positioning across timeframes
+            - Low scores
+            → **Action:** Stay away, no allocation
             """)
             st.markdown("---")
             if st.button("📖 View Complete Theme Guide", use_container_width=True):
@@ -306,117 +310,216 @@ def run_sector_rotation_app(df_global=None):
             except FileNotFoundError:
                 st.error("THEME_SCORING_GUIDE.md not found. Please ensure it's in the repo root directory.")
     
-    # Get consensus theme summary
+    # Get lifecycle-based theme summary
     categories = us.get_actionable_theme_summary(etf_data_cache, theme_map)
     
-    # Display in conviction-based groups
-    if categories['high_conviction']:
-        st.success(f"✅ **HIGH CONVICTION** ({len(categories['high_conviction'])} sectors) - All timeframes bullish")
+    # --- EARLY STAGE: Best new entries ---
+    if categories['early_stage']:
+        st.success(f"🎯 **EARLY STAGE LEADERSHIP** ({len(categories['early_stage'])} sectors)")
         
-        high_data = []
-        for theme_info in categories['high_conviction']:
-            high_data.append({
+        early_data = []
+        for theme_info in categories['early_stage']:
+            # Format momentum trend
+            s5, s10, s20 = theme_info['score_5d'], theme_info['score_10d'], theme_info['score_20d']
+            if s5 > s10 > s20:
+                momentum_trend = f"🚀 {s5:.0f} > {s10:.0f} > {s20:.0f}"
+            else:
+                momentum_trend = f"➡️ {s5:.0f} ≈ {s10:.0f}"
+            
+            early_data.append({
                 "Sector": theme_info['theme'],
                 "Score": theme_info['consensus_score'],
                 "Grade": theme_info['grade'],
+                "Momentum Trend": momentum_trend,
+                "Stage": theme_info['freshness_detail'],
                 "5d": theme_info['tf_5d'],
                 "10d": theme_info['tf_10d'],
                 "20d": theme_info['tf_20d'],
-                "Fresh": theme_info['freshness_detail'],
-                "Action": theme_info['action']
+                "Why Selected": theme_info['reason']
             })
         
         st.dataframe(
-            pd.DataFrame(high_data),
+            pd.DataFrame(early_data),
             hide_index=True,
             use_container_width=True,
             column_config={
                 "Score": st.column_config.NumberColumn("Score", format="%.0f"),
                 "Grade": st.column_config.TextColumn("Grade", width="small"),
-                "Fresh": st.column_config.TextColumn("Fresh", width="small"),
+                "Stage": st.column_config.TextColumn("Stage", width="small"),
+                "Why Selected": st.column_config.TextColumn("Why Selected", width="large"),
             }
         )
-        st.caption("✅ **Trading Action:** Actively enter positions - highest quality signals")
-    
-    if categories['medium_conviction']:
-        st.info(f"🎯 **MEDIUM CONVICTION** ({len(categories['medium_conviction'])} sectors) - 2 of 3 timeframes bullish")
+        st.caption("✅ **Trading Action:** Fresh momentum building - best time to initiate new swing positions. High risk/reward.")
         
-        medium_data = []
-        for theme_info in categories['medium_conviction']:
-            medium_data.append({
+        with st.expander("📖 Why These Are 'Early Stage'"):
+            st.markdown("""
+            **Selection Criteria (ALL must be true):**
+            
+            1. ✅ **Fresh Entry:** Day 1-3 in current quadrant
+               - *Why:* Early = better risk/reward than chasing
+            
+            2. ✅ **Multi-Timeframe Confirmation:** 2+ timeframes bullish (Leading or Improving)
+               - *Why:* Need confirmation across timeframes for swing trades
+            
+            3. ✅ **Quality Score:** 60+ points
+               - *Why:* Filters out weak setups
+            
+            4. ✅ **Momentum Accelerating or Stable:** 5d ≥ 10d ≥ 20d scores
+               - *Why:* Want building momentum, not declining
+               - *Example:* Score trend 78 > 75 > 71 = accelerating ✓
+               - *Example:* Score trend 72 < 75 < 78 = declining ✗
+            """)
+    else:
+        st.info("🎯 **EARLY STAGE LEADERSHIP** - No sectors currently showing fresh momentum buildup")
+    
+    # --- ESTABLISHED: Hold but don't chase ---
+    if categories['established']:
+        st.info(f"⚖️ **ESTABLISHED LEADERSHIP** ({len(categories['established'])} sectors)")
+        
+        established_data = []
+        for theme_info in categories['established']:
+            # Format momentum trend
+            s5, s10, s20 = theme_info['score_5d'], theme_info['score_10d'], theme_info['score_20d']
+            if s5 < s10 or s5 < s20:
+                momentum_trend = f"📉 {s5:.0f} < {s10:.0f}"
+            elif s5 > s10 > s20:
+                momentum_trend = f"🚀 {s5:.0f} > {s10:.0f} > {s20:.0f}"
+            else:
+                momentum_trend = f"➡️ {s5:.0f} ≈ {s10:.0f}"
+            
+            established_data.append({
                 "Sector": theme_info['theme'],
                 "Score": theme_info['consensus_score'],
                 "Grade": theme_info['grade'],
+                "Momentum Trend": momentum_trend,
+                "Stage": theme_info['freshness_detail'],
                 "5d": theme_info['tf_5d'],
                 "10d": theme_info['tf_10d'],
                 "20d": theme_info['tf_20d'],
-                "Fresh": theme_info['freshness_detail'],
-                "Action": theme_info['action']
+                "Why Selected": theme_info['reason']
             })
         
         st.dataframe(
-            pd.DataFrame(medium_data),
+            pd.DataFrame(established_data),
             hide_index=True,
             use_container_width=True,
             column_config={
                 "Score": st.column_config.NumberColumn("Score", format="%.0f"),
                 "Grade": st.column_config.TextColumn("Grade", width="small"),
-                "Fresh": st.column_config.TextColumn("Fresh", width="small"),
+                "Stage": st.column_config.TextColumn("Stage", width="small"),
+                "Why Selected": st.column_config.TextColumn("Why Selected", width="large"),
             }
         )
-        st.caption("🎯 **Trading Action:** Watch for confirmation or enter smaller positions")
-    
-    if categories['low_conviction']:
-        st.warning(f"⚠️ **LOW CONVICTION** ({len(categories['low_conviction'])} sectors) - Mixed or conflicting signals")
+        st.caption("⚖️ **Trading Action:** Mature uptrends - hold existing positions but avoid chasing. Look to Early Stage for new entries instead.")
         
-        low_data = []
-        for theme_info in categories['low_conviction']:
-            low_data.append({
+        with st.expander("📖 Why These Are 'Established'"):
+            st.markdown("""
+            **Selection Criteria (ALL must be true):**
+            
+            1. ✅ **High Score:** 65+ points
+               - *Why:* Still strong positioning
+            
+            2. ✅ **Multi-Timeframe Confirmation:** 2+ timeframes bullish
+               - *Why:* Trend still intact
+            
+            3. ✅ **NOT Fresh:** Day 4+ in current quadrant
+               - *Why:* Been running for a while - late to enter
+            
+            **Note:** May show declining momentum (score 82 → 79 → 75) but still strong overall.
+            This is normal for mature trends. Hold but don't add.
+            """)
+    else:
+        st.info("⚖️ **ESTABLISHED LEADERSHIP** - No sectors in mature leadership phase")
+    
+    # --- TOPPING: Take profits ---
+    if categories['topping']:
+        st.warning(f"📉 **TOPPING / WEAKENING** ({len(categories['topping'])} sectors)")
+        
+        topping_data = []
+        for theme_info in categories['topping']:
+            # Format momentum trend
+            s5, s10, s20 = theme_info['score_5d'], theme_info['score_10d'], theme_info['score_20d']
+            momentum_trend = f"📉 {s5:.0f} < {s10:.0f} or {s20:.0f}"
+            
+            topping_data.append({
                 "Sector": theme_info['theme'],
                 "Score": theme_info['consensus_score'],
                 "Grade": theme_info['grade'],
+                "Momentum Trend": momentum_trend,
+                "Stage": theme_info['freshness_detail'],
                 "5d": theme_info['tf_5d'],
                 "10d": theme_info['tf_10d'],
                 "20d": theme_info['tf_20d'],
-                "Fresh": theme_info['freshness_detail'],
-                "Action": theme_info['action']
+                "Why Selected": theme_info['reason']
             })
         
         st.dataframe(
-            pd.DataFrame(low_data),
+            pd.DataFrame(topping_data),
             hide_index=True,
             use_container_width=True,
             column_config={
                 "Score": st.column_config.NumberColumn("Score", format="%.0f"),
                 "Grade": st.column_config.TextColumn("Grade", width="small"),
-                "Fresh": st.column_config.TextColumn("Fresh", width="small"),
+                "Stage": st.column_config.TextColumn("Stage", width="small"),
+                "Why Selected": st.column_config.TextColumn("Why Selected", width="large"),
             }
         )
-        st.caption("⚠️ **Trading Action:** Be selective - wait for better setup or pass")
+        st.caption("📉 **Trading Action:** Losing momentum - exit positions, take profits. Don't fight the rotation.")
+        
+        with st.expander("📖 Why These Are 'Topping'"):
+            st.markdown("""
+            **Selection Criteria (ANY can trigger):**
+            
+            1. ⚠️ **Momentum Declining:** 5-day score < 10-day or 20-day score
+               - *Why:* Recent momentum weaker than past = losing steam
+               - *Example:* Scores 68 < 72 < 75 = declining trend
+            
+            2. ⚠️ **5-Day Weakening:** Short-term moved to Weakening quadrant
+               - *Why:* Early warning sign of reversal
+            
+            3. ⚠️ **Mixed Signals:** Was bullish on 20d but not on 5d
+               - *Why:* Short-term turning negative
+            
+            **These are EXIT signals.** Don't wait for it to become fully weak.
+            Take profits while you still can!
+            """)
+    else:
+        st.success("✅ No sectors currently showing topping behavior")
     
-    if categories['avoid']:
-        with st.expander(f"🚫 **AVOID** ({len(categories['avoid'])} sectors) - Weak across timeframes", expanded=False):
-            avoid_data = []
-            for theme_info in categories['avoid']:
-                avoid_data.append({
+    # --- WEAK: Avoid ---
+    if categories['weak']:
+        with st.expander(f"🚫 **WEAK / LAGGING** ({len(categories['weak'])} sectors)", expanded=False):
+            weak_data = []
+            for theme_info in categories['weak']:
+                weak_data.append({
                     "Sector": theme_info['theme'],
                     "Score": theme_info['consensus_score'],
                     "Grade": theme_info['grade'],
                     "5d": theme_info['tf_5d'],
                     "10d": theme_info['tf_10d'],
-                    "20d": theme_info['tf_20d']
+                    "20d": theme_info['tf_20d'],
+                    "Why Weak": theme_info['reason']
                 })
             
             st.dataframe(
-                pd.DataFrame(avoid_data),
+                pd.DataFrame(weak_data),
                 hide_index=True,
                 use_container_width=True,
                 column_config={
                     "Score": st.column_config.NumberColumn("Score", format="%.0f"),
                     "Grade": st.column_config.TextColumn("Grade", width="small"),
+                    "Why Weak": st.column_config.TextColumn("Why Weak", width="large"),
                 }
             )
-            st.caption("🚫 **Trading Action:** Stay away - no allocation")
+            st.caption("🚫 **Trading Action:** No allocation - stay away until lifecycle improves")
+            
+            st.markdown("""
+            **Why These Are 'Weak':**
+            - Low score (<40), OR
+            - Fewer than 2 timeframes bullish, OR
+            - All showing Lagging
+            """)
+    
 
     st.markdown("---")
 
