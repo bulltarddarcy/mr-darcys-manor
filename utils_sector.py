@@ -139,7 +139,7 @@ class SectorAlphaCalculator:
             df['Volume'] = df['VOLUME']
             
         if 'Close' not in df.columns:
-            # logger.error("No 'Close' column found in dataframe") 
+            # logger.error("No 'Close' column found in dataframe")
             return None
 
         # --- SHARED TECHNICALS ---
@@ -446,7 +446,7 @@ def _load_single_parquet(url):
             
             if date_col:
                 df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-                # If Ticker column exists, this is likely a bulk file, don't set index yet if we want to filter
+                # If Ticker column exists, this is likely a bulk file, don't set index yet
                 if 'Ticker' in df.columns or 'Symbol' in df.columns:
                      return df.sort_values(date_col)
                 
@@ -462,7 +462,7 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
     1. Loads Universe.
     2. CHECKS FOR BULK DATASET KEY (SECTOR_ROTATION).
     3. If found, downloads 1 file and splits it.
-    4. If not found, falls back to individual file loading.
+    4. If not found, falls back to individual file loading (which might fail if too many).
     """
     mgr = SectorDataManager()
     uni_df, tickers, theme_map = mgr.load_universe(benchmark_ticker)
@@ -501,21 +501,27 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
              data_cache[benchmark_ticker] = bench_df
 
     # --- STEP 2: CHECK FOR MASTER/BULK FILE ---
-    # We look for common keys for the bulk sector file
-    bulk_key = None
-    if "SECTOR_ROTATION" in config: bulk_key = config["SECTOR_ROTATION"]
-    elif "PARQUET_SECTOR_ROTATION" in config: bulk_key = config["PARQUET_SECTOR_ROTATION"]
+    bulk_url = None
+    # Check 1: Mapped in Config?
+    if "SECTOR_ROTATION" in config and config["SECTOR_ROTATION"] in st.secrets:
+        bulk_url = st.secrets[config["SECTOR_ROTATION"]]
+    elif "PARQUET_SECTOR_ROTATION" in config and config["PARQUET_SECTOR_ROTATION"] in st.secrets:
+        bulk_url = st.secrets[config["PARQUET_SECTOR_ROTATION"]]
+    
+    # Check 2: Direct Secret (Fallback)
+    if not bulk_url and "PARQUET_SECTOR_ROTATION" in st.secrets:
+        bulk_url = st.secrets["PARQUET_SECTOR_ROTATION"]
     
     bulk_loaded = False
     
-    if bulk_key and bulk_key in st.secrets:
+    if bulk_url:
         # Download ONE single file
         logger.info("Attempting bulk download...")
-        bulk_df = _load_single_parquet(st.secrets[bulk_key])
+        bulk_df = _load_single_parquet(bulk_url)
         
         if bulk_df is not None:
             # Normalize Ticker Column
-            t_col = next((c for c in bulk_df.columns if c.upper() in ['TICKER', 'SYMBOL']), None)
+            t_col = next((c for c in bulk_df.columns if c.upper() in ['TICKER', 'SYMBOL', 'SYM', 'STOCK']), None)
             d_col = next((c for c in bulk_df.columns if 'DATE' in c.upper() or 'ChartDate' in c), None)
 
             if t_col and d_col:
@@ -525,8 +531,8 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
                 # Split and Store
                 grouped = bulk_df.groupby(t_col)
                 for ticker, group in grouped:
+                    # Only store what is in our universe to save RAM
                     if ticker in tickers or ticker in theme_map.values():
-                        # Format for processing
                         clean_df = group.copy().rename(columns={d_col: 'ChartDate'}).sort_values('ChartDate').set_index('ChartDate')
                         clean_df = calc.process_dataframe(clean_df)
                         if clean_df is not None:
@@ -534,14 +540,14 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
                 
                 bulk_loaded = True
 
-    # --- STEP 3: INDIVIDUAL FILE FALLBACK (For ETFs or if Bulk missing) ---
-    # Even if bulk loaded, we might need ETFs if they weren't in the bulk file
+    # --- STEP 3: INDIVIDUAL FILE FALLBACK ---
+    # If bulk failed or missed ETFs, try loading individual files
     missing_tickers = []
     
-    # Process ETFs first (needed for Alpha)
+    # Check ETFs
     etf_tickers = list(theme_map.values())
     for ticker in etf_tickers:
-        if ticker in data_cache: continue # Already found in bulk
+        if ticker in data_cache: continue
         if ticker == benchmark_ticker: continue
 
         key = f"{ticker}_PARQUET"
@@ -552,19 +558,11 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
                  df = calc.process_dataframe(df)
                  data_cache[ticker] = df
     
-    # Process Stocks (only if bulk didn't load them)
+    # Check Stocks (only if bulk didn't work)
     if not bulk_loaded:
-        for ticker in tickers:
-            if ticker in data_cache: continue
-            key = f"{ticker}_PARQUET"
-            if key in config:
-                df = _load_single_parquet(st.secrets[config[key]])
-                if df is not None:
-                    if 'ChartDate' in df.columns: df = df.set_index('ChartDate')
-                    df = calc.process_dataframe(df)
-                    data_cache[ticker] = df
-            else:
-                 missing_tickers.append(ticker)
+        # If bulk failed, we can't load 1300 files without hitting limits.
+        # We mark them as missing here, but the app handles this via Lazy Loading later
+        pass 
 
     # --- STEP 4: CALCULATIONS (RRG & ALPHA) ---
     for ticker, df in data_cache.items():
@@ -597,16 +595,50 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
 def load_stocks_for_theme(theme: str, uni_df: pd.DataFrame, etf_data_cache: Dict, benchmark_ticker="SPY"):
     """
     Retrieves stocks for a theme. 
-    Now primarily acts as a filter on the already-loaded cache (since we load bulk now).
+    1. Checks if already in cache (Bulk Load success).
+    2. If not, attempts lazy download of individual files.
     """
     if uni_df.empty or theme not in uni_df['Theme'].values: return {}
     
     stock_tickers = uni_df[(uni_df['Theme'] == theme) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
     theme_cache = {}
     
+    # Check if we already have them (Bulk Load)
+    # This assumes etf_data_cache actually contains ALL data, which is how fetch_and_process_universe is designed now
     for stock in stock_tickers:
         if stock in etf_data_cache:
             theme_cache[stock] = etf_data_cache[stock]
+            continue
+            
+        # Fallback: Lazy Load individual file
+        try:
+            raw_config = st.secrets.get("PARQUET_CONFIG", "")
+            # (Parse config logic simplified for speed)
+            config = {}
+            if raw_config:
+                 lines = [line.strip() for line in raw_config.strip().split('\n') if line.strip()]
+                 for line in lines:
+                     parts = [p.strip() for p in line.split(',')]
+                     if len(parts) >= 2 and parts[1] in st.secrets:
+                         config[parts[0]] = parts[1]
+            
+            key = f"{stock}_PARQUET"
+            if key in config:
+                df = _load_single_parquet(st.secrets[config[key]])
+                if df is not None:
+                    # Need to process on the fly
+                    calc = SectorAlphaCalculator()
+                    df = calc.process_dataframe(df)
+                    
+                    # Need ETF for Alpha
+                    etf_ticker = uni_df[uni_df['Theme'] == theme]['Ticker'].iloc[0]
+                    etf_df = etf_data_cache.get(etf_ticker)
+                    
+                    if etf_df is not None:
+                        df = calc.calculate_stock_alpha_multi_theme(df, etf_df, theme)
+                    
+                    theme_cache[stock] = df
+        except: pass
             
     return theme_cache
 
