@@ -1,3 +1,8 @@
+"""
+Sector Rotation App - REFACTORED VERSION
+With multi-theme support, smart filters, and comprehensive scoring.
+"""
+
 import streamlit as st
 import pandas as pd
 import utils_sector as us
@@ -5,123 +10,144 @@ import utils_sector as us
 # ==========================================
 # UI HELPERS
 # ==========================================
-def get_ma_signal(price, ma_val):
-    """Returns Emoji based on Price vs MA"""
+def get_ma_signal(price: float, ma_val: float) -> str:
+    """
+    Return emoji based on price vs moving average.
+    
+    Args:
+        price: Current price
+        ma_val: Moving average value
+        
+    Returns:
+        Emoji indicator
+    """
     if pd.isna(ma_val) or ma_val == 0:
-        return "⚠️" 
+        return "⚠️"
     return "✅" if price > ma_val else "❌"
 
 # ==========================================
 # MAIN PAGE FUNCTION
 # ==========================================
 def run_sector_rotation_app(df_global=None):
-
-    st.error("🚧 **UNDER CONSTRUCTION** 🚧 — This page is currently being updated.")
+    """
+    Main entry point for Sector Rotation application.
     
+    Features:
+    - RRG quadrant analysis
+    - Multi-timeframe views
+    - Stock-level alpha analysis
+    - Smart pattern filters
+    - Comprehensive scoring
+    """
     st.title("🔄 Sector Rotation")
     
-    # 0. Benchmark Control (Session State)
-    if "sector_benchmark" not in st.session_state: st.session_state.sector_benchmark = "SPY"
+    # --- 0. BENCHMARK CONTROL ---
+    if "sector_benchmark" not in st.session_state:
+        st.session_state.sector_benchmark = "SPY"
 
-    # 1. Automatic Data Fetch (Cached 10m)
-    # Passed the benchmark ticker to the fetch function
+    # --- 1. DATA FETCH (CACHED) ---
     with st.spinner(f"Syncing Sector Data ({st.session_state.sector_benchmark})..."):
         etf_data_cache, missing_tickers, theme_map, uni_df, stock_themes = \
-    us.fetch_and_process_universe(st.session_state.sector_benchmark)
+            us.fetch_and_process_universe(st.session_state.sector_benchmark)
 
     if uni_df.empty:
         st.warning("⚠️ SECTOR_UNIVERSE secret is missing or empty.")
         return
 
-    # 2. Check for Missing Data
+    # --- 2. MISSING DATA CHECK ---
     if missing_tickers:
         with st.expander(f"⚠️ Missing Data for {len(missing_tickers)} Tickers", expanded=False):
-            st.caption("The following tickers were in your Universe list but no matching Parquet file was found in the Ticker Map.")
+            st.caption("These tickers were in your Universe but not found in the parquet file.")
             st.write(", ".join(missing_tickers))
 
-    # 3. Session State for Controls
-    if "sector_view" not in st.session_state: st.session_state.sector_view = "5 Days"
-    if "sector_trails" not in st.session_state: st.session_state.sector_trails = False
+    # --- 3. SESSION STATE INITIALIZATION ---
+    if "sector_view" not in st.session_state:
+        st.session_state.sector_view = "5 Days"
+    if "sector_trails" not in st.session_state:
+        st.session_state.sector_trails = False
     
-    # Ensure target is valid
     all_themes = sorted(list(theme_map.keys()))
     if not all_themes:
         st.error("No valid themes found. Check data sources.")
         return
 
-    if "sector_target" not in st.session_state or st.session_state.sector_target not in all_themes: 
+    if "sector_target" not in st.session_state or st.session_state.sector_target not in all_themes:
         st.session_state.sector_target = all_themes[0]
     
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
 
-    # --- MAIN SECTION START ---
+    # --- 4. RRG QUADRANT GRAPHIC ---
     st.subheader("Rotation Quadrant Graphic")
 
-    # 1. GRAPHIC USER GUIDE
+    # User Guide
     with st.expander("🗺️ Graphic User Guide", expanded=False):
         st.markdown(f"""
         **🧮 How It Works (The Math)**
-        This chart does **not** show price. It shows **Relative Performance** against **{st.session_state.sector_benchmark}**.
-        * **X-Axis (Trend):** Are we beating the benchmark?
-            * `> 100`: Outperforming {st.session_state.sector_benchmark}.
-            * `< 100`: Underperforming {st.session_state.sector_benchmark}.
-        * **Y-Axis (Momentum):** How fast is the trend changing?
-            * `> 100`: Gaining speed (Acceleration).
-            * `< 100`: Losing speed (Deceleration).
+        This chart shows **Relative Performance** against **{st.session_state.sector_benchmark}** (not absolute price).
         
-        *Note: Calculations use Weighted Regression (Today's price weighted 3x vs 20 days ago).*
+        * **X-Axis (Trend):** Are we beating the benchmark?
+            * `> 100`: Outperforming {st.session_state.sector_benchmark}
+            * `< 100`: Underperforming {st.session_state.sector_benchmark}
+        * **Y-Axis (Momentum):** How fast is the trend changing?
+            * `> 100`: Gaining speed (Acceleration)
+            * `< 100`: Losing speed (Deceleration)
+        
+        *Calculations use Weighted Regression (recent days weighted 3x more)*
         
         **📊 Quadrant Guide**
-        * 🟢 **LEADING (Top Right):** Strong Trend + Accelerating Momentum. The Winners.
-        * 🟡 **WEAKENING (Bottom Right):** Strong Trend, but losing steam. Often a place to take profits.
-        * 🔴 **LAGGING (Bottom Left):** Weak Trend + Decelerating. The Losers.
-        * 🔵 **IMPROVING (Top Left):** Weak Trend, but Momentum is waking up. "Turnarounds".
+        * 🟢 **LEADING (Top Right):** Strong trend + accelerating. The winners.
+        * 🟡 **WEAKENING (Bottom Right):** Strong trend but losing steam. Take profits.
+        * 🔴 **LAGGING (Bottom Left):** Weak trend + decelerating. The losers.
+        * 🔵 **IMPROVING (Top Left):** Weak trend but momentum building. Turnarounds.
         """)
 
-    # CONTROLS
+    # Controls
     with st.expander("⚙️ Chart Inputs & Filters", expanded=False):
         col_inputs, col_filters = st.columns([1, 1])
         
-        # --- LEFT COLUMN: Timeframe, Trails ---
+        # --- LEFT: TIMEFRAME & BENCHMARK ---
         with col_inputs:
-            # Benchmark Selection
             st.markdown("**Benchmark Ticker**")
             new_benchmark = st.radio(
                 "Benchmark",
                 ["SPY", "QQQ"],
                 horizontal=True,
-                index=["SPY", "QQQ"].index(st.session_state.sector_benchmark) if st.session_state.sector_benchmark in ["SPY", "QQQ"] else 0,
+                index=["SPY", "QQQ"].index(st.session_state.sector_benchmark) 
+                    if st.session_state.sector_benchmark in ["SPY", "QQQ"] else 0,
                 key="sector_benchmark_radio",
                 label_visibility="collapsed"
             )
             
-            # If changed, rerun to update session state and fetch new data
             if new_benchmark != st.session_state.sector_benchmark:
                 st.session_state.sector_benchmark = new_benchmark
-                st.cache_data.clear() # Clear cache so we fetch new RS/Alpha data
+                st.cache_data.clear()
                 st.rerun()
 
             st.markdown("---")
-            
-            st.markdown("**Timeframe Window**") 
+            st.markdown("**Timeframe Window**")
             st.session_state.sector_view = st.radio(
-                "Timeframe Window", 
-                ["5 Days", "10 Days", "20 Days"], 
-                horizontal=True, 
+                "Timeframe Window",
+                ["5 Days", "10 Days", "20 Days"],
+                horizontal=True,
                 key="timeframe_radio",
                 label_visibility="collapsed"
             )
             
             st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
-            st.session_state.sector_trails = st.checkbox("Show 3-Day Trails", value=st.session_state.sector_trails)
+            st.session_state.sector_trails = st.checkbox(
+                "Show 3-Day Trails",
+                value=st.session_state.sector_trails
+            )
             
-            # Display Last Data Date
-            if st.session_state.sector_benchmark in etf_data_cache and not etf_data_cache[st.session_state.sector_benchmark].empty:
-                last_dt = etf_data_cache[st.session_state.sector_benchmark].index[-1].strftime("%Y-%m-%d")
-                st.caption(f"📅 Data Date: {last_dt}")
+            # Display last data date
+            if st.session_state.sector_benchmark in etf_data_cache:
+                bench_df = etf_data_cache[st.session_state.sector_benchmark]
+                if not bench_df.empty:
+                    last_dt = bench_df.index[-1].strftime("%Y-%m-%d")
+                    st.caption(f"📅 Data Date: {last_dt}")
 
-        # --- RIGHT COLUMN: Sector Filters ---
+        # --- RIGHT: SECTOR FILTERS ---
         with col_filters:
             st.markdown("**Sectors Shown**")
             btn_col1, btn_col2, btn_col3 = st.columns(3)
@@ -133,13 +159,13 @@ def run_sector_rotation_app(df_global=None):
 
             with btn_col2:
                 if st.button("⭐ Big 11", use_container_width=True):
-                    big_11_list = [
-                        "Communications", "Consumer Discretionary", "Consumer Staples", 
-                        "Energy", "Financials", "Healthcare", "Industrials", 
+                    big_11 = [
+                        "Communications", "Consumer Discretionary", "Consumer Staples",
+                        "Energy", "Financials", "Healthcare", "Industrials",
                         "Materials", "Real Estate", "Technology", "Utilities"
                     ]
-                    valid_themes = [t for t in big_11_list if t in all_themes]
-                    st.session_state.sector_theme_filter_widget = valid_themes
+                    valid = [t for t in big_11 if t in all_themes]
+                    st.session_state.sector_theme_filter_widget = valid
                     st.rerun()
 
             with btn_col3:
@@ -148,59 +174,78 @@ def run_sector_rotation_app(df_global=None):
                     st.rerun()
             
             sel_themes = st.multiselect(
-                "Select Themes", all_themes, 
-                key="sector_theme_filter_widget", label_visibility="collapsed"
+                "Select Themes",
+                all_themes,
+                key="sector_theme_filter_widget",
+                label_visibility="collapsed"
             )
     
     filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
     view_key = timeframe_map[st.session_state.sector_view]
 
-    # --- MOMENTUM SCANS ---
+    # --- 5. MOMENTUM SCANS ---
     with st.expander("🚀 Momentum Scans", expanded=False):
         inc_mom, neut_mom, dec_mom = [], [], []
         
         for theme, ticker in theme_map.items():
-            # Use Cache
             df = etf_data_cache.get(ticker)
-            if df is None or df.empty or "RRG_Mom_Short" not in df.columns: continue
+            if df is None or df.empty or "RRG_Mom_Short" not in df.columns:
+                continue
             
             last = df.iloc[-1]
-            m5 = last.get("RRG_Mom_Short",0)
-            m10 = last.get("RRG_Mom_Med",0)
-            m20 = last.get("RRG_Mom_Long",0)
+            m5 = last.get("RRG_Mom_Short", 0)
+            m10 = last.get("RRG_Mom_Med", 0)
+            m20 = last.get("RRG_Mom_Long", 0)
             
             shift = m5 - m20
             setup = us.classify_setup(df)
             icon = setup.split()[0] if setup else ""
             item = {"theme": theme, "shift": shift, "icon": icon}
             
-            if m5 > m10 > m20: inc_mom.append(item)
-            elif m5 < m10 < m20: dec_mom.append(item)
-            else: neut_mom.append(item)
+            # Categorize
+            if m5 > m10 > m20:
+                inc_mom.append(item)
+            elif m5 < m10 < m20:
+                dec_mom.append(item)
+            else:
+                neut_mom.append(item)
 
+        # Sort by magnitude
         inc_mom.sort(key=lambda x: x['shift'], reverse=True)
         neut_mom.sort(key=lambda x: x['shift'], reverse=True)
         dec_mom.sort(key=lambda x: x['shift'], reverse=False)
 
+        # Display in columns
         m_col1, m_col2, m_col3 = st.columns(3)
-        with m_col1: 
+        
+        with m_col1:
             st.success(f"📈 Increasing ({len(inc_mom)})")
-            for i in inc_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
+            for i in inc_mom:
+                st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
+        
         with m_col2:
             st.warning(f"⚖️ Neutral / Mixed ({len(neut_mom)})")
-            for i in neut_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
+            for i in neut_mom:
+                st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
+        
         with m_col3:
             st.error(f"🔻 Decreasing ({len(dec_mom)})")
-            for i in dec_mom: st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
+            for i in dec_mom:
+                st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
 
-    # RRG CHART
+    # --- 6. RRG CHART ---
     chart_placeholder = st.empty()
     with chart_placeholder:
-        # Pass the cache into the plotting function
         fig = us.plot_simple_rrg(etf_data_cache, filtered_map, view_key, st.session_state.sector_trails)
-        chart_event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points")
+        chart_event = st.plotly_chart(
+            fig,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="points"
+        )
     
+    # Handle chart selection
     if chart_event and chart_event.selection and chart_event.selection.points:
         point = chart_event.selection.points[0]
         if "customdata" in point:
@@ -210,24 +255,26 @@ def run_sector_rotation_app(df_global=None):
     
     st.divider()
 
-    # --- ALL THEMES PERFORMANCE ---
+    # --- 7. ALL THEMES PERFORMANCE TABLE ---
     st.subheader("All Themes Performance")
     
     st.markdown(f"""
-    * **Rel Perf (Relative Performance):** Measures the strength of the trend against {st.session_state.sector_benchmark}. 
-      Values positive (>0) indicate outperformance; negative (<0) indicate underperformance.
-    * **Mom (Momentum):** Measures the rate of change (velocity) of the trend. 
-      Values positive (>0) indicate acceleration; negative (<0) indicate deceleration.
+    * **Rel Perf (Relative Performance):** Trend strength vs {st.session_state.sector_benchmark}. 
+      Positive = outperforming, Negative = underperforming.
+    * **Mom (Momentum):** Rate of change (velocity) of the trend. 
+      Positive = accelerating, Negative = decelerating.
     """)
     
     summary_data = []
     
     for theme in all_themes:
         etf_ticker = theme_map.get(theme)
-        if not etf_ticker: continue
-        etf_df = etf_data_cache.get(etf_ticker) # Use Cache
-        
-        if etf_df is None or etf_df.empty: continue
+        if not etf_ticker:
+            continue
+            
+        etf_df = etf_data_cache.get(etf_ticker)
+        if etf_df is None or etf_df.empty:
+            continue
         
         last = etf_df.iloc[-1]
         row = {"Theme": theme}
@@ -245,7 +292,7 @@ def run_sector_rotation_app(df_global=None):
             hide_index=True,
             use_container_width=True,
             column_config={
-                "Theme": st.column_config.TextColumn("Theme"), 
+                "Theme": st.column_config.TextColumn("Theme"),
                 "Rel Perf (5d)": st.column_config.NumberColumn("Rel Perf (5d)", format="%+.2f%%"),
                 "Mom (5d)": st.column_config.NumberColumn("Mom (5d)", format="%+.2f"),
                 "Rel Perf (10d)": st.column_config.NumberColumn("Rel Perf (10d)", format="%+.2f%%"),
@@ -257,97 +304,244 @@ def run_sector_rotation_app(df_global=None):
 
     st.markdown("---")
 
-    # --- EXPLORER SECTION ---
+    # --- 8. STOCK EXPLORER ---
     st.subheader(f"🔎 Explorer: Theme Drilldown")
     
-    search_t = st.text_input("Input a ticker to find its theme(s)", placeholder="NVDA...").strip().upper()
+    # Search functionality
+    search_t = st.text_input(
+        "Input a ticker to find its theme(s)",
+        placeholder="NVDA..."
+    ).strip().upper()
+    
     if search_t:
         matches = uni_df[uni_df['Ticker'] == search_t]
         if not matches.empty:
             found = matches['Theme'].unique()
             st.success(f"📍 Found **{search_t}** in: **{', '.join(found)}**")
-            if len(found) > 0: st.session_state.sector_target = found[0]
+            if len(found) > 0:
+                st.session_state.sector_target = found[0]
         else:
             st.warning(f"Ticker {search_t} not found.")
 
-    curr_idx = all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0
+    # Theme selector
+    curr_idx = all_themes.index(st.session_state.sector_target) \
+        if st.session_state.sector_target in all_themes else 0
     new_target = st.selectbox("Select Theme to View Stocks", all_themes, index=curr_idx)
+    
     if new_target != st.session_state.sector_target:
         st.session_state.sector_target = new_target
 
-    # --- STOCK TABLE ---
-    # Filter tickers for current theme
-    stock_tickers = uni_df[(uni_df['Theme'] == st.session_state.sector_target) & (uni_df['Role'] == 'Stock')]['Ticker'].tolist()
+    # --- 9. STOCK ANALYSIS WITH SMART FILTERS ---
+    st.subheader(f"📊 {st.session_state.sector_target} - Stock Analysis")
     
+    # Get theme ETF for quadrant status
+    theme_etf_ticker = theme_map.get(st.session_state.sector_target)
+    theme_df = etf_data_cache.get(theme_etf_ticker)
+    theme_quadrant = us.get_quadrant_status(theme_df, 'Short') if theme_df is not None else "N/A"
+    
+    # Filter stocks for current theme
+    stock_tickers = uni_df[
+        (uni_df['Theme'] == st.session_state.sector_target) & 
+        (uni_df['Role'] == 'Stock')
+    ]['Ticker'].tolist()
+    
+    if not stock_tickers:
+        st.info(f"No stocks found for {st.session_state.sector_target}")
+        return
+    
+    # Build ranking data with all new features
     ranking_data = []
     
-    for stock in stock_tickers:
-        sdf = etf_data_cache.get(stock) # Already fetched in initial batch
-        
-        if sdf is None or sdf.empty: continue
-        
-        try:
-            # Volume Filter (Assuming min 20 days data available)
-            if len(sdf) < 20: continue
+    with st.spinner(f"Analyzing {len(stock_tickers)} stocks..."):
+        for stock in stock_tickers:
+            sdf = etf_data_cache.get(stock)
             
-            avg_vol = sdf['Volume'].tail(20).mean()
-            avg_price = sdf['Close'].tail(20).mean()
-            if (avg_vol * avg_price) < us.MIN_DOLLAR_VOLUME: continue
+            if sdf is None or sdf.empty:
+                continue
             
-            last = sdf.iloc[-1]
-            
-            def safe_get(key, default=0): return last.get(key, default)
+            try:
+                # Volume filter
+                if len(sdf) < 20:
+                    continue
+                
+                avg_vol = sdf['Volume'].tail(20).mean()
+                avg_price = sdf['Close'].tail(20).mean()
+                
+                if (avg_vol * avg_price) < us.MIN_DOLLAR_VOLUME:
+                    continue
+                
+                last = sdf.iloc[-1]
+                
+                # Get theme-specific alpha columns
+                alpha_5d = last.get(f"Alpha_Short_{st.session_state.sector_target}", 0)
+                alpha_10d = last.get(f"Alpha_Med_{st.session_state.sector_target}", 0)
+                alpha_20d = last.get(f"Alpha_Long_{st.session_state.sector_target}", 0)
+                beta = last.get(f"Beta_{st.session_state.sector_target}", 1.0)
+                
+                # Pattern detection
+                breakout = us.detect_breakout_candidates(sdf, st.session_state.sector_target)
+                dip_buy = us.detect_dip_buy_candidates(sdf, st.session_state.sector_target)
+                fading = us.detect_fading_candidates(sdf, st.session_state.sector_target)
+                divergence = us.detect_relative_strength_divergence(sdf, st.session_state.sector_target)
+                
+                # Comprehensive score
+                score_data = us.calculate_comprehensive_stock_score(
+                    sdf,
+                    st.session_state.sector_target,
+                    theme_quadrant
+                )
+                
+                # Determine pattern label
+                pattern = ""
+                if breakout:
+                    pattern = f"🚀 Breakout ({breakout['strength']:.0f})"
+                elif dip_buy:
+                    pattern = "💎 Dip Buy"
+                elif fading:
+                    pattern = "⚠️ Fading"
+                
+                # Divergence indicator
+                div_label = ""
+                if divergence == 'bullish_divergence':
+                    div_label = "📈 Bull Div"
+                elif divergence == 'bearish_divergence':
+                    div_label = "📉 Bear Div"
+                
+                ranking_data.append({
+                    "Ticker": stock,
+                    "Score": score_data['total_score'] if score_data else 0,
+                    "Grade": score_data['grade'] if score_data else 'F',
+                    "Price": last['Close'],
+                    "Beta": beta,
+                    "Alpha 5d": alpha_5d,
+                    "Alpha 10d": alpha_10d,
+                    "Alpha 20d": alpha_20d,
+                    "RVOL 5d": last.get('RVOL_Short', 0),
+                    "RVOL 10d": last.get('RVOL_Med', 0),
+                    "Pattern": pattern,
+                    "Divergence": div_label,
+                    "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
+                    "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
+                    "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
+                    "200 MA": get_ma_signal(last['Close'], last.get('Sma200', 0)),
+                    # Hidden columns for filtering
+                    "_breakout": breakout is not None,
+                    "_dip_buy": dip_buy,
+                    "_fading": fading
+                })
+                
+            except Exception as e:
+                st.error(f"Error processing {stock}: {e}")
+                continue
 
-            ranking_data.append({
-                "Ticker": stock,
-                "Price": last['Close'],
-                "Alpha 5d": safe_get("True_Alpha_Short"),
-                "RVOL 5d": safe_get("RVOL_Short"),
-                "Alpha 10d": safe_get("True_Alpha_Med"),
-                "RVOL 10d": safe_get("RVOL_Med"),
-                "Alpha 20d": safe_get("True_Alpha_Long"),
-                "RVOL 20d": safe_get("RVOL_Long"),
-                # Use Ema8/Sma50 because the utils file converts all cols to .title()
-                "8 EMA": get_ma_signal(last['Close'], safe_get('Ema8')),
-                "21 EMA": get_ma_signal(last['Close'], safe_get('Ema21')),
-                "50 MA": get_ma_signal(last['Close'], safe_get('Sma50')),
-                "200 MA": get_ma_signal(last['Close'], safe_get('Sma200'))
-            })
-        except Exception:
-            continue
-
-    if ranking_data:
-        df_disp = pd.DataFrame(ranking_data).sort_values(by='Alpha 5d', ascending=False)
+    if not ranking_data:
+        st.info(f"No stocks found for {st.session_state.sector_target} (or filtered by volume).")
+        return
+    
+    df_ranked = pd.DataFrame(ranking_data).sort_values(by='Score', ascending=False)
+    
+    # --- 10. TABBED DISPLAY WITH SMART FILTERS ---
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🎯 All Stocks",
+        "🚀 Breakouts",
+        "💎 Dip Buys",
+        "⚠️ Faders"
+    ])
+    
+    # Display columns (excluding hidden filter columns)
+    display_cols = [c for c in df_ranked.columns if not c.startswith('_')]
+    
+    with tab1:
+        st.caption(f"Showing {len(df_ranked)} stocks sorted by comprehensive score")
         
-        def highlight_cells(row):
+        # Highlight function
+        def highlight_top_scores(row):
             styles = pd.Series('', index=row.index)
-            color = 'background-color: #d4edda; color: black;'
-            if row["Alpha 5d"] > 0 and row["RVOL 5d"] > 1.2:
-                styles["Alpha 5d"] = color; styles["RVOL 5d"] = color
-            if row["Alpha 10d"] > 0 and row["RVOL 10d"] > 1.2:
-                styles["Alpha 10d"] = color; styles["RVOL 10d"] = color
-            if row["Alpha 20d"] > 0 and row["RVOL 20d"] > 1.2:
-                styles["Alpha 20d"] = color; styles["RVOL 20d"] = color
+            score = row.get('Score', 0)
+            
+            if score >= 80:
+                styles['Score'] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
+                styles['Grade'] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
+            elif score >= 70:
+                styles['Score'] = 'background-color: #cce5ff; color: #004085;'
+                styles['Grade'] = 'background-color: #cce5ff; color: #004085;'
+            
+            # Highlight alpha columns
+            for col in ['Alpha 5d', 'Alpha 10d', 'Alpha 20d']:
+                if col in row.index:
+                    alpha = row[col]
+                    if alpha > 2.0:
+                        styles[col] = 'background-color: #d4edda; color: #155724;'
+                    elif alpha < -2.0:
+                        styles[col] = 'background-color: #f8d7da; color: #721c24;'
+            
             return styles
-
+        
         st.dataframe(
-            df_disp.style.apply(highlight_cells, axis=1),
-            hide_index=True, 
+            df_ranked[display_cols].style.apply(highlight_top_scores, axis=1),
+            hide_index=True,
             use_container_width=True,
             column_config={
-                "Ticker": st.column_config.TextColumn("Ticker"), 
+                "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+                "Grade": st.column_config.TextColumn("Grade", width="small"),
                 "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                "Beta": st.column_config.NumberColumn("Beta", format="%.2f"),
                 "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
-                "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
                 "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
-                "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.1fx"),
                 "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
-                "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.1fx"),
-                "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
-                "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
-                "50 MA": st.column_config.TextColumn("50 MA", width="small"),
-                "200 MA": st.column_config.TextColumn("200 MA", width="small")
+                "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
+                "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.1fx"),
             }
         )
-    else:
-        st.info(f"No stocks found for {st.session_state.sector_target} (or filtered by volume).")
+    
+    with tab2:
+        breakouts = df_ranked[df_ranked['_breakout'] == True]
+        
+        if not breakouts.empty:
+            st.success(f"🚀 Found {len(breakouts)} breakout candidates")
+            st.caption("Stocks transitioning from underperformance to outperformance with volume confirmation")
+            
+            st.dataframe(
+                breakouts[display_cols],
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+                    "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
+                    "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.1fx"),
+                }
+            )
+        else:
+            st.info("No breakout patterns detected currently")
+    
+    with tab3:
+        dip_buys = df_ranked[df_ranked['_dip_buy'] == True]
+        
+        if not dip_buys.empty:
+            st.success(f"💎 Found {len(dip_buys)} dip buy opportunities")
+            st.caption("Stocks that were outperforming but pulled back to average - potential buy-the-dip setups")
+            
+            st.dataframe(
+                dip_buys[display_cols],
+                hide_index=True,
+                use_container_width=True
+            )
+        else:
+            st.info("No dip buy setups currently")
+    
+    with tab4:
+        faders = df_ranked[df_ranked['_fading'] == True]
+        
+        if not faders.empty:
+            st.warning(f"⚠️ {len(faders)} stocks showing weakness")
+            st.caption("Stocks that were very strong but alpha is declining - consider taking profits")
+            
+            st.dataframe(
+                faders[display_cols],
+                hide_index=True,
+                use_container_width=True
+            )
+        else:
+            st.success("✅ No concerning faders detected")
