@@ -701,8 +701,7 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 5d": last.get('RVOL_Short', 0),
                     "RVOL 10d": last.get('RVOL_Med', 0),
                     "RVOL 20d": last.get('RVOL_Long', 0),
-                    "Days+": score_data.get('days_positive', 0),
-                    "Setup": score_data.get('setup_reason', ''),
+                    "Days (20)": score_data.get('days_positive', 0),
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
                     "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
@@ -725,7 +724,8 @@ def run_sector_rotation_app(df_global=None):
     df_ranked = pd.DataFrame(ranking_data).sort_values(by='Score', ascending=False)
     
     # --- 10. LIFECYCLE-BASED DISPLAY ---
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 All Stocks",
         "🎯 Optimal Entries",
         "💎 Pullback Buys",
         "⚖️ Established Winners",
@@ -735,7 +735,133 @@ def run_sector_rotation_app(df_global=None):
     # Display columns (excluding hidden filter columns)
     display_cols = [c for c in df_ranked.columns if not c.startswith('_')]
     
+    # Common column config for all tabs
+    common_config = {
+        "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+        "Score": st.column_config.NumberColumn("Score", format="%.0f"),
+        "Grade": st.column_config.TextColumn("Grade", width="small"),
+        "Category": st.column_config.TextColumn("Category", width="medium"),
+        "Pattern": st.column_config.TextColumn("Pattern", width="medium"),
+        "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+        "Beta": st.column_config.NumberColumn("Beta", format="%.2f"),
+        "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
+        "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
+        "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
+        "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.2fx"),
+        "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
+        "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
+        "Days (20)": st.column_config.NumberColumn("Days (20)", format="%.0f", help="Days positive out of last 20 trading days"),
+        "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
+        "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
+        "50 MA": st.column_config.TextColumn("50 MA", width="small"),
+        "200 MA": st.column_config.TextColumn("200 MA", width="small"),
+    }
+    
     with tab1:
+        st.caption(f"📊 Showing all {len(df_ranked)} stocks sorted by score (highest = best entry timing)")
+        
+        # Highlight function
+        def highlight_categories(row):
+            styles = pd.Series('', index=row.index)
+            category = row.get('Category', '')
+            
+            if '🎯 Optimal' in category:
+                styles['Category'] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
+                styles['Score'] = 'background-color: #d4edda; color: #155724;'
+            elif '💎 Pullback' in category:
+                styles['Category'] = 'background-color: #cce5ff; color: #004085; font-weight: bold;'
+                styles['Score'] = 'background-color: #cce5ff; color: #004085;'
+            elif '⚖️ Established' in category:
+                styles['Category'] = 'background-color: #fff3cd; color: #856404;'
+            elif '⚠️' in category:
+                styles['Category'] = 'background-color: #f8d7da; color: #721c24;'
+            
+            return styles
+        
+        st.dataframe(
+            df_ranked[display_cols].style.apply(highlight_categories, axis=1),
+            hide_index=True,
+            use_container_width=True,
+            column_config=common_config
+        )
+        
+        with st.expander("📖 Understanding the Columns"):
+            st.markdown("""
+            **Let me explain each column and why it's there:**
+            
+            ### Identity & Scoring
+            - **Ticker:** Stock symbol
+            - **Score (0-100):** Overall entry quality score
+            - **Grade (A-F):** Letter grade version of score
+            - **Category:** What type of setup this is
+            - **Pattern:** Specific pattern detected (if any)
+            
+            ### Price & Beta
+            - **Price:** Current stock price
+            - **Beta:** How much stock moves relative to sector (1.0 = same, >1.0 = more volatile)
+            
+            ### Alpha (Outperformance)
+            - **Alpha 5d:** How much stock beat/lagged sector over 5 days (%)
+            - **Alpha 10d:** Same but over 10 days
+            - **Alpha 20d:** Same but over 20 days
+            
+            *Why all 3?* Shows the trend:
+            - 5d > 10d > 20d = Accelerating (getting stronger) ✓
+            - 5d < 10d < 20d = Decelerating (losing steam) ✗
+            
+            ### Volume (Confirmation)
+            - **RVOL 5d:** Relative volume vs average (1.5x = 50% above normal)
+            - **RVOL 10d:** Same but 10-day average
+            - **RVOL 20d:** Same but 20-day average
+            
+            *Why all 3?* Volume should confirm price:
+            - RVOL 5d > 10d > 20d = Building volume (accumulation) ✓
+            - RVOL declining = Weak move ✗
+            
+            ### Maturity
+            - **Days (20):** How many days out of the last 20 trading days the stock had positive alpha
+            
+            *Why this matters:*
+            - 3/20 days = Fresh (just starting) ✓ Best entries
+            - 10/20 days = Building (mid-stage) 
+            - 18/20 days = Mature/Extended (late stage) ✗ Too late
+            
+            *This prevents false "fresh" signals:* A stock that ran for 15 days, pulled back 2 days, 
+            then bounced will show 18/20 days (correctly identified as extended), not 2 days 
+            (which would falsely look fresh).
+            
+            ### Technical Position
+            - **8/21/50/200 MA:** Price above (✅) or below (❌) key moving averages
+            
+            *Why all 4?* Different timeframes:
+            - 8/21 = short-term trend
+            - 50/200 = long-term trend
+            - Price above all 4 = very strong structure
+            
+            ### Most Important Columns for Quick Scanning
+            
+            1. **Category** - What type of setup
+            2. **Score** - How good is the entry
+            3. **Alpha 5d** - Current momentum (want 0-2% for optimal entry)
+            4. **Days (20)** - Maturity (low = fresh, high = late)
+            5. **Pattern** - Any technical patterns detected
+            
+            ### Key Insight: Alpha vs Days
+            
+            **Scenario 1: Fresh Entry**
+            - Alpha 5d: +1.2%
+            - Days: 3/20
+            - Translation: Just turned positive, very fresh! ✓
+            
+            **Scenario 2: Pullback in Extended Stock**
+            - Alpha 5d: +1.5% (looks similar!)
+            - Days: 18/20 (extended!)
+            - Translation: Was +8%, pulled back, bouncing. NOT fresh! ✗
+            
+            Days (20) prevents you from buying "dips" that are really just bounces in extended stocks.
+            """)
+    
+    with tab2:
         optimal = df_ranked[df_ranked['_optimal'] == True]
         
         if not optimal.empty:
@@ -746,15 +872,7 @@ def run_sector_rotation_app(df_global=None):
                 optimal[display_cols],
                 hide_index=True,
                 use_container_width=True,
-                column_config={
-                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                    "Grade": st.column_config.TextColumn("Grade", width="small"),
-                    "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
-                    "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
-                    "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
-                    "Days+": st.column_config.NumberColumn("Days+", help="Days with positive alpha"),
-                    "Setup": st.column_config.TextColumn("Setup", width="large"),
-                }
+                column_config=common_config
             )
             
             with st.expander("📖 Why These Are 'Optimal'"):
@@ -771,7 +889,7 @@ def run_sector_rotation_app(df_global=None):
         else:
             st.info("No optimal entry setups currently - stocks are either extended or not yet set up")
     
-    with tab2:
+    with tab3:
         pullbacks = df_ranked[df_ranked['_pullback'] == True]
         
         if not pullbacks.empty:
@@ -782,11 +900,7 @@ def run_sector_rotation_app(df_global=None):
                 pullbacks[display_cols],
                 hide_index=True,
                 use_container_width=True,
-                column_config={
-                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                    "Grade": st.column_config.TextColumn("Grade", width="small"),
-                    "Setup": st.column_config.TextColumn("Setup", width="large"),
-                }
+                column_config=common_config
             )
             
             with st.expander("📖 Why These Are 'Pullbacks'"):
@@ -802,7 +916,7 @@ def run_sector_rotation_app(df_global=None):
         else:
             st.info("No pullback opportunities currently")
     
-    with tab3:
+    with tab4:
         established = df_ranked[df_ranked['_established'] == True]
         
         if not established.empty:
@@ -813,11 +927,7 @@ def run_sector_rotation_app(df_global=None):
                 established[display_cols],
                 hide_index=True,
                 use_container_width=True,
-                column_config={
-                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                    "Grade": st.column_config.TextColumn("Grade", width="small"),
-                    "Days+": st.column_config.NumberColumn("Days+", help="Days been positive"),
-                }
+                column_config=common_config
             )
             
             with st.expander("📖 Why These Are 'Established'"):
@@ -837,7 +947,7 @@ def run_sector_rotation_app(df_global=None):
         else:
             st.info("No established winners in this sector")
     
-    with tab4:
+    with tab5:
         caution = df_ranked[
             (df_ranked['_optimal'] == False) & 
             (df_ranked['_pullback'] == False) & 
@@ -852,11 +962,7 @@ def run_sector_rotation_app(df_global=None):
                 caution[display_cols],
                 hide_index=True,
                 use_container_width=True,
-                column_config={
-                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                    "Grade": st.column_config.TextColumn("Grade", width="small"),
-                    "Setup": st.column_config.TextColumn("Setup", width="large"),
-                }
+                column_config=common_config
             )
         else:
             st.success("✅ All stocks showing decent setups!")
