@@ -822,12 +822,12 @@ def run_sector_rotation_app(df_global=None):
             - **Age:** How many days out of the last 20 trading days the stock had positive alpha
             
             *Why this matters:*
-            - 3 days = Fresh (just starting) ✓ Best entries
-            - 10 days = Building (mid-stage) 
-            - 18 days = Mature/Extended (late stage) ✗ Too late
+            - 3/20 days = Fresh (just starting) ✓ Best entries
+            - 10/20 days = Building (mid-stage) 
+            - 18/20 days = Mature/Extended (late stage) ✗ Too late
             
             *This prevents false "fresh" signals:* A stock that ran for 15 days, pulled back 2 days, 
-            then bounced will show Age 18 (correctly identified as extended), not Age 2 
+            then bounced will show 18/20 days (correctly identified as extended), not 2 days 
             (which would falsely look fresh).
             
             ### Technical Position
@@ -842,20 +842,20 @@ def run_sector_rotation_app(df_global=None):
             
             1. **Category** - What type of setup
             2. **Score** - How good is the entry
-            3. **Alpha 5d** - Current momentum (want 0-3% for optimal entry)
+            3. **Alpha 5d** - Current momentum (want 0-2% for optimal entry)
             4. **Age** - Maturity (low = fresh, high = late)
             5. **Pattern** - Any technical patterns detected
             
-            ### Key Insight: Alpha vs Age
+            ### Key Insight: Alpha vs Days
             
             **Scenario 1: Fresh Entry**
             - Alpha 5d: +1.2%
-            - Age: 3
+            - Days: 3/20
             - Translation: Just turned positive, very fresh! ✓
             
             **Scenario 2: Pullback in Extended Stock**
             - Alpha 5d: +1.5% (looks similar!)
-            - Age: 18 (extended!)
+            - Days: 18/20 (extended!)
             - Translation: Was +8%, pulled back, bouncing. NOT fresh! ✗
             
             Age prevents you from buying "dips" that are really just bounces in extended stocks.
