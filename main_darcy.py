@@ -93,50 +93,44 @@ def run_database_app(df):
 
 def run_rankings_app(df):
     st.title("🏆 Rankings")
-    max_data_date = get_max_trade_date(df)
+    max_data_date = ud.get_max_trade_date(df)
     start_default = max_data_date - timedelta(days=14)
     
-    if 'saved_rank_start' not in st.session_state: st.session_state.saved_rank_start = start_default
-    if 'saved_rank_end' not in st.session_state: st.session_state.saved_rank_end = max_data_date
-    if 'saved_rank_limit' not in st.session_state: st.session_state.saved_rank_limit = 20
-    if 'saved_rank_mc' not in st.session_state: st.session_state.saved_rank_mc = "10B"
-    if 'saved_rank_ema' not in st.session_state: st.session_state.saved_rank_ema = False
+    # 1. Initialize State via Utils
+    ud.initialize_rankings_state(start_default, max_data_date)
 
-    # FIX: Added safety check for key existence
     def save_rank_state(key, saved_key):
         if key in st.session_state:
             st.session_state[saved_key] = st.session_state[key]
     
+    # 2. Render UI
     c1, c2, c3, c4 = st.columns([1, 1, 0.7, 1.3], gap="small")
-    with c1: rank_start = st.date_input("Trade Start Date", value=st.session_state.saved_rank_start, key="rank_start", on_change=save_rank_state, args=("rank_start", "saved_rank_start"))
-    with c2: rank_end = st.date_input("Trade End Date", value=st.session_state.saved_rank_end, key="rank_end", on_change=save_rank_state, args=("rank_end", "saved_rank_end"))
-    with c3: limit = st.number_input("Limit", value=st.session_state.saved_rank_limit, min_value=1, max_value=200, key="rank_limit", on_change=save_rank_state, args=("rank_limit", "saved_rank_limit"))
+    with c1: 
+        rank_start = st.date_input("Trade Start Date", value=st.session_state.saved_rank_start, key="rank_start", on_change=save_rank_state, args=("rank_start", "saved_rank_start"))
+    with c2: 
+        rank_end = st.date_input("Trade End Date", value=st.session_state.saved_rank_end, key="rank_end", on_change=save_rank_state, args=("rank_end", "saved_rank_end"))
+    with c3: 
+        limit = st.number_input("Limit", value=st.session_state.saved_rank_limit, min_value=1, max_value=200, key="rank_limit", on_change=save_rank_state, args=("rank_limit", "saved_rank_limit"))
     with c4: 
         min_mkt_cap_rank = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
         filter_ema = st.checkbox("Hide < 8 EMA", value=False, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
         
-    f = df.copy()
-    if rank_start: f = f[f["Trade Date"].dt.date >= rank_start]
-    if rank_end: f = f[f["Trade Date"].dt.date <= rank_end]
-    
-    if f.empty:
-        st.warning("No data found matching these dates.")
-        return
-
-    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
-    target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
-    f_filtered = f[f[order_type_col].isin(target_types)].copy()
+    # 3. Filter Data via Utils
+    f_filtered = ud.filter_rankings_data(df, rank_start, rank_end)
     
     if f_filtered.empty:
-        st.warning("No trades found.")
+        st.warning("No trades found matching these dates.")
         return
 
     tab_rank, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money", "💡 Top 3", "🤡 Bulltard"])
 
+    # Calculate Market Cap Threshold
     mc_thresh = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mkt_cap_rank, 1e10)
 
-    top_bulls, top_bears, valid_data = calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
+    # Calculate Smart Money Scores (Existing Utils Function)
+    top_bulls, top_bears, valid_data = ud.calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
 
+    # --- TAB 1: SMART MONEY ---
     with tab_rank:
         if valid_data.empty:
             st.warning("Not enough data for Smart Money scores.")
@@ -153,58 +147,26 @@ def run_rankings_app(df):
             with sm1:
                 st.markdown("<div style='color: #71d28a; font-weight:bold;'>Top Bullish Scores</div>", unsafe_allow_html=True)
                 if not top_bulls.empty:
-                    st.dataframe(top_bulls[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=get_table_height(top_bulls, max_rows=100))
+                    st.dataframe(top_bulls[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bulls, max_rows=100))
             
             with sm2:
                 st.markdown("<div style='color: #f29ca0; font-weight:bold;'>Top Bearish Scores</div>", unsafe_allow_html=True)
                 if not top_bears.empty:
-                    st.dataframe(top_bears[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=get_table_height(top_bears, max_rows=100))
+                    st.dataframe(top_bears[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bears, max_rows=100))
         st.markdown("<br><br>", unsafe_allow_html=True)
 
+    # --- TAB 2: TOP IDEAS ---
     with tab_ideas:
         if top_bulls.empty:
             st.info("No Bullish candidates found to analyze.")
         else:
             st.caption(f"ℹ️ Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for confluence...")
-            st.caption("ℹ️ Strategy: Combines Whale Levels (Global DB), Technicals (EMA), and Historical RSI Backtests to find optimal expirations.")
+            st.caption("ℹ️ Strategy: Combines Whale Levels, Technicals (EMA), and RSI Backtests.")
             
-            st.markdown("<span style='color:red;'>⚠️ Note: This methodology is a work in progress and should not be relied upon right now.</span>", unsafe_allow_html=True)
+            # Generate Ideas via Utils
+            best_ideas = ud.generate_top_ideas(top_bulls, df)
             
-            ticker_map = load_ticker_map()
-            candidates = []
-            
-            prog_bar = st.progress(0, text="Analyzing technicals...")
-            bull_list = top_bulls["Symbol"].tolist()
-            
-            batch_results = fetch_technicals_batch(bull_list)
-            
-            for i, t in enumerate(bull_list):
-                prog_bar.progress((i+1)/len(bull_list), text=f"Checking {t}...")
-                
-                data_tuple = batch_results.get(t)
-                t_df = data_tuple[4] if data_tuple else None
-
-                if t_df is None or t_df.empty:
-                    t_df = fetch_yahoo_data(t)
-
-                if t_df is not None and not t_df.empty:
-                    sm_score = top_bulls[top_bulls["Symbol"]==t]["Score"].iloc[0]
-                    
-                    tech_score, reasons, suggs = analyze_trade_setup(t, t_df, df)
-                    
-                    final_conviction = (sm_score / 25.0) + tech_score 
-                    
-                    candidates.append({
-                        "Ticker": t,
-                        "Score": final_conviction,
-                        "Price": t_df.iloc[-1].get('CLOSE') or t_df.iloc[-1].get('Close'),
-                        "Reasons": reasons,
-                        "Suggestions": suggs
-                    })
-            
-            prog_bar.empty()
-            best_ideas = sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
-            
+            # Display Cards
             cols = st.columns(3)
             for i, cand in enumerate(best_ideas):
                 with cols[i]:
@@ -223,30 +185,12 @@ def run_rankings_app(df):
                             st.caption(f"• {r}")
         st.markdown("<br><br>", unsafe_allow_html=True)
 
+    # --- TAB 3: VOLUME RANKINGS (Legacy) ---
     with tab_vol:
         st.caption("ℹ️ Legacy Methodology: Score = (Calls + Puts Sold) - (Puts Bought).")
-        st.caption("ℹ️ Note: These tables differ from Bulltard's because his rankings include expired trades.")
         
-        counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
-        
-        for col in target_types:
-            if col not in counts.columns: counts[col] = 0
-            
-        scores_df = pd.DataFrame(index=counts.index)
-        scores_df["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
-        scores_df["Trade Count"] = counts.sum(axis=1)
-        
-        last_trade_series = f_filtered.groupby("Symbol")["Trade Date"].max()
-        scores_df["Last Trade"] = last_trade_series.dt.strftime("%d %b %y")
-        
-        res = scores_df.reset_index()
-        if "batch_caps" in locals():
-            res["Market Cap"] = res["Symbol"].map(batch_caps)
-        else:
-            unique_ts = res["Symbol"].unique().tolist()
-            res["Market Cap"] = res["Symbol"].map(fetch_market_caps_batch(unique_ts))
-            
-        res = res[res["Market Cap"] >= mc_thresh]
+        # Calculate Volume Rankings via Utils
+        bull_df, bear_df = ud.calculate_volume_rankings(f_filtered, mc_thresh, filter_ema, limit)
         
         rank_col_config = {
             "Symbol": st.column_config.TextColumn("Symbol", width=60),
@@ -254,46 +198,17 @@ def run_rankings_app(df):
             "Last Trade": st.column_config.TextColumn("Last Trade", width=90),
             "Score": st.column_config.NumberColumn("Score", width=50),
         }
-        
-        pre_bull_df = res.sort_values(by=["Score", "Trade Count"], ascending=[False, False])
-        pre_bear_df = res.sort_values(by=["Score", "Trade Count"], ascending=[True, False])
-        
-        def get_filtered_list(source_df, mode="Bull"):
-            if not filter_ema:
-                return source_df.head(limit)
-            
-            candidates = source_df.head(limit * 3) 
-            final_list = []
-            
-            needed_tickers = candidates["Symbol"].tolist()
-            mini_batch = fetch_technicals_batch(needed_tickers)
-            
-            for _, r in candidates.iterrows():
-                try:
-                    s, e8, _, _, _ = mini_batch.get(r["Symbol"], (None,None,None,None,None))
-                    if s and e8:
-                        if mode == "Bull" and s > e8: final_list.append(r)
-                        elif mode == "Bear" and s < e8: final_list.append(r)
-                except: pass
-                
-                if len(final_list) >= limit: break
-            
-            return pd.DataFrame(final_list)
-
-        bull_df = get_filtered_list(pre_bull_df, "Bull")
-        bear_df = get_filtered_list(pre_bear_df, "Bear")
-        
         cols_final = ["Symbol", "Trade Count", "Last Trade", "Score"]
         
         v1, v2 = st.columns(2)
         with v1:
             st.markdown("<div style='color: #71d28a; font-weight:bold;'>Bullish Volume</div>", unsafe_allow_html=True)
             if not bull_df.empty:
-                st.dataframe(bull_df[cols_final], use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bull_df, max_rows=100))
+                st.dataframe(bull_df[cols_final], use_container_width=True, hide_index=True, column_config=rank_col_config, height=ud.get_table_height(bull_df, max_rows=100))
         with v2:
             st.markdown("<div style='color: #f29ca0; font-weight:bold;'>Bearish Volume</div>", unsafe_allow_html=True)
             if not bear_df.empty:
-                st.dataframe(bear_df[cols_final], use_container_width=True, hide_index=True, column_config=rank_col_config, height=get_table_height(bear_df, max_rows=100))
+                st.dataframe(bear_df[cols_final], use_container_width=True, hide_index=True, column_config=rank_col_config, height=ud.get_table_height(bear_df, max_rows=100))
         st.markdown("<br><br>", unsafe_allow_html=True)
 
 def run_pivot_tables_app(df):
@@ -2414,4 +2329,5 @@ def run_ema_distance_app(df_global):
     # Combined Chart
     final_chart = (bars + rule).properties(height=300).interactive()
     st.altair_chart(final_chart, use_container_width=True)
+
 
