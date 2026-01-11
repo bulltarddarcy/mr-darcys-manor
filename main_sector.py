@@ -752,6 +752,25 @@ def run_sector_rotation_app(df_global=None):
     unique_50ma = sorted(df_stocks['50 MA'].unique().tolist())
     unique_200ma = sorted(df_stocks['200 MA'].unique().tolist())
     
+    # Clear button (must be before widgets are created)
+    if st.button("🗑️ Clear All Filters", key="clear_all_filters_btn", type="secondary"):
+        st.session_state.clear_filters_flag = True
+        st.rerun()
+    
+    # Handle clearing by resetting defaults flag
+    if st.session_state.get('clear_filters_flag', False):
+        st.session_state.clear_filters_flag = False
+        if 'default_filters_set' in st.session_state:
+            del st.session_state['default_filters_set']
+        # Delete all filter widget states
+        for i in range(6):
+            for key_suffix in ['column', 'operator', 'operator_cat', 'type', 'value', 'value_column', 
+                               'value_theme', 'value_category', 'value_div', 'value_8ema', 
+                               'value_21ema', 'value_50ma', 'value_200ma', 'logic']:
+                key = f"filter_{i}_{key_suffix}"
+                if key in st.session_state:
+                    del st.session_state[key]
+    
     # Initialize default filters on first load
     if 'default_filters_set' not in st.session_state:
         st.session_state.default_filters_set = True
@@ -1004,16 +1023,6 @@ def run_sector_rotation_app(df_global=None):
                 'value_categorical': value_categorical,
                 'logic': logic
             })
-    
-    # Clear filters button
-    if st.button("🗑️ Clear All Filters", key="clear_all_filters_btn", type="secondary"):
-        # Dirty trick: just set all filter columns to None to force reset
-        for i in range(6):
-            st.session_state[f"filter_{i}_column"] = None
-        # Also reset defaults flag so they reload
-        if 'default_filters_set' in st.session_state:
-            st.session_state.default_filters_set = False
-        st.rerun()
     
     # Apply filters automatically
     df_filtered = df_stocks.copy()
