@@ -738,15 +738,19 @@ def run_sector_rotation_app(df_global=None):
     st.caption("Build up to 5 filters. Filters apply automatically as you change them.")
     
     # Filterable columns (numeric and categorical)
-    numeric_columns = ["Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
-    # Added "Div" to categorical columns
-    categorical_columns = ["Theme", "Theme Category", "Div"]
+    numeric_columns = ["Price", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
+    # Added "Div" and MA signals to categorical columns
+    categorical_columns = ["Theme", "Theme Category", "Div", "8 EMA", "21 EMA", "50 MA", "200 MA"]
     all_filter_columns = numeric_columns + categorical_columns
     
     # Get unique values for categorical columns
     unique_themes = sorted(df_stocks['Theme'].unique().tolist())
     unique_categories = sorted(df_stocks['Theme Category'].unique().tolist())
     unique_divs = sorted(df_stocks['Div'].astype(str).unique().tolist())
+    unique_8ema = sorted(df_stocks['8 EMA'].unique().tolist())
+    unique_21ema = sorted(df_stocks['21 EMA'].unique().tolist())
+    unique_50ma = sorted(df_stocks['50 MA'].unique().tolist())
+    unique_200ma = sorted(df_stocks['200 MA'].unique().tolist())
     
     # Initialize default filters on first load
     if 'default_filters_set' not in st.session_state:
@@ -905,6 +909,54 @@ def run_sector_rotation_app(df_global=None):
                         key=f"filter_{i}_value_div",
                         label_visibility="collapsed"
                     )
+                elif column == "8 EMA":
+                    if default_value_cat in unique_8ema:
+                        cat_index = unique_8ema.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    value_categorical = st.selectbox(
+                        "Select 8 EMA",
+                        unique_8ema,
+                        index=cat_index,
+                        key=f"filter_{i}_value_8ema",
+                        label_visibility="collapsed"
+                    )
+                elif column == "21 EMA":
+                    if default_value_cat in unique_21ema:
+                        cat_index = unique_21ema.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    value_categorical = st.selectbox(
+                        "Select 21 EMA",
+                        unique_21ema,
+                        index=cat_index,
+                        key=f"filter_{i}_value_21ema",
+                        label_visibility="collapsed"
+                    )
+                elif column == "50 MA":
+                    if default_value_cat in unique_50ma:
+                        cat_index = unique_50ma.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    value_categorical = st.selectbox(
+                        "Select 50 MA",
+                        unique_50ma,
+                        index=cat_index,
+                        key=f"filter_{i}_value_50ma",
+                        label_visibility="collapsed"
+                    )
+                elif column == "200 MA":
+                    if default_value_cat in unique_200ma:
+                        cat_index = unique_200ma.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    value_categorical = st.selectbox(
+                        "Select 200 MA",
+                        unique_200ma,
+                        index=cat_index,
+                        key=f"filter_{i}_value_200ma",
+                        label_visibility="collapsed"
+                    )
                 else:
                     value_categorical = None
                 
@@ -967,6 +1019,10 @@ def run_sector_rotation_app(df_global=None):
                 f"filter_{i}_value_theme",
                 f"filter_{i}_value_category",
                 f"filter_{i}_value_div",
+                f"filter_{i}_value_8ema",
+                f"filter_{i}_value_21ema",
+                f"filter_{i}_value_50ma",
+                f"filter_{i}_value_200ma",
                 f"filter_{i}_logic"
             ])
         
@@ -974,8 +1030,10 @@ def run_sector_rotation_app(df_global=None):
             if key in st.session_state:
                 del st.session_state[key]
         
-        # Reset to defaults
-        st.session_state.default_filters_set = False
+        # Also clear the filters_set flag
+        if 'default_filters_set' in st.session_state:
+            del st.session_state['default_filters_set']
+        
         st.rerun()
     
     # Apply filters automatically
