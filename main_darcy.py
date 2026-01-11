@@ -1272,13 +1272,18 @@ def run_rsi_scanner_app(df_global):
                     df[date_col] = pd.to_datetime(df[date_col])
                     df = df.sort_values(by=date_col).reset_index(drop=True)
                     
-                    # Calc RSI if missing
+                    # Calc RSI if missing (UPDATED to check for RSI14)
                     if 'RSI' not in df.columns:
-                        delta = df[close_col].diff()
-                        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-                        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-                        rs = gain / loss
-                        df['RSI'] = 100 - (100 / (1 + rs))
+                        if 'RSI14' in df.columns:
+                            # Use existing data if available
+                            df['RSI'] = df['RSI14']
+                        else:
+                            # Calculate from scratch only if absolutely necessary
+                            delta = df[close_col].diff()
+                            gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+                            loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+                            rs = gain / loss
+                            df['RSI'] = 100 - (100 / (1 + rs))
 
                     # Calc MAs for Filters
                     df['SMA50'] = df[close_col].rolling(50).mean()
@@ -2409,3 +2414,4 @@ def run_ema_distance_app(df_global):
     # Combined Chart
     final_chart = (bars + rule).properties(height=300).interactive()
     st.altair_chart(final_chart, use_container_width=True)
+
