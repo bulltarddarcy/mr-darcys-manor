@@ -436,8 +436,18 @@ def run_sector_rotation_app(df_global=None):
         
         data = []
         for theme_info in categories['gaining_mom_outperforming']:
+            # Highlight fresh entries (Day 1-2)
+            days = theme_info['days_in_category']
+            if days == 1:
+                days_display = "🆕 Day 1"
+            elif days == 2:
+                days_display = "⭐ Day 2"
+            else:
+                days_display = f"Day {days}"
+            
             data.append({
                 "Sector": theme_info['theme'],
+                "Days": days_display,
                 "Category": theme_info['arrow'] + " " + theme_info['category'],
                 "5d": theme_info['quadrant_5d'],
                 "10d": theme_info['quadrant_10d'],
@@ -445,12 +455,20 @@ def run_sector_rotation_app(df_global=None):
                 "Why Selected": theme_info['reason']
             })
         
+        # Sort by days (fresh first)
+        df_display = pd.DataFrame(data)
+        df_display['_days_sort'] = df_display['Days'].str.extract(r'(\d+)').astype(int)
+        df_display = df_display.sort_values('_days_sort').drop('_days_sort', axis=1)
+        
         st.dataframe(
-            pd.DataFrame(data),
+            df_display,
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            column_config={
+                "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
+            }
         )
-        st.caption("✅ **Best Opportunities** - Sectors accelerating with momentum building")
+        st.caption("✅ **Best Opportunities** - Sectors accelerating with momentum building. 🆕 Day 1 = Fresh entry!")
     else:
         st.info("⬈ **GAINING MOMENTUM & OUTPERFORMING** - No sectors currently in this category")
     
@@ -460,8 +478,17 @@ def run_sector_rotation_app(df_global=None):
         
         data = []
         for theme_info in categories['gaining_mom_underperforming']:
+            days = theme_info['days_in_category']
+            if days == 1:
+                days_display = "🆕 Day 1"
+            elif days == 2:
+                days_display = "⭐ Day 2"
+            else:
+                days_display = f"Day {days}"
+            
             data.append({
                 "Sector": theme_info['theme'],
+                "Days": days_display,
                 "Category": theme_info['arrow'] + " " + theme_info['category'],
                 "5d": theme_info['quadrant_5d'],
                 "10d": theme_info['quadrant_10d'],
@@ -469,12 +496,19 @@ def run_sector_rotation_app(df_global=None):
                 "Why Selected": theme_info['reason']
             })
         
+        df_display = pd.DataFrame(data)
+        df_display['_days_sort'] = df_display['Days'].str.extract(r'(\d+)').astype(int)
+        df_display = df_display.sort_values('_days_sort').drop('_days_sort', axis=1)
+        
         st.dataframe(
-            pd.DataFrame(data),
+            df_display,
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            column_config={
+                "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
+            }
         )
-        st.caption("🔄 **Potential Reversals** - Sectors bottoming, watch for breakout")
+        st.caption("🔄 **Potential Reversals** - Sectors bottoming, watch for breakout. 🆕 Day 1 = Fresh reversal!")
     else:
         st.info("⬉ **GAINING MOMENTUM & UNDERPERFORMING** - No sectors currently in this category")
     
@@ -484,8 +518,17 @@ def run_sector_rotation_app(df_global=None):
         
         data = []
         for theme_info in categories['losing_mom_outperforming']:
+            days = theme_info['days_in_category']
+            if days == 1:
+                days_display = "🆕 Day 1"
+            elif days == 2:
+                days_display = "⭐ Day 2"
+            else:
+                days_display = f"Day {days}"
+            
             data.append({
                 "Sector": theme_info['theme'],
+                "Days": days_display,
                 "Category": theme_info['arrow'] + " " + theme_info['category'],
                 "5d": theme_info['quadrant_5d'],
                 "10d": theme_info['quadrant_10d'],
@@ -493,12 +536,19 @@ def run_sector_rotation_app(df_global=None):
                 "Why Selected": theme_info['reason']
             })
         
+        df_display = pd.DataFrame(data)
+        df_display['_days_sort'] = df_display['Days'].str.extract(r'(\d+)').astype(int)
+        df_display = df_display.sort_values('_days_sort').drop('_days_sort', axis=1)
+        
         st.dataframe(
-            pd.DataFrame(data),
+            df_display,
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            column_config={
+                "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
+            }
         )
-        st.caption("⚠️ **Topping** - Take profits, avoid new entries")
+        st.caption("⚠️ **Topping** - Take profits, avoid new entries. 🆕 Day 1 = Just started losing steam")
     else:
         st.info("⬊ **LOSING MOMENTUM & OUTPERFORMING** - No sectors currently in this category")
     
@@ -508,8 +558,17 @@ def run_sector_rotation_app(df_global=None):
         
         data = []
         for theme_info in categories['losing_mom_underperforming']:
+            days = theme_info['days_in_category']
+            if days == 1:
+                days_display = "🆕 Day 1"
+            elif days == 2:
+                days_display = "⭐ Day 2"
+            else:
+                days_display = f"Day {days}"
+            
             data.append({
                 "Sector": theme_info['theme'],
+                "Days": days_display,
                 "Category": theme_info['arrow'] + " " + theme_info['category'],
                 "5d": theme_info['quadrant_5d'],
                 "10d": theme_info['quadrant_10d'],
@@ -517,10 +576,17 @@ def run_sector_rotation_app(df_global=None):
                 "Why Selected": theme_info['reason']
             })
         
+        df_display = pd.DataFrame(data)
+        df_display['_days_sort'] = df_display['Days'].str.extract(r'(\d+)').astype(int)
+        df_display = df_display.sort_values('_days_sort').drop('_days_sort', axis=1)
+        
         st.dataframe(
-            pd.DataFrame(data),
+            df_display,
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            column_config={
+                "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
+            }
         )
         st.caption("❌ **Avoid** - Sectors declining on both metrics")
     else:
