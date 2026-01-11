@@ -1629,59 +1629,78 @@ def inject_volume_data(results_input, data_df):
     Looks up Volume for P1 and Signal dates and adds to results list.
     Safely handles List, DataFrame, or Numpy Array inputs.
     """
-    # 1. Robust Input Handling (Fixes 'Ambiguous truth value' error)
+    
+    # --- DEBUGGING START ---
+    import streamlit as st
+    import pandas as pd
+    import numpy as np
+
+    st.write("--- DEBUG: inject_volume_data called ---")
+    st.write(f"Type of results_input: {type(results_input)}")
+    
+    # Check properties safely without triggering the boolean error
+    if hasattr(results_input, 'shape'):
+        st.write(f"Shape: {results_input.shape}")
+    elif hasattr(results_input, '__len__'):
+        st.write(f"Length: {len(results_input)}")
+    else:
+        st.write("Object has no length/shape")
+    # --- DEBUGGING END ---
+
+    # 1. CRITICAL FIX: Explicit check for None (Identity check)
+    # The error usually happens here if you use "if not results_input:" on a DataFrame
     if results_input is None: 
         return []
-    
-    results_list = []
+
+    # 2. Handle DataFrame input (which causes the ambiguous error)
+    # If the previous function accidentally passed a DataFrame, we convert it to a list of dicts here
     if isinstance(results_input, pd.DataFrame):
-        if results_input.empty: return []
-        results_list = results_input.to_dict('records')
-    elif isinstance(results_input, list):
-        if not results_input: return []
-        results_list = results_input
-    elif hasattr(results_input, '__len__'): # Numpy arrays / other iterables
-        if len(results_input) == 0: return []
-        # Try converting to list, fallback to empty if fails
-        try: results_list = list(results_input)
-        except: return []
-    else:
+        st.warning("⚠️ Debug: Converted DataFrame input to list of dicts to prevent crash.")
+        if results_input.empty:
+            return []
+        results_input = results_input.to_dict('records')
+
+    # 3. Handle Empty List
+    if len(results_input) == 0:
         return []
 
-    if data_df is None or data_df.empty:
-        return results_list
+    # 4. Prepare Lookup DataFrame
+    # Ensure data_df is indexed by date for fast lookup
+    df_lookup = data_df.copy()
+    if 'Date' in df_lookup.columns:
+        df_lookup['Date'] = pd.to_datetime(df_lookup['Date'])
+        df_lookup = df_lookup.set_index('Date')
     
-    # 2. Identify Volume Column
-    vol_col = next((c for c in data_df.columns if c.strip().upper() == 'VOLUME'), None)
-    if not vol_col: return results_list
-
-    # 3. Identify Date Index/Column for Lookup
-    lookup = {}
-    try:
-        temp_df = data_df.copy()
-        # Look for 'DATE' (case insensitive match)
-        date_col = next((c for c in temp_df.columns if 'DATE' in c.upper()), None)
+    # 5. Injection Logic
+    final_results = []
+    
+    for row in results_input:
+        # Copy row to avoid modifying original references
+        new_row = row.copy()
         
-        if date_col:
-            temp_df[date_col] = pd.to_datetime(temp_df[date_col])
-            temp_df['__date_str'] = temp_df[date_col].dt.strftime('%Y-%m-%d')
-            lookup = dict(zip(temp_df['__date_str'], temp_df[vol_col]))
-        elif isinstance(temp_df.index, pd.DatetimeIndex):
-            temp_df['__date_str'] = temp_df.index.strftime('%Y-%m-%d')
-            lookup = dict(zip(temp_df['__date_str'], temp_df[vol_col]))
-    except:
-        return results_list
-    
-    # 4. Inject
-    for row in results_list:
-        # Ensure row is a dictionary (in case list of objects was passed)
-        if isinstance(row, dict):
-            d1 = row.get('P1_Date_ISO')
-            d2 = row.get('Signal_Date_ISO')
-            row['Vol1'] = lookup.get(d1, np.nan)
-            row['Vol2'] = lookup.get(d2, np.nan)
-    
-    return results_list
+        p1_date = new_row.get('P1_Date')
+        sig_date = new_row.get('Signal_Date')
+        
+        # Init volume as NaN (safer than 0 for stats)
+        new_row['P1_Vol'] = np.nan
+        new_row['Signal_Vol'] = np.nan
+
+        # Lookup P1 Volume
+        # We use pd.Timestamp to ensure format matches the index
+        if p1_date:
+            ts_p1 = pd.Timestamp(p1_date)
+            if ts_p1 in df_lookup.index:
+                new_row['P1_Vol'] = df_lookup.loc[ts_p1, 'Volume']
+        
+        # Lookup Signal Volume
+        if sig_date:
+            ts_sig = pd.Timestamp(sig_date)
+            if ts_sig in df_lookup.index:
+                new_row['Signal_Vol'] = df_lookup.loc[ts_sig, 'Volume']
+            
+        final_results.append(new_row)
+
+    return final_results
 
 def process_divergence_export_columns(df_in):
     """
