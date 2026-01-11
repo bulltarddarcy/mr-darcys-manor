@@ -901,6 +901,25 @@ def run_sector_rotation_app(df_global=None):
     
     # Clear filters button
     if st.button("🗑️ Clear All Filters"):
+        # Clear all filter widget states
+        keys_to_clear = []
+        for i in range(5):
+            keys_to_clear.extend([
+                f"filter_{i}_column",
+                f"filter_{i}_operator",
+                f"filter_{i}_operator_cat",
+                f"filter_{i}_type",
+                f"filter_{i}_value",
+                f"filter_{i}_value_column",
+                f"filter_{i}_value_theme",
+                f"filter_{i}_value_category",
+                f"filter_{i}_logic"
+            ])
+        
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        
         # Reset to defaults
         st.session_state.default_filters_set = False
         st.rerun()
