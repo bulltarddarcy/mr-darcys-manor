@@ -1165,10 +1165,10 @@ def get_momentum_performance_categories(
     Categorize themes by momentum and performance direction.
     
     Categories based on 10-day trend direction:
-    1. Gaining Momentum & Gaining Performance (⬈) - Best
-    2. Gaining Momentum & Losing Performance (⬉) - Bottoming
-    3. Losing Momentum & Gaining Performance (⬊) - Topping
-    4. Losing Momentum & Losing Performance (⬋) - Worst
+    1. Gaining Momentum & Outperforming (⬈) - Best
+    2. Gaining Momentum & Underperforming (⬉) - Bottoming
+    3. Losing Momentum & Outperforming (⬊) - Topping
+    4. Losing Momentum & Underperforming (⬋) - Worst
     
     Uses 5-day as confirmation indicator.
     
@@ -1180,10 +1180,10 @@ def get_momentum_performance_categories(
         Dict with themes grouped by direction category
     """
     categories = {
-        'gaining_both': [],           # ⬈ Best
-        'gaining_mom_losing_perf': [], # ⬉ Bottoming
-        'losing_mom_gaining_perf': [], # ⬊ Topping
-        'losing_both': []             # ⬋ Worst
+        'gaining_mom_outperforming': [],    # ⬈ Best
+        'gaining_mom_underperforming': [],  # ⬉ Bottoming
+        'losing_mom_outperforming': [],     # ⬊ Topping
+        'losing_mom_underperforming': []    # ⬋ Worst
     }
     
     for theme, ticker in theme_map.items():
@@ -1217,11 +1217,11 @@ def get_momentum_performance_categories(
             
             # Determine direction
             if today_ratio > avg_ratio_old:
-                performance_direction = "Gaining Performance"
-                perf_dir_short = "gaining_perf"
+                performance_direction = "Outperforming"
+                perf_dir_short = "outperforming"
             else:
-                performance_direction = "Losing Performance"
-                perf_dir_short = "losing_perf"
+                performance_direction = "Underperforming"
+                perf_dir_short = "underperforming"
             
             if today_momentum > avg_momentum_old:
                 momentum_direction = "Gaining Momentum"
@@ -1257,17 +1257,17 @@ def get_momentum_performance_categories(
             category_label = f"{momentum_direction} & {performance_direction}"
             
             # Determine which bucket
-            if mom_dir_short == "gaining_mom" and perf_dir_short == "gaining_perf":
-                bucket = 'gaining_both'
+            if mom_dir_short == "gaining_mom" and perf_dir_short == "outperforming":
+                bucket = 'gaining_mom_outperforming'
                 arrow = "⬈"
-            elif mom_dir_short == "gaining_mom" and perf_dir_short == "losing_perf":
-                bucket = 'gaining_mom_losing_perf'
+            elif mom_dir_short == "gaining_mom" and perf_dir_short == "underperforming":
+                bucket = 'gaining_mom_underperforming'
                 arrow = "⬉"
-            elif mom_dir_short == "losing_mom" and perf_dir_short == "gaining_perf":
-                bucket = 'losing_mom_gaining_perf'
+            elif mom_dir_short == "losing_mom" and perf_dir_short == "outperforming":
+                bucket = 'losing_mom_outperforming'
                 arrow = "⬊"
             else:  # losing both
-                bucket = 'losing_both'
+                bucket = 'losing_mom_underperforming'
                 arrow = "⬋"
             
             # Build reason
