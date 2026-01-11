@@ -562,18 +562,22 @@ def run_sector_rotation_app(df_global=None):
     # --- 9. STOCK ANALYSIS WITH SCORING HELP ---
     st.subheader(f"📊 Stock Analysis")
     
-    # Theme selector with "All" option
+    # Theme selector with "All" option (unique key)
     all_themes = ["All"] + sorted(theme_map.keys())
+    
+    # Initialize sector_target if not exists
+    if 'sector_target' not in st.session_state:
+        st.session_state.sector_target = "All"
+    
     selected_theme = st.selectbox(
         "Select Theme",
         all_themes,
-        index=0 if st.session_state.sector_target == "All" else all_themes.index(st.session_state.sector_target),
-        key="theme_selector"
+        index=all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0,
+        key="stock_theme_selector_unique"
     )
     
     # Update session state
-    if selected_theme != st.session_state.sector_target:
-        st.session_state.sector_target = selected_theme
+    st.session_state.sector_target = selected_theme
     
     # Get lifecycle categories for theme categorization
     categories = us.get_actionable_theme_summary(etf_data_cache, theme_map)
@@ -591,33 +595,28 @@ def run_sector_rotation_app(df_global=None):
     
     # Filter stocks for selected theme(s)
     if selected_theme == "All":
-        stock_tickers = uni_df[uni_df['Role'] == 'Stock']['Ticker'].tolist()
-        themes_to_process = theme_map.keys()
+        # Get all stocks and their themes
+        stock_theme_pairs = []
+        for _, row in uni_df[uni_df['Role'] == 'Stock'].iterrows():
+            stock_theme_pairs.append((row['Ticker'], row['Theme']))
     else:
-        stock_tickers = uni_df[
-            (uni_df['Theme'] == selected_theme) & 
-            (uni_df['Role'] == 'Stock')
-        ]['Ticker'].tolist()
-        themes_to_process = [selected_theme]
+        # Get stocks for selected theme
+        stock_theme_pairs = []
+        for _, row in uni_df[(uni_df['Theme'] == selected_theme) & (uni_df['Role'] == 'Stock')].iterrows():
+            stock_theme_pairs.append((row['Ticker'], row['Theme']))
     
-    if not stock_tickers:
+    if not stock_theme_pairs:
         st.info(f"No stocks found")
         return
     
-    # Build data for all stocks
+    # Build data for all stock-theme combinations
     stock_data = []
     
-    with st.spinner(f"Loading {len(stock_tickers)} stocks..."):
-        for stock in stock_tickers:
+    with st.spinner(f"Loading {len(stock_theme_pairs)} stock-theme combinations..."):
+        for stock, stock_theme in stock_theme_pairs:
             sdf = etf_data_cache.get(stock)
             
             if sdf is None or sdf.empty or len(sdf) < 20:
-                continue
-            
-            # Get stock's theme from universe
-            stock_theme = uni_df[uni_df['Ticker'] == stock]['Theme'].iloc[0] if stock in uni_df['Ticker'].values else None
-            
-            if stock_theme is None:
                 continue
             
             try:
@@ -655,7 +654,6 @@ def run_sector_rotation_app(df_global=None):
                 })
                 
             except Exception as e:
-                st.error(f"Error processing {stock}: {e}")
                 continue
 
     if not stock_data:
