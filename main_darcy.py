@@ -520,15 +520,17 @@ def run_price_divergences_app(df_global):
                     with c_d1: days_since = st.number_input("Days Since Signal", min_value=1, value=st.session_state.saved_rsi_div_days_since, step=1, key="rsi_div_days_since", on_change=save_rsi_state, args=("rsi_div_days_since", "saved_rsi_div_days_since"))
                     with c_d2: div_diff = st.number_input("Min RSI Delta", min_value=0.5, value=st.session_state.saved_rsi_div_diff, step=0.5, key="rsi_div_diff", on_change=save_rsi_state, args=("rsi_div_diff", "saved_rsi_div_diff"))
                     with c_d3: div_lookback = st.number_input("Max Candle Between Pivots", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
+                    
+                    # USE CONSTANTS FOR OPTIONS
                     with c_d4:
                          curr_strict = st.session_state.saved_rsi_div_strict
-                         idx_strict = ["Yes", "No"].index(curr_strict) if curr_strict in ["Yes", "No"] else 0
-                         strict_div_str = st.selectbox("Strict 50-Cross Invalidation", ["Yes", "No"], index=idx_strict, key="rsi_div_strict", on_change=save_rsi_state, args=("rsi_div_strict", "saved_rsi_div_strict"))
+                         idx_strict = ud.DIV_STRICT_OPTS.index(curr_strict) if curr_strict in ud.DIV_STRICT_OPTS else 0
+                         strict_div_str = st.selectbox("Strict 50-Cross Invalidation", ud.DIV_STRICT_OPTS, index=idx_strict, key="rsi_div_strict", on_change=save_rsi_state, args=("rsi_div_strict", "saved_rsi_div_strict"))
                          strict_div = (strict_div_str == "Yes")
                     with c_d5:
                          curr_source = st.session_state.saved_rsi_div_source
-                         idx_source = ["High/Low", "Close"].index(curr_source) if curr_source in ["High/Low", "Close"] else 0
-                         div_source = st.selectbox("Candle Price Methodology", ["High/Low", "Close"], index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
+                         idx_source = ud.DIV_SOURCE_OPTS.index(curr_source) if curr_source in ud.DIV_SOURCE_OPTS else 0
+                         div_source = st.selectbox("Candle Price Methodology", ud.DIV_SOURCE_OPTS, index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
                     
                     raw_results_div = []
                     progress_bar = st.progress(0, text="Scanning Divergences...")
@@ -543,7 +545,6 @@ def run_price_divergences_app(df_global):
                         if d_d is not None:
                             daily_divs = ud.find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=ud.DIV_CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            # Inject RSI Percentiles
                             if daily_divs and 'RSI' in d_d.columns:
                                 all_rsi = d_d['RSI'].dropna().values
                                 if len(all_rsi) > 0:
@@ -560,7 +561,6 @@ def run_price_divergences_app(df_global):
                         if d_w is not None: 
                             weekly_divs = ud.find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=ud.DIV_CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
                             
-                            # Inject RSI Percentiles
                             if weekly_divs and 'RSI' in d_w.columns:
                                 all_rsi_w = d_w['RSI'].dropna().values
                                 if len(all_rsi_w) > 0:
@@ -596,7 +596,6 @@ def run_price_divergences_app(df_global):
                                     st.subheader(f"{emoji} {tf} {s_type} Signals")
                                     tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
                                     price_header = "Close Price Δ" if div_source == 'Close' else ("Low Price Δ" if s_type == 'Bullish' else "High Price Δ")
-                                    
                                     pct_col_title = "RSI Low %ile" if s_type == 'Bullish' else "RSI High %ile"
 
                                     if not tbl_df.empty:
@@ -652,13 +651,15 @@ def run_price_divergences_app(df_global):
             h_lookback = st.number_input("Max Days Btwn Pivots", min_value=30, value=90, step=5, key="rsi_hist_lookback")
         with c_h3: 
             h_diff = st.number_input("Min RSI Delta", min_value=0.5, value=2.0, step=0.5, key="rsi_hist_diff")
+        
+        # USE CONSTANTS FOR OPTIONS
         with c_h4:
-            h_strict_str = st.selectbox("50-Cross Inval", ["Yes", "No"], index=0, key="rsi_hist_strict")
+            h_strict_str = st.selectbox("50-Cross Inval", ud.DIV_STRICT_OPTS, index=0, key="rsi_hist_strict")
             h_strict = (h_strict_str == "Yes")
 
         c_h5, c_h6, c_h7 = st.columns(3)
         with c_h5: 
-            h_source = st.selectbox("Candle Price Method", ["High/Low", "Close"], index=0, key="rsi_hist_source")
+            h_source = st.selectbox("Candle Price Method", ud.DIV_SOURCE_OPTS, index=0, key="rsi_hist_source")
         with c_h6: 
             h_per_days = st.text_input("Periods (Days)", value="5, 21, 63, 126, 252", key="rsi_hist_p_days")
         with c_h7: 

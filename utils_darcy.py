@@ -1500,8 +1500,8 @@ def initialize_divergence_state():
     # Active Tab Defaults
     defaults = {
         'saved_rsi_div_lookback': DIV_LOOKBACK_DEFAULT,
-        'saved_rsi_div_source': DIV_SOURCE_DEFAULT,  # Used Constant
-        'saved_rsi_div_strict': DIV_STRICT_DEFAULT,  # Used Constant
+        'saved_rsi_div_source': DIV_SOURCE_DEFAULT,
+        'saved_rsi_div_strict': DIV_STRICT_DEFAULT,
         'saved_rsi_div_days_since': DIV_DAYS_SINCE_DEFAULT,
         'saved_rsi_div_diff': DIV_RSI_DIFF_DEFAULT
     }
@@ -1520,22 +1520,42 @@ def initialize_divergence_state():
         if key not in st.session_state:
             st.session_state[key] = val
 
-def inject_volume_data(results_list, data_df):
+def inject_volume_data(results_input, data_df):
     """
     Looks up Volume for P1 and Signal dates and adds to results list.
-    Specific to Divergence app export logic.
+    Safely handles List, DataFrame, or Numpy Array inputs.
     """
-    if not results_list or data_df is None or data_df.empty:
+    # 1. Robust Input Handling (Fixes 'Ambiguous truth value' error)
+    if results_input is None: 
+        return []
+    
+    results_list = []
+    if isinstance(results_input, pd.DataFrame):
+        if results_input.empty: return []
+        results_list = results_input.to_dict('records')
+    elif isinstance(results_input, list):
+        if not results_input: return []
+        results_list = results_input
+    elif hasattr(results_input, '__len__'): # Numpy arrays / other iterables
+        if len(results_input) == 0: return []
+        # Try converting to list, fallback to empty if fails
+        try: results_list = list(results_input)
+        except: return []
+    else:
+        return []
+
+    if data_df is None or data_df.empty:
         return results_list
     
-    # 1. Identify Volume Column
+    # 2. Identify Volume Column
     vol_col = next((c for c in data_df.columns if c.strip().upper() == 'VOLUME'), None)
     if not vol_col: return results_list
 
-    # 2. Identify Date Index/Column for Lookup
+    # 3. Identify Date Index/Column for Lookup
     lookup = {}
     try:
         temp_df = data_df.copy()
+        # Look for 'DATE' (case insensitive match)
         date_col = next((c for c in temp_df.columns if 'DATE' in c.upper()), None)
         
         if date_col:
@@ -1548,12 +1568,14 @@ def inject_volume_data(results_list, data_df):
     except:
         return results_list
     
-    # 3. Inject
+    # 4. Inject
     for row in results_list:
-        d1 = row.get('P1_Date_ISO')
-        d2 = row.get('Signal_Date_ISO')
-        row['Vol1'] = lookup.get(d1, np.nan)
-        row['Vol2'] = lookup.get(d2, np.nan)
+        # Ensure row is a dictionary (in case list of objects was passed)
+        if isinstance(row, dict):
+            d1 = row.get('P1_Date_ISO')
+            d2 = row.get('Signal_Date_ISO')
+            row['Vol1'] = lookup.get(d1, np.nan)
+            row['Vol2'] = lookup.get(d2, np.nan)
     
     return results_list
 
