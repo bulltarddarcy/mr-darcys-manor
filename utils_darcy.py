@@ -35,6 +35,10 @@ RANK_SM_WEIGHTS = {'Sentiment': 0.35, 'Impact': 0.30, 'Momentum': 0.35}
 RANK_CONVICTION_DIVISOR = 25.0
 RANK_TOP_IDEAS_COUNT = 3
 
+# --- CONSTANTS: PIVOT APP ---
+PIVOT_LOOKBACK_DAYS = 7
+PIVOT_MIN_TRADES = 1
+
 # REFRESH TIME: 600 seconds = 10 minutes
 CACHE_TTL = 600 
 
@@ -1176,3 +1180,69 @@ def calculate_volume_rankings(f_filtered, mc_thresh, filter_ema, limit):
     bear_df = _apply_ema_limit(pre_bear_df, "Bear")
     
     return bull_df, bear_df
+
+# --- PIVOT APP HELPERS ---
+
+def initialize_pivot_state(start_default, max_date):
+    """Initializes session state for Pivot app."""
+    defaults = {
+        'saved_pivot_start': start_default,
+        'saved_pivot_end': max_date,
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+def generate_flow_pivot(df, start_date, end_date):
+    """
+    Aggregates trade flow by Ticker.
+    Returns a dataframe with Bullish $, Bearish $, and Net Flow.
+    """
+    if df.empty: return pd.DataFrame()
+
+    # 1. Date Filter
+    f = df.copy()
+    if start_date: f = f[f["Trade Date"].dt.date >= start_date]
+    if end_date: f = f[f["Trade Date"].dt.date <= end_date]
+    
+    if f.empty: return pd.DataFrame()
+
+    # 2. Categorize Flows
+    # Bullish = Calls Bought + Puts Sold
+    # Bearish = Puts Bought
+    # (Calls Sold are generally excluded or treated as neutral/bearish depending on strategy, 
+    # but strictly following the previous app logic, we focus on the big 3)
+    
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    
+    bull_mask = f[order_type_col].isin(["Calls Bought", "Puts Sold"])
+    bear_mask = f[order_type_col].isin(["Puts Bought"])
+    
+    # 3. Aggregate
+    # We use a pivot_table approach manually for speed and clarity
+    res = f.groupby("Symbol").agg(
+        Total_Trades=("Symbol", "count"),
+        Last_Trade=("Trade Date", "max")
+    )
+    
+    # Calculate Sums based on masks
+    res["Bullish_Flow"] = f[bull_mask].groupby("Symbol")["Dollars"].sum()
+    res["Bearish_Flow"] = f[bear_mask].groupby("Symbol")["Dollars"].sum()
+    
+    # Fill NaN with 0 (e.g., a stock might have only calls, no puts)
+    res.fillna(0, inplace=True)
+    
+    # 4. Calculated Columns
+    res["Net_Flow"] = res["Bullish_Flow"] - res["Bearish_Flow"]
+    res["Total_Volume"] = res["Bullish_Flow"] + res["Bearish_Flow"]
+    
+    # 5. Filter & Sort
+    # Filter out tiny noise if needed, currently just sorting by Total Volume
+    res = res[res["Total_Trades"] >= PIVOT_MIN_TRADES]
+    res = res.sort_values(by="Total_Volume", ascending=False)
+    
+    return res.reset_index()
+
+
+
+
