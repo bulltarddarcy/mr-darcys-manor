@@ -1006,6 +1006,34 @@ def get_database_styled_view(df):
         "Contracts": "{:,.0f}"
     }).map(_highlight_db_order_type, subset=[order_type_col])
 
+def filter_database_trades(df, ticker, start_date, end_date, exp_end, inc_cb, inc_ps, inc_pb):
+    """Filters the global dataframe based on UI inputs."""
+    if df.empty: return pd.DataFrame()
+
+    f = df.copy()
+    
+    # Date & Ticker Filters
+    if ticker: 
+        f = f[f["Symbol"].astype(str).str.upper().eq(ticker)]
+    if start_date: 
+        f = f[f["Trade Date"].dt.date >= start_date]
+    if end_date: 
+        f = f[f["Trade Date"].dt.date <= end_date]
+    if exp_end: 
+        f = f[f["Expiry_DT"].dt.date <= exp_end]
+    
+    # Order Type Logic
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    allowed_types = []
+    if inc_cb: allowed_types.append("Calls Bought")
+    if inc_ps: allowed_types.append("Puts Sold")
+    if inc_pb: allowed_types.append("Puts Bought")
+    
+    f = f[f[order_type_col].isin(allowed_types)]
+    
+    # Sort for display
+    return f.sort_values(by=["Trade Date", "Symbol"], ascending=[False, True])
+    
 # --- RANKINGS APP HELPERS ---
 
 def initialize_rankings_state(start_default, max_date):
@@ -1020,103 +1048,6 @@ def initialize_rankings_state(start_default, max_date):
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
-
-def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit):
-    """Calculates the weighted Smart Money score."""
-    f = df.copy()
-    if start_d: f = f[f["Trade Date"].dt.date >= start_d]
-    if end_d: f = f[f["Trade Date"].dt.date <= end_d]
-    if f.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
-    target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
-    f = f[f[order_type_col].isin(target_types)].copy()
-    if f.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-    f["Signed_Dollars"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), f["Dollars"], -f["Dollars"])
-    
-    smart_stats = f.groupby("Symbol").agg(
-        Signed_Dollars=("Signed_Dollars", "sum"),
-        Trade_Count=("Symbol", "count"),
-        Last_Trade=("Trade Date", "max")
-    ).reset_index()
-    
-    smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
-    unique_tickers = smart_stats["Symbol"].unique().tolist()
-    batch_caps = fetch_market_caps_batch(unique_tickers)
-    smart_stats["Market Cap"] = smart_stats["Symbol"].map(batch_caps)
-    
-    valid_data = smart_stats[smart_stats["Market Cap"] >= mc_thresh].copy()
-    
-    # Calculate Momentum Component
-    unique_dates = sorted(f["Trade Date"].unique())
-    recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
-    f_momentum = f[f["Trade Date"].isin(recent_dates)]
-    mom_stats = f_momentum.groupby("Symbol")["Signed_Dollars"].sum().reset_index().rename(columns={"Signed_Dollars": "Momentum ($)"})
-    
-    valid_data = valid_data.merge(mom_stats, on="Symbol", how="left").fillna(0)
-
-    if not valid_data.empty:
-        valid_data["Impact"] = valid_data["Net Sentiment ($)"] / valid_data["Market Cap"]
-        
-        def normalize(s):
-            mn, mx = s.min(), s.max()
-            return (s - mn) / (mx - mn) if mx != mn else 0
-
-        # Use Constants for Weights
-        w_sent = RANK_SM_WEIGHTS['Sentiment']
-        w_imp = RANK_SM_WEIGHTS['Impact']
-        w_mom = RANK_SM_WEIGHTS['Momentum']
-
-        valid_data["Base_Score_Bull"] = (w_sent * normalize(valid_data["Net Sentiment ($)"].clip(lower=0))) + \
-                                        (w_imp * normalize(valid_data["Impact"].clip(lower=0))) + \
-                                        (w_mom * normalize(valid_data["Momentum ($)"].clip(lower=0)))
-        
-        valid_data["Base_Score_Bear"] = (w_sent * normalize(-valid_data["Net Sentiment ($)"].clip(upper=0))) + \
-                                        (w_imp * normalize(-valid_data["Impact"].clip(upper=0))) + \
-                                        (w_mom * normalize(-valid_data["Momentum ($)"].clip(upper=0)))
-        
-        valid_data["Last Trade"] = valid_data["Last_Trade"].dt.strftime(DB_DATE_FMT[:6]) # e.g. "05 Jan"
-        
-        candidates_bull = valid_data.sort_values(by="Base_Score_Bull", ascending=False).head(limit * 3)
-        candidates_bear = valid_data.sort_values(by="Base_Score_Bear", ascending=False).head(limit * 3)
-        
-        # ... (EMA Filtering logic remains the same, omitted for brevity but should be kept) ...
-        # (Assuming you keep the inner `apply_ema_filter` function defined in the previous step)
-        
-        # Re-using the simplified return for now as the EMA logic is internal to this function
-        # For the update, ensure you keep the 'apply_ema_filter' helper inside or separate.
-        
-        # For brevity in this response, I assume apply_ema_filter is here.
-        all_tickers = set(candidates_bull["Symbol"]).union(set(candidates_bear["Symbol"]))
-        batch_techs = fetch_technicals_batch(list(all_tickers)) if filter_ema else {}
-        
-        def apply_ema_filter(df, mode="Bull"):
-            if not filter_ema:
-                df["Score"] = df[f"Base_Score_{mode}"] * 100
-                df["Trend"] = "—"
-                return df.head(limit)
-            
-            def check_row(t):
-                s, e8, _, _, _ = batch_techs.get(t, (None, None, None, None, None))
-                if not s or not e8: return False, "—"
-                if mode == "Bull": return (s > e8), ("✅ >EMA8" if s > e8 else "⚠️ <EMA8")
-                return (s < e8), ("✅ <EMA8" if s < e8 else "⚠️ >EMA8")
-            
-            results = [check_row(t) for t in df["Symbol"]]
-            mask = [r[0] for r in results]; trends = [r[1] for r in results]
-            
-            filtered = df[mask].copy()
-            filtered["Trend"] = [t for i, t in enumerate(trends) if mask[i]]
-            filtered["Score"] = filtered[f"Base_Score_{mode}"] * 100
-            return filtered.head(limit)
-
-        top_bulls = apply_ema_filter(candidates_bull, "Bull")
-        top_bears = apply_ema_filter(candidates_bear, "Bear")
-        
-        return top_bulls, top_bears, valid_data
-    
-    return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 def generate_top_ideas(top_bulls_df, global_df):
     """Analyzes top bullish candidates using updated constants."""
@@ -1160,3 +1091,88 @@ def generate_top_ideas(top_bulls_df, global_df):
     
     # Use Constant for Top N
     return sorted(candidates, key=lambda x: x['Score'], reverse=True)[:RANK_TOP_IDEAS_COUNT]
+
+def filter_rankings_data(df, start_date, end_date):
+    """Filters data for the rankings period and valid order types."""
+    if df.empty: return pd.DataFrame()
+    
+    f = df.copy()
+    if start_date: f = f[f["Trade Date"].dt.date >= start_date]
+    if end_date: f = f[f["Trade Date"].dt.date <= end_date]
+    
+    # Filter for valid directional trades only
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
+    f = f[f[order_type_col].isin(target_types)]
+    
+    return f
+
+def calculate_volume_rankings(f_filtered, mc_thresh, filter_ema, limit):
+    """
+    Calculates the 'Bulltard' style volume rankings.
+    Score = (Calls + Puts Sold) - (Puts Bought)
+    """
+    if f_filtered.empty: return pd.DataFrame(), pd.DataFrame()
+
+    order_type_col = "Order Type" if "Order Type" in f_filtered.columns else "Order type"
+    target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
+
+    # 1. Pivot Count
+    counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
+    for col in target_types:
+        if col not in counts.columns: counts[col] = 0
+        
+    # 2. Calculate Score
+    scores_df = pd.DataFrame(index=counts.index)
+    scores_df["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
+    scores_df["Trade Count"] = counts.sum(axis=1)
+    
+    # 3. Add Last Trade Date
+    last_trade_series = f_filtered.groupby("Symbol")["Trade Date"].max()
+    scores_df["Last Trade"] = last_trade_series.dt.strftime(DB_DATE_FMT)
+    
+    res = scores_df.reset_index()
+    
+    # 4. Map Market Caps
+    unique_ts = res["Symbol"].unique().tolist()
+    caps = fetch_market_caps_batch(unique_ts)
+    res["Market Cap"] = res["Symbol"].map(caps)
+    res = res[res["Market Cap"] >= mc_thresh]
+
+    # 5. Sort Lists
+    pre_bull_df = res.sort_values(by=["Score", "Trade Count"], ascending=[False, False])
+    pre_bear_df = res.sort_values(by=["Score", "Trade Count"], ascending=[True, False])
+
+    # 6. Apply EMA Filter (Helper)
+    def _apply_ema_limit(source_df, mode="Bull"):
+        if not filter_ema:
+            return source_df.head(limit)
+        
+        # Fetch extra candidates to account for filtering attrition
+        candidates = source_df.head(limit * 3)
+        final_list = []
+        needed_tickers = candidates["Symbol"].tolist()
+        
+        # Small batch fetch for just these candidates
+        mini_batch = fetch_technicals_batch(needed_tickers)
+        
+        for _, r in candidates.iterrows():
+            try:
+                # Tuple: (spot, ema8, ema21, sma200, history)
+                t_data = mini_batch.get(r["Symbol"], (None, None, None, None, None))
+                spot, ema8 = t_data[0], t_data[1]
+                
+                if spot and ema8:
+                    if mode == "Bull" and spot > ema8: final_list.append(r)
+                    elif mode == "Bear" and spot < ema8: final_list.append(r)
+            except: 
+                pass
+            
+            if len(final_list) >= limit: break
+        
+        return pd.DataFrame(final_list)
+
+    bull_df = _apply_ema_limit(pre_bull_df, "Bull")
+    bear_df = _apply_ema_limit(pre_bear_df, "Bear")
+    
+    return bull_df, bear_df
