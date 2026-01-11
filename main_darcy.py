@@ -25,13 +25,6 @@ from utils_darcy import (
 
 # --- 1. GLOBAL DATA LOADING & UTILITIES ---
 
-COLUMN_CONFIG_PIVOT = {
-    "Symbol": st.column_config.TextColumn("Sym", width=None),
-    "Strike": st.column_config.TextColumn("Strike", width=None),
-    "Expiry_Table": st.column_config.TextColumn("Exp", width=None),
-    "Contracts": st.column_config.NumberColumn("Qty", width=None),
-    "Dollars": st.column_config.NumberColumn("Dollars", width=None),
-}
 
 DATA_KEYS_PARQUET = get_parquet_config()
 

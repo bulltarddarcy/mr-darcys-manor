@@ -1303,4 +1303,13 @@ def get_pivot_styled_view(data, is_rr=False):
     
     return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
 
+COLUMN_CONFIG_PIVOT = {
+    "Symbol": st.column_config.TextColumn("Sym", width=None),
+    "Strike": st.column_config.TextColumn("Strike", width=None),
+    "Expiry_Table": st.column_config.TextColumn("Exp", width=None),
+    "Contracts": st.column_config.NumberColumn("Qty", width=None),
+    "Dollars": st.column_config.NumberColumn("Dollars", width=None),
+}
+
+
 
