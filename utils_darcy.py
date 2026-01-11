@@ -52,6 +52,13 @@ SZ_BUCKET_LABELS = ["0-7d", "8-30d", "31-60d", "61-90d", "91-120d", "121-180d", 
 DIV_LOOKBACK_DEFAULT = 90
 DIV_DAYS_SINCE_DEFAULT = 25
 DIV_RSI_DIFF_DEFAULT = 2.0
+DIV_STRICT_DEFAULT = "Yes"
+DIV_SOURCE_DEFAULT = "High/Low"
+
+# Option Lists (Ensures UI matches Logic)
+DIV_STRICT_OPTS = ["Yes", "No"]
+DIV_SOURCE_OPTS = ["High/Low", "Close"]
+
 DIV_CSV_PERIODS_DAYS = [5, 21, 63, 126, 252]
 DIV_CSV_PERIODS_WEEKS = [4, 13, 26, 52]
 
@@ -1493,8 +1500,8 @@ def initialize_divergence_state():
     # Active Tab Defaults
     defaults = {
         'saved_rsi_div_lookback': DIV_LOOKBACK_DEFAULT,
-        'saved_rsi_div_source': "High/Low",
-        'saved_rsi_div_strict': "Yes",
+        'saved_rsi_div_source': DIV_SOURCE_DEFAULT,  # Used Constant
+        'saved_rsi_div_strict': DIV_STRICT_DEFAULT,  # Used Constant
         'saved_rsi_div_days_since': DIV_DAYS_SINCE_DEFAULT,
         'saved_rsi_div_diff': DIV_RSI_DIFF_DEFAULT
     }
