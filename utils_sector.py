@@ -16,7 +16,7 @@ from typing import Optional, Tuple, List, Dict
 logger = logging.getLogger(__name__)
 
 # --- IMPORT SHARED UTILS ---
-from utils_shared import get_gdrive_binary_data
+from utils_darcy import get_gdrive_binary_data
 
 # ==========================================
 # 1. CONFIGURATION & CONSTANTS
