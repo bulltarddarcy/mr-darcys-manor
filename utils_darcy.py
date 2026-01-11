@@ -1208,18 +1208,14 @@ def generate_flow_pivot(df, start_date, end_date):
     if f.empty: return pd.DataFrame()
 
     # 2. Categorize Flows
-    # Bullish = Calls Bought + Puts Sold
-    # Bearish = Puts Bought
-    # (Calls Sold are generally excluded or treated as neutral/bearish depending on strategy, 
-    # but strictly following the previous app logic, we focus on the big 3)
-    
     order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
     
+    # Bullish = Calls Bought + Puts Sold
     bull_mask = f[order_type_col].isin(["Calls Bought", "Puts Sold"])
+    # Bearish = Puts Bought
     bear_mask = f[order_type_col].isin(["Puts Bought"])
     
     # 3. Aggregate
-    # We use a pivot_table approach manually for speed and clarity
     res = f.groupby("Symbol").agg(
         Total_Trades=("Symbol", "count"),
         Last_Trade=("Trade Date", "max")
@@ -1229,7 +1225,7 @@ def generate_flow_pivot(df, start_date, end_date):
     res["Bullish_Flow"] = f[bull_mask].groupby("Symbol")["Dollars"].sum()
     res["Bearish_Flow"] = f[bear_mask].groupby("Symbol")["Dollars"].sum()
     
-    # Fill NaN with 0 (e.g., a stock might have only calls, no puts)
+    # Fill NaN with 0 (e.g. a stock might have only calls, no puts)
     res.fillna(0, inplace=True)
     
     # 4. Calculated Columns
@@ -1237,12 +1233,10 @@ def generate_flow_pivot(df, start_date, end_date):
     res["Total_Volume"] = res["Bullish_Flow"] + res["Bearish_Flow"]
     
     # 5. Filter & Sort
-    # Filter out tiny noise if needed, currently just sorting by Total Volume
     res = res[res["Total_Trades"] >= PIVOT_MIN_TRADES]
     res = res.sort_values(by="Total_Volume", ascending=False)
     
     return res.reset_index()
-
 
 
 
