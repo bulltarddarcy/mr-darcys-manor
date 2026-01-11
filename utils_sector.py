@@ -845,7 +845,40 @@ def calculate_comprehensive_stock_score(
     except Exception as e:
         logger.error(f"Error calculating stock score: {e}")
         return None
-
+def calculate_theme_score(df: pd.DataFrame, view_key: str = 'Short') -> Optional[Dict]:
+    """
+    Calculate comprehensive score for a theme/sector (0-100 with grade).
+    
+    Scoring Breakdown:
+    - Current Position (40 pts): Quadrant strength
+    - Momentum Quality (30 pts): Consistency + acceleration
+    - Trajectory (20 pts): 3-day path analysis
+    - Stability (10 pts): Smoothness of movement
+    
+    Args:
+        df: Theme dataframe with RRG metrics
+        view_key: Timeframe to analyze ('Short', 'Med', 'Long')
+        
+    Returns:
+        Dict with score, grade, components, and actionability
+    """
+    if df is None or df.empty or len(df) < 4:
+        return None
+    
+    try:
+        col_ratio = f"RRG_Ratio_{view_key}"
+        col_mom = f"RRG_Mom_{view_key}"
+        
+        if col_ratio not in df.columns or col_mom not in df.columns:
+            return None
+        
+        # Get last 4 days (today + 3-day trail)
+        recent = df.tail(4)
+        if len(recent) < 4:
+            return None
+        
+        last = recent.iloc[-1]
+        ratio = last[col_ratio]
         mom = last[col_mom]
         
         score_breakdown = {}
