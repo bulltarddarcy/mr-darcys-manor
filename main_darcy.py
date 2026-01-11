@@ -49,8 +49,10 @@ def run_database_app(df):
     if 'saved_db_inc_ps' not in st.session_state: st.session_state.saved_db_inc_ps = True
     if 'saved_db_inc_pb' not in st.session_state: st.session_state.saved_db_inc_pb = True
 
+    # FIX: Added safety check for key existence
     def save_db_state(key, saved_key):
-        st.session_state[saved_key] = st.session_state[key]
+        if key in st.session_state:
+            st.session_state[saved_key] = st.session_state[key]
     
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
@@ -109,8 +111,10 @@ def run_rankings_app(df):
     if 'saved_rank_mc' not in st.session_state: st.session_state.saved_rank_mc = "10B"
     if 'saved_rank_ema' not in st.session_state: st.session_state.saved_rank_ema = False
 
+    # FIX: Added safety check for key existence
     def save_rank_state(key, saved_key):
-        st.session_state[saved_key] = st.session_state[key]
+        if key in st.session_state:
+            st.session_state[saved_key] = st.session_state[key]
     
     c1, c2, c3, c4 = st.columns([1, 1, 0.7, 1.3], gap="small")
     with c1: rank_start = st.date_input("Trade Start Date", value=st.session_state.saved_rank_start, key="rank_start", on_change=save_rank_state, args=("rank_start", "saved_rank_start"))
@@ -318,8 +322,10 @@ def run_pivot_tables_app(df):
     if 'saved_calc_premium' not in st.session_state: st.session_state.saved_calc_premium = 2.50
     if 'saved_calc_expiry' not in st.session_state: st.session_state.saved_calc_expiry = date.today() + timedelta(days=30)
 
+    # FIX: Added safety check for key existence
     def save_pv_state(key, saved_key):
-        st.session_state[saved_key] = st.session_state[key]
+        if key in st.session_state:
+            st.session_state[saved_key] = st.session_state[key]
 
     with col_filters:
         st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>🔍 Filters</h4>", unsafe_allow_html=True)
@@ -496,8 +502,10 @@ def run_strike_zones_app(df):
     if 'saved_sz_inc_ps' not in st.session_state: st.session_state.saved_sz_inc_ps = True
     if 'saved_sz_inc_pb' not in st.session_state: st.session_state.saved_sz_inc_pb = True
 
+    # FIX: Added safety check for key existence
     def save_sz_state(key, saved_key):
-        st.session_state[saved_key] = st.session_state[key]
+        if key in st.session_state:
+            st.session_state[saved_key] = st.session_state[key]
     
     col_settings, col_visuals = st.columns([1, 2.5], gap="large")
     
@@ -1643,6 +1651,7 @@ def run_rsi_scanner_app(df_global):
                 else: st.error("Failed to load data.")
             except Exception as e: st.error(f"Error: {e}")
 
+
 def run_seasonality_app(df_global):
     st.title("📅 Seasonality")
     
@@ -2414,4 +2423,3 @@ def run_ema_distance_app(df_global):
     # Combined Chart
     final_chart = (bars + rule).properties(height=300).interactive()
     st.altair_chart(final_chart, use_container_width=True)
-
