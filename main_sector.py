@@ -1007,10 +1007,12 @@ def run_sector_rotation_app(df_global=None):
     
     # Clear filters button
     if st.button("🗑️ Clear All Filters", key="clear_all_filters_btn", type="secondary"):
-        # Simply delete the default_filters_set flag to trigger reinitialization
-        for key in list(st.session_state.keys()):
-            if key.startswith('filter_') or key == 'default_filters_set':
-                del st.session_state[key]
+        # Dirty trick: just set all filter columns to None to force reset
+        for i in range(6):
+            st.session_state[f"filter_{i}_column"] = None
+        # Also reset defaults flag so they reload
+        if 'default_filters_set' in st.session_state:
+            st.session_state.default_filters_set = False
         st.rerun()
     
     # Apply filters automatically
