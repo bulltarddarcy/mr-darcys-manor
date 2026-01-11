@@ -184,56 +184,6 @@ def run_sector_rotation_app(df_global=None):
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
     view_key = timeframe_map[st.session_state.sector_view]
 
-    # --- 5. MOMENTUM SCANS ---
-    with st.expander("🚀 Momentum Scans", expanded=False):
-        inc_mom, neut_mom, dec_mom = [], [], []
-        
-        for theme, ticker in theme_map.items():
-            df = etf_data_cache.get(ticker)
-            if df is None or df.empty or "RRG_Mom_Short" not in df.columns:
-                continue
-            
-            last = df.iloc[-1]
-            m5 = last.get("RRG_Mom_Short", 0)
-            m10 = last.get("RRG_Mom_Med", 0)
-            m20 = last.get("RRG_Mom_Long", 0)
-            
-            shift = m5 - m20
-            setup = us.classify_setup(df)
-            icon = setup.split()[0] if setup else ""
-            item = {"theme": theme, "shift": shift, "icon": icon}
-            
-            # Categorize
-            if m5 > m10 > m20:
-                inc_mom.append(item)
-            elif m5 < m10 < m20:
-                dec_mom.append(item)
-            else:
-                neut_mom.append(item)
-
-        # Sort by magnitude
-        inc_mom.sort(key=lambda x: x['shift'], reverse=True)
-        neut_mom.sort(key=lambda x: x['shift'], reverse=True)
-        dec_mom.sort(key=lambda x: x['shift'], reverse=False)
-
-        # Display in columns
-        m_col1, m_col2, m_col3 = st.columns(3)
-        
-        with m_col1:
-            st.success(f"📈 Increasing ({len(inc_mom)})")
-            for i in inc_mom:
-                st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
-        
-        with m_col2:
-            st.warning(f"⚖️ Neutral / Mixed ({len(neut_mom)})")
-            for i in neut_mom:
-                st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
-        
-        with m_col3:
-            st.error(f"🔻 Decreasing ({len(dec_mom)})")
-            for i in dec_mom:
-                st.caption(f"{i['theme']} {i['icon']} **({i['shift']:+.1f})**")
-
     # --- 6. RRG CHART ---
     chart_placeholder = st.empty()
     with chart_placeholder:
@@ -255,18 +205,12 @@ def run_sector_rotation_app(df_global=None):
     
     st.divider()
 
-    # --- 7. SECTOR LIFECYCLE ANALYSIS ---
-    st.subheader("📊 Sector Lifecycle Dashboard")
-    
-    st.info("💡 **Where to Deploy Capital** - Sectors grouped by lifecycle stage to identify best entries, holdings to keep, and positions to exit")
+    # --- 7. SECTOR OVERVIEW ---
+    st.subheader("📊 Sector Overview")
     
     # Help section
-    col_help_theme1, col_help_theme2, col_help_theme3 = st.columns([1, 1, 1])
-    with col_help_theme1:
-        st.markdown("**🎯 Early Stage:** Fresh momentum - best new entries")
-    with col_help_theme2:
-        st.markdown("**⚖️ Established:** Mature trends - hold but don't add")
-    with col_help_theme3:
+    col_help1, col_help2 = st.columns([4, 1])
+    with col_help2:
         with st.popover("📖 How Categories Work", use_container_width=True):
             st.markdown("""
             ### Understanding Momentum & Performance Categories
