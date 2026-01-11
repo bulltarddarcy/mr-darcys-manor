@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- IMPORT UTILS ---
-# Import everything we moved to utils.py
+import utils_darcy as ud
 from utils_darcy import (
     load_and_clean_data, get_parquet_config, load_parquet_and_clean,
     load_ticker_map, get_stock_indicators, fetch_yahoo_data,
@@ -39,65 +39,56 @@ DATA_KEYS_PARQUET = get_parquet_config()
 
 def run_database_app(df):
     st.title("📂 Database")
-    max_data_date = get_max_trade_date(df)
+    max_data_date = ud.get_max_trade_date(df)
     
-    if 'saved_db_ticker' not in st.session_state: st.session_state.saved_db_ticker = ""
-    if 'saved_db_start' not in st.session_state: st.session_state.saved_db_start = max_data_date
-    if 'saved_db_end' not in st.session_state: st.session_state.saved_db_end = max_data_date
-    if 'saved_db_exp' not in st.session_state: st.session_state.saved_db_exp = (date.today() + timedelta(days=365))
-    if 'saved_db_inc_cb' not in st.session_state: st.session_state.saved_db_inc_cb = True
-    if 'saved_db_inc_ps' not in st.session_state: st.session_state.saved_db_inc_ps = True
-    if 'saved_db_inc_pb' not in st.session_state: st.session_state.saved_db_inc_pb = True
+    # 1. Initialize State via Utils
+    ud.initialize_database_state(max_data_date)
 
-    # FIX: Added safety check for key existence
+    # Helper to sync state changes
     def save_db_state(key, saved_key):
         if key in st.session_state:
             st.session_state[saved_key] = st.session_state[key]
     
+    # 2. Render UI Inputs
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
         db_ticker = st.text_input("Ticker (blank=all)", value=st.session_state.saved_db_ticker, key="db_ticker_input", on_change=save_db_state, args=("db_ticker_input", "saved_db_ticker")).strip().upper()
-    with c2: start_date = st.date_input("Trade Start Date", value=st.session_state.saved_db_start, key="db_start", on_change=save_db_state, args=("db_start", "saved_db_start"))
-    with c3: end_date = st.date_input("Trade End Date", value=st.session_state.saved_db_end, key="db_end", on_change=save_db_state, args=("db_end", "saved_db_end"))
+    with c2: 
+        start_date = st.date_input("Trade Start Date", value=st.session_state.saved_db_start, key="db_start", on_change=save_db_state, args=("db_start", "saved_db_start"))
+    with c3: 
+        end_date = st.date_input("Trade End Date", value=st.session_state.saved_db_end, key="db_end", on_change=save_db_state, args=("db_end", "saved_db_end"))
     with c4:
         db_exp_end = st.date_input("Expiration Range (end)", value=st.session_state.saved_db_exp, key="db_exp", on_change=save_db_state, args=("db_exp", "saved_db_exp"))
     
     ot1, ot2, ot3, ot_pad = st.columns([1.5, 1.5, 1.5, 5.5])
-    with ot1: inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_db_inc_cb, key="db_inc_cb", on_change=save_db_state, args=("db_inc_cb", "saved_db_inc_cb"))
-    with ot2: inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_db_inc_ps, key="db_inc_ps", on_change=save_db_state, args=("db_inc_ps", "saved_db_inc_ps"))
-    with ot3: inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_db_inc_pb, key="db_inc_pb", on_change=save_db_state, args=("db_inc_pb", "saved_db_inc_pb"))
+    with ot1: 
+        inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_db_inc_cb, key="db_inc_cb", on_change=save_db_state, args=("db_inc_cb", "saved_db_inc_cb"))
+    with ot2: 
+        inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_db_inc_ps, key="db_inc_ps", on_change=save_db_state, args=("db_inc_ps", "saved_db_inc_ps"))
+    with ot3: 
+        inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_db_inc_pb, key="db_inc_pb", on_change=save_db_state, args=("db_inc_pb", "saved_db_inc_pb"))
     
-    f = df.copy()
-    if db_ticker: f = f[f["Symbol"].astype(str).str.upper().eq(db_ticker)]
-    if start_date: f = f[f["Trade Date"].dt.date >= start_date]
-    if end_date: f = f[f["Trade Date"].dt.date <= end_date]
-    if db_exp_end: f = f[f["Expiry_DT"].dt.date <= db_exp_end]
+    # 3. Filter Data via Utils
+    filtered_df = ud.filter_database_trades(
+        df, db_ticker, start_date, end_date, db_exp_end, inc_cb, inc_ps, inc_pb
+    )
     
-    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
-    allowed_types = []
-    if inc_cb: allowed_types.append("Calls Bought")
-    if inc_pb: allowed_types.append("Puts Bought")
-    if inc_ps: allowed_types.append("Puts Sold")
-    f = f[f[order_type_col].isin(allowed_types)]
-    
-    if f.empty:
+    if filtered_df.empty:
         st.warning("No data found matching these filters.")
         return
         
-    f = f.sort_values(by=["Trade Date", "Symbol"], ascending=[False, True])
-    display_cols = ["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
-    f_display = f[display_cols].copy()
-    f_display["Trade Date"] = f_display["Trade Date"].dt.strftime("%d %b %y")
-    f_display["Expiry"] = pd.to_datetime(f_display["Expiry"]).dt.strftime("%d %b %y")
-    
-    def highlight_db_order_type(val):
-        if val in ["Calls Bought", "Puts Sold"]: return 'background-color: rgba(113, 210, 138, 0.15); color: #71d28a; font-weight: 600;'
-        elif val == "Puts Bought": return 'background-color: rgba(242, 156, 160, 0.15); color: #f29ca0; font-weight: 600;'
-        return ''
-        
+    # 4. Display Logic via Utils
     st.subheader("Non-Expired Trades")
     st.caption("⚠️ User should check OI to confirm trades are still open")
-    st.dataframe(f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).applymap(highlight_db_order_type, subset=[order_type_col]), use_container_width=True, hide_index=True, height=get_table_height(f_display, max_rows=30))
+    
+    styled_df = ud.get_database_styled_view(filtered_df)
+    
+    st.dataframe(
+        styled_df, 
+        use_container_width=True, 
+        hide_index=True, 
+        height=ud.get_table_height(filtered_df, max_rows=30)
+    )
     st.markdown("<br><br><br>", unsafe_allow_html=True)
 
 def run_rankings_app(df):
@@ -2423,3 +2414,4 @@ def run_ema_distance_app(df_global):
     # Combined Chart
     final_chart = (bars + rule).properties(height=300).interactive()
     st.altair_chart(final_chart, use_container_width=True)
+
