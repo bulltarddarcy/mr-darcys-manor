@@ -6,6 +6,7 @@ With multi-theme support, smart filters, and comprehensive scoring.
 import streamlit as st
 import pandas as pd
 import utils_sector as us
+import utils_darcy as ud  # Ensure darcy utils are available for divergence logic
 
 # ==========================================
 # UI HELPERS
@@ -669,6 +670,41 @@ def run_sector_rotation_app(df_global=None):
                 alpha_20d = last.get(f"Alpha_Long_{stock_theme}", 0)
                 beta = last.get(f"Beta_{stock_theme}", 1.0)
                 
+                # --- ADDED: Divergence Calculation ---
+                div_str = "—"
+                try:
+                    # Prepare daily data
+                    d_d, _ = ud.prepare_data(sdf.copy())
+                    if d_d is not None and not d_d.empty:
+                        # Convert strict setting to boolean
+                        strict_bool = (ud.DIV_STRICT_DEFAULT == "Yes")
+                        
+                        divs = ud.find_divergences(
+                            d_d, 
+                            stock, 
+                            'Daily',
+                            min_n=0,
+                            periods_input=ud.DIV_CSV_PERIODS_DAYS,
+                            optimize_for='PF',
+                            lookback_period=ud.DIV_LOOKBACK_DEFAULT,
+                            price_source=ud.DIV_SOURCE_DEFAULT,
+                            strict_validation=strict_bool,
+                            recent_days_filter=ud.DIV_DAYS_SINCE_DEFAULT,
+                            rsi_diff_threshold=ud.DIV_RSI_DIFF_DEFAULT
+                        )
+                        
+                        # Filter only for recent active divergences
+                        active_divs = [d for d in divs if d.get('Is_Recent', False)]
+                        
+                        if active_divs:
+                            # Take the most recent one
+                            last_div = active_divs[-1]
+                            d_type = last_div['Type']
+                            div_str = f"🟢 {d_type}" if d_type == 'Bullish' else f"🔴 {d_type}"
+                except Exception:
+                    pass
+                # -------------------------------------
+
                 stock_data.append({
                     "Ticker": stock,
                     "Theme": stock_theme,
@@ -681,6 +717,7 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 5d": last.get('RVOL_Short', 0),
                     "RVOL 10d": last.get('RVOL_Med', 0),
                     "RVOL 20d": last.get('RVOL_Long', 0),
+                    "Div": div_str, # Added Column
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
                     "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
@@ -702,12 +739,14 @@ def run_sector_rotation_app(df_global=None):
     
     # Filterable columns (numeric and categorical)
     numeric_columns = ["Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
-    categorical_columns = ["Theme", "Theme Category"]
+    # Added "Div" to categorical columns
+    categorical_columns = ["Theme", "Theme Category", "Div"]
     all_filter_columns = numeric_columns + categorical_columns
     
     # Get unique values for categorical columns
     unique_themes = sorted(df_stocks['Theme'].unique().tolist())
     unique_categories = sorted(df_stocks['Theme Category'].unique().tolist())
+    unique_divs = sorted(df_stocks['Div'].astype(str).unique().tolist())
     
     # Initialize default filters on first load
     if 'default_filters_set' not in st.session_state:
@@ -852,6 +891,20 @@ def run_sector_rotation_app(df_global=None):
                         key=f"filter_{i}_value_category",
                         label_visibility="collapsed"
                     )
+                elif column == "Div":
+                     # Get index for default
+                    if default_value_cat in unique_divs:
+                        cat_index = unique_divs.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    
+                    value_categorical = st.selectbox(
+                        "Select Div",
+                        unique_divs,
+                        index=cat_index,
+                        key=f"filter_{i}_value_div",
+                        label_visibility="collapsed"
+                    )
                 else:
                     value_categorical = None
                 
@@ -913,6 +966,7 @@ def run_sector_rotation_app(df_global=None):
                 f"filter_{i}_value_column",
                 f"filter_{i}_value_theme",
                 f"filter_{i}_value_category",
+                f"filter_{i}_value_div",
                 f"filter_{i}_logic"
             ])
         
@@ -1021,6 +1075,7 @@ def run_sector_rotation_app(df_global=None):
         "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.2fx"),
         "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
         "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
+        "Div": st.column_config.TextColumn("Div", width="small"), # Added config for Div
         "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
         "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
         "50 MA": st.column_config.TextColumn("50 MA", width="small"),
