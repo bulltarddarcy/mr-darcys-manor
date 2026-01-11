@@ -1262,7 +1262,7 @@ def get_actionable_theme_summary(
         # CATEGORIZATION LOGIC
         # ═══════════════════════════════════════════════════════
         
-        # --- EARLY STAGE: Fresh + Building + Good Score ---
+        # --- EARLY STAGE: Fresh (Day 1-3) + Building + Good Score ---
         if (
             is_fresh and 
             bullish_count >= 2 and 
@@ -1277,43 +1277,42 @@ def get_actionable_theme_summary(
             theme_info['reason'] = reason
             categories['early_stage'].append(theme_info)
         
-        # --- ESTABLISHED: High score + Not fresh (check this BEFORE topping) ---
+        # --- ESTABLISHED: High score (65+) + 2+ bullish + Not fresh ---
         elif (
-            bullish_count >= 2 and
             score >= 65 and
-            not is_fresh
+            bullish_count >= 2
         ):
+            # If we're here with score 65+ and 2+ bullish, it's Established
             days = consensus['freshness_detail']
             if momentum_declining:
-                reason = f"Strong score ({score:.0f}) but momentum declining ({score_5d:.0f} < {score_10d:.0f}), been leading for {days}"
+                reason = f"Strong score ({score:.0f}), 2+ timeframes bullish, momentum declining ({score_5d:.0f} < {score_10d:.0f})"
             else:
-                reason = f"Strong score ({score:.0f}), established position ({days}), mature trend"
+                reason = f"Strong score ({score:.0f}), 2+ timeframes bullish, mature trend"
             
             theme_info['reason'] = reason
             categories['established'].append(theme_info)
         
-        # --- TOPPING: Momentum declining + Lower score ---
+        # --- TOPPING: Moderate score (40-64) + Momentum declining ---
         elif (
+            40 <= score < 65 and
             momentum_declining and
-            score >= 40 and
-            score < 65 and
             (is_20d_bullish or is_10d_bullish)
         ):
-            reason = f"Momentum declining ({score_5d:.0f} < {score_10d:.0f} or {score_20d:.0f})"
+            reason = f"Momentum declining ({score_5d:.0f} < {score_10d:.0f}), score {score:.0f}"
             if quad_5d == '🟡 Weakening':
                 reason += f", 5-day already weakening"
             
             theme_info['reason'] = reason
             categories['topping'].append(theme_info)
         
-        # --- WEAK: Everything else ---
+        # --- WEAK: Low score OR insufficient bullish timeframes ---
         else:
             if score < 40:
                 reason = f"Low score ({score:.0f}), weak positioning"
             elif bullish_count < 2:
                 reason = f"Only {bullish_count} of 3 timeframes bullish, insufficient confirmation"
             else:
-                reason = f"Mixed signals, score {score:.0f} with {bullish_count} bullish timeframes"
+                reason = f"Score {score:.0f}, {bullish_count} bullish, but mixed momentum"
             
             theme_info['reason'] = reason
             categories['weak'].append(theme_info)
