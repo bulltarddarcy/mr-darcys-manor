@@ -752,24 +752,15 @@ def run_sector_rotation_app(df_global=None):
     unique_50ma = sorted(df_stocks['50 MA'].unique().tolist())
     unique_200ma = sorted(df_stocks['200 MA'].unique().tolist())
     
-    # Clear button (must be before widgets are created)
-    if st.button("🗑️ Clear All Filters", key="clear_all_filters_btn", type="secondary"):
-        st.session_state.clear_filters_flag = True
-        st.rerun()
-    
-    # Handle clearing by resetting defaults flag
-    if st.session_state.get('clear_filters_flag', False):
-        st.session_state.clear_filters_flag = False
-        if 'default_filters_set' in st.session_state:
-            del st.session_state['default_filters_set']
-        # Delete all filter widget states
-        for i in range(6):
-            for key_suffix in ['column', 'operator', 'operator_cat', 'type', 'value', 'value_column', 
-                               'value_theme', 'value_category', 'value_div', 'value_8ema', 
-                               'value_21ema', 'value_50ma', 'value_200ma', 'logic']:
-                key = f"filter_{i}_{key_suffix}"
-                if key in st.session_state:
-                    del st.session_state[key]
+    # Clear button with query params to force clean reload
+    col_clear, col_space = st.columns([1, 5])
+    with col_clear:
+        if st.button("🗑️ Clear Filters", type="secondary", use_container_width=True):
+            # Delete all filter-related keys
+            keys_to_delete = [k for k in st.session_state.keys() if k.startswith('filter_') or k == 'default_filters_set']
+            for key in keys_to_delete:
+                del st.session_state[key]
+            st.rerun()
     
     # Initialize default filters on first load
     if 'default_filters_set' not in st.session_state:
