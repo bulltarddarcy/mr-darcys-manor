@@ -41,15 +41,14 @@ def run_database_app(df):
     st.title("📂 Database")
     max_data_date = ud.get_max_trade_date(df)
     
-    # 1. Initialize State via Utils
+    # Initialize State
     ud.initialize_database_state(max_data_date)
 
-    # Helper to sync state changes
     def save_db_state(key, saved_key):
         if key in st.session_state:
             st.session_state[saved_key] = st.session_state[key]
     
-    # 2. Render UI Inputs
+    # UI Inputs
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
         db_ticker = st.text_input("Ticker (blank=all)", value=st.session_state.saved_db_ticker, key="db_ticker_input", on_change=save_db_state, args=("db_ticker_input", "saved_db_ticker")).strip().upper()
@@ -60,7 +59,7 @@ def run_database_app(df):
     with c4:
         db_exp_end = st.date_input("Expiration Range (end)", value=st.session_state.saved_db_exp, key="db_exp", on_change=save_db_state, args=("db_exp", "saved_db_exp"))
     
-    ot1, ot2, ot3, ot_pad = st.columns([1.5, 1.5, 1.5, 5.5])
+    ot1, ot2, ot3, _ = st.columns([1.5, 1.5, 1.5, 5.5])
     with ot1: 
         inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_db_inc_cb, key="db_inc_cb", on_change=save_db_state, args=("db_inc_cb", "saved_db_inc_cb"))
     with ot2: 
@@ -68,7 +67,7 @@ def run_database_app(df):
     with ot3: 
         inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_db_inc_pb, key="db_inc_pb", on_change=save_db_state, args=("db_inc_pb", "saved_db_inc_pb"))
     
-    # 3. Filter Data via Utils
+    # Filter Data
     filtered_df = ud.filter_database_trades(
         df, db_ticker, start_date, end_date, db_exp_end, inc_cb, inc_ps, inc_pb
     )
@@ -77,7 +76,7 @@ def run_database_app(df):
         st.warning("No data found matching these filters.")
         return
         
-    # 4. Display Logic via Utils
+    # Display Styled Dataframe
     st.subheader("Non-Expired Trades")
     st.caption("⚠️ User should check OI to confirm trades are still open")
     
@@ -87,23 +86,24 @@ def run_database_app(df):
         styled_df, 
         use_container_width=True, 
         hide_index=True, 
-        height=ud.get_table_height(filtered_df, max_rows=30)
+        height=ud.get_table_height(filtered_df, max_rows=ud.DB_TABLE_MAX_ROWS)
     )
     st.markdown("<br><br><br>", unsafe_allow_html=True)
 
 def run_rankings_app(df):
     st.title("🏆 Rankings")
     max_data_date = ud.get_max_trade_date(df)
-    start_default = max_data_date - timedelta(days=14)
     
-    # 1. Initialize State via Utils
+    # Use Constant for Lookback (No hardcoded '14')
+    start_default = max_data_date - timedelta(days=ud.RANK_LOOKBACK_DAYS)
+    
     ud.initialize_rankings_state(start_default, max_data_date)
 
     def save_rank_state(key, saved_key):
         if key in st.session_state:
             st.session_state[saved_key] = st.session_state[key]
     
-    # 2. Render UI
+    # UI Inputs
     c1, c2, c3, c4 = st.columns([1, 1, 0.7, 1.3], gap="small")
     with c1: 
         rank_start = st.date_input("Trade Start Date", value=st.session_state.saved_rank_start, key="rank_start", on_change=save_rank_state, args=("rank_start", "saved_rank_start"))
@@ -112,10 +112,14 @@ def run_rankings_app(df):
     with c3: 
         limit = st.number_input("Limit", value=st.session_state.saved_rank_limit, min_value=1, max_value=200, key="rank_limit", on_change=save_rank_state, args=("rank_limit", "saved_rank_limit"))
     with c4: 
-        min_mkt_cap_rank = st.selectbox("Min Market Cap", ["0B", "2B", "10B", "50B", "100B"], index=2, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
+        # Dynamic Options from Constants
+        mc_options = list(ud.RANK_MC_THRESHOLDS.keys())
+        default_mc_index = mc_options.index("10B") if "10B" in mc_options else 0
+        
+        min_mkt_cap_rank = st.selectbox("Min Market Cap", mc_options, index=default_mc_index, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
         filter_ema = st.checkbox("Hide < 8 EMA", value=False, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
         
-    # 3. Filter Data via Utils
+    # Filter Data
     f_filtered = ud.filter_rankings_data(df, rank_start, rank_end)
     
     if f_filtered.empty:
@@ -124,10 +128,10 @@ def run_rankings_app(df):
 
     tab_rank, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money", "💡 Top 3", "🤡 Bulltard"])
 
-    # Calculate Market Cap Threshold
-    mc_thresh = {"0B":0, "2B":2e9, "10B":1e10, "50B":5e10, "100B":1e11}.get(min_mkt_cap_rank, 1e10)
+    # Get Threshold Value from Constants
+    mc_thresh = ud.RANK_MC_THRESHOLDS.get(min_mkt_cap_rank, 1e10)
 
-    # Calculate Smart Money Scores (Existing Utils Function)
+    # Calculate Smart Money Scores
     top_bulls, top_bears, valid_data = ud.calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
 
     # --- TAB 1: SMART MONEY ---
@@ -145,12 +149,12 @@ def run_rankings_app(df):
             
             sm1, sm2 = st.columns(2, gap="large")
             with sm1:
-                st.markdown("<div style='color: #71d28a; font-weight:bold;'>Top Bullish Scores</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='color: #71d28a; font-weight:bold;'>Top Bullish Scores</div>", unsafe_allow_html=True)
                 if not top_bulls.empty:
                     st.dataframe(top_bulls[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bulls, max_rows=100))
             
             with sm2:
-                st.markdown("<div style='color: #f29ca0; font-weight:bold;'>Top Bearish Scores</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='color: #f29ca0; font-weight:bold;'>Top Bearish Scores</div>", unsafe_allow_html=True)
                 if not top_bears.empty:
                     st.dataframe(top_bears[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bears, max_rows=100))
         st.markdown("<br><br>", unsafe_allow_html=True)
@@ -161,12 +165,9 @@ def run_rankings_app(df):
             st.info("No Bullish candidates found to analyze.")
         else:
             st.caption(f"ℹ️ Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for confluence...")
-            st.caption("ℹ️ Strategy: Combines Whale Levels, Technicals (EMA), and RSI Backtests.")
             
-            # Generate Ideas via Utils
             best_ideas = ud.generate_top_ideas(top_bulls, df)
             
-            # Display Cards
             cols = st.columns(3)
             for i, cand in enumerate(best_ideas):
                 with cols[i]:
@@ -189,7 +190,6 @@ def run_rankings_app(df):
     with tab_vol:
         st.caption("ℹ️ Legacy Methodology: Score = (Calls + Puts Sold) - (Puts Bought).")
         
-        # Calculate Volume Rankings via Utils
         bull_df, bear_df = ud.calculate_volume_rankings(f_filtered, mc_thresh, filter_ema, limit)
         
         rank_col_config = {
@@ -202,11 +202,11 @@ def run_rankings_app(df):
         
         v1, v2 = st.columns(2)
         with v1:
-            st.markdown("<div style='color: #71d28a; font-weight:bold;'>Bullish Volume</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='color: #71d28a; font-weight:bold;'>Bullish Volume</div>", unsafe_allow_html=True)
             if not bull_df.empty:
                 st.dataframe(bull_df[cols_final], use_container_width=True, hide_index=True, column_config=rank_col_config, height=ud.get_table_height(bull_df, max_rows=100))
         with v2:
-            st.markdown("<div style='color: #f29ca0; font-weight:bold;'>Bearish Volume</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='color: #f29ca0; font-weight:bold;'>Bearish Volume</div>", unsafe_allow_html=True)
             if not bear_df.empty:
                 st.dataframe(bear_df[cols_final], use_container_width=True, hide_index=True, column_config=rank_col_config, height=ud.get_table_height(bear_df, max_rows=100))
         st.markdown("<br><br>", unsafe_allow_html=True)
@@ -1556,7 +1556,6 @@ def run_rsi_scanner_app(df_global):
                     else: st.info("No percentile signals found.")
                 else: st.error("Failed to load data.")
             except Exception as e: st.error(f"Error: {e}")
-
 
 def run_seasonality_app(df_global):
     st.title("📅 Seasonality")
