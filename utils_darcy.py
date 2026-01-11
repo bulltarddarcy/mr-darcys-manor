@@ -62,6 +62,19 @@ DIV_SOURCE_OPTS = ["High/Low", "Close"]
 DIV_CSV_PERIODS_DAYS = [5, 21, 63, 126, 252]
 DIV_CSV_PERIODS_WEEKS = [4, 13, 26, 52]
 
+# --- CONSTANTS: RSI SCANNER APP ---
+RSI_SCAN_DEFAULT_PCT_LOW = 10
+RSI_SCAN_DEFAULT_PCT_HIGH = 90
+RSI_SCAN_DEFAULT_MIN_N = 1
+RSI_SCAN_DEFAULT_PERIODS = "5, 21, 63, 126, 252"
+
+RSI_BOT_DEFAULT_TICKER = "POOL"
+RSI_BOT_DEFAULT_LOOKBACK = 10
+RSI_BOT_DEFAULT_TOLERANCE = 2.0
+RSI_BOT_HOLD_PERIODS = [5, 10, 21, 42, 63, 126, 252]
+RSI_BOT_DCA_WINDOW_MAX = 10
+RSI_BOT_FILTERS_OPTS = ["Any", "Above", "Below"]
+
 # REFRESH TIME: 600 seconds = 10 minutes
 CACHE_TTL = 600 
 
@@ -1609,6 +1622,249 @@ def process_divergence_export_columns(df_in):
     other_cols = [c for c in out.columns if c not in existing_first]
     
     return out[existing_first + other_cols]
+
+# --- RSI SCANNER APP HELPERS ---
+
+def load_backtest_data(symbol, ticker_map_ref):
+    """
+    Robust data loader for the RSI Backtester.
+    Wraps get_ticker_technicals but adds extra column normalization
+    specific to historical backtesting needs (handling ADJ CLOSE).
+    """
+    # Try loading from Parquet/CSV map first
+    d = get_ticker_technicals(symbol, ticker_map_ref)
+    
+    # Fallback to Yahoo
+    if d is None or d.empty: 
+        d = fetch_yahoo_data(symbol)
+    
+    if d is not None and not d.empty:
+        # 1. Normalize all cols to UPPERCASE
+        d.columns = [c.strip().upper() for c in d.columns]
+        
+        # 2. Map 'ADJ CLOSE' or 'Adj Close' to 'CLOSE' if missing
+        if 'CLOSE' not in d.columns and 'ADJ CLOSE' in d.columns:
+                d = d.rename(columns={'ADJ CLOSE': 'CLOSE'})
+        
+        # 3. Last ditch: find any column with 'CLOSE' in it
+        if 'CLOSE' not in d.columns:
+            possible = [c for c in d.columns if 'CLOSE' in c]
+            if possible: d = d.rename(columns={possible[0]: 'CLOSE'})
+            
+        # 4. Ensure Technicals Exist (RSI, SMAs)
+        # Note: add_technicals() handles RSI, EMA8, EMA21, SMA200
+        d = add_technicals(d)
+        
+        # Add specific SMAs used in Backtester if missing
+        close_col = 'CLOSE'
+        if 'SMA50' not in d.columns: d['SMA50'] = d[close_col].rolling(50).mean()
+        if 'SMA200' not in d.columns: d['SMA200'] = d[close_col].rolling(200).mean()
+        
+    return d
+
+def run_contextual_backtest(df, ref_date, lookback_years, rsi_tol, f_sma200, f_sma50, dedupe_signals):
+    """
+    Executes the "Time Travel" logic and Contextual Backtest.
+    Separates calculation from UI display.
+    """
+    if df is None or df.empty: return None
+
+    date_col = next((c for c in df.columns if 'DATE' in c), None)
+    close_col = 'CLOSE'
+    
+    if not date_col or not close_col: return None
+
+    # Date Handling
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df.sort_values(by=date_col).reset_index(drop=True)
+
+    # 1. Keep full copy for forward returns (Truth Data)
+    df_full_future = df.copy() 
+    
+    # 2. Filter dataset to end at the Reference Date (Simulation Data)
+    df_sim = df[df[date_col].dt.date <= ref_date].copy().reset_index(drop=True)
+    
+    if df_sim.empty: return {"error": f"No data available before {ref_date}."}
+
+    # Trim to Lookback relative to the NEW reference date
+    cutoff_date = df_sim[date_col].max() - timedelta(days=365*lookback_years)
+    df_sim = df_sim[df_sim[date_col] >= cutoff_date].copy().reset_index(drop=True)
+
+    # --- APPLY FILTERS ---
+    if len(df_sim) == 0: return {"error": "Lookback window resulted in empty data."}
+    
+    current_row = df_sim.iloc[-1]
+    current_rsi = current_row.get('RSI', np.nan)
+    
+    if pd.isna(current_rsi): return {"error": f"RSI is NaN on {current_row[date_col].date()}."}
+
+    rsi_min, rsi_max = current_rsi - rsi_tol, current_rsi + rsi_tol
+    
+    # Base Filter: RSI Range
+    mask = (df_sim['RSI'] >= rsi_min) & (df_sim['RSI'] <= rsi_max)
+    
+    # Context Filters
+    if f_sma200 == "Above": mask &= (df_sim[close_col] > df_sim['SMA200'])
+    elif f_sma200 == "Below": mask &= (df_sim[close_col] < df_sim['SMA200'])
+    
+    if f_sma50 == "Above": mask &= (df_sim[close_col] > df_sim['SMA50'])
+    elif f_sma50 == "Below": mask &= (df_sim[close_col] < df_sim['SMA50'])
+    
+    # Apply Mask (Exclude the very last row which is our "current reference")
+    matches = df_sim.iloc[:-1][mask[:-1]].copy()
+    
+    # Percentile Rank
+    rsi_rank = (df_sim['RSI'] < current_rsi).mean() * 100
+    
+    # --- PERFORMANCE CALCULATION ---
+    results = []
+    trade_log = [] 
+    
+    if not matches.empty:
+        match_indices = matches.index.values
+        
+        # Re-map match dates to the full future dataset to get accurate forward returns
+        match_dates = matches[date_col].values
+        full_df_idx_map = df_full_future[df_full_future[date_col].isin(match_dates)].index.values
+        full_closes = df_full_future[close_col].values
+        total_len = len(full_closes)
+
+        # 1. Capture Raw Signals Log
+        for i_raw in match_indices:
+            trade_log.append({
+                "Period": "Raw Signal",
+                "Entry Date": df_sim.iloc[i_raw][date_col].strftime('%Y-%m-%d'),
+                "Entry Price": df_sim.iloc[i_raw][close_col],
+                "RSI": df_sim.iloc[i_raw]['RSI'],
+                "Exit Date": None, "Exit Price": None, "Return %": None, "Max Drawdown %": None
+            })
+
+        for p in RSI_BOT_HOLD_PERIODS:
+            lump_returns = []
+            drawdowns = []
+            valid_counts = 0
+            last_exit_index = -1 
+            
+            # Iterate using mapped indices on the FULL dataset
+            for idx in full_df_idx_map:
+                if dedupe_signals and idx < last_exit_index: continue
+                if idx + p >= total_len: continue
+                
+                entry_p = full_closes[idx]
+                exit_p = full_closes[idx + p]
+                
+                # Drawdown
+                period_prices = full_closes[idx+1 : idx+p+1]
+                if len(period_prices) > 0:
+                    min_close_during_hold = np.min(period_prices)
+                    dd = (min_close_during_hold - entry_p) / entry_p
+                    drawdowns.append(dd)
+                    dd_val = dd * 100
+                else:
+                    drawdowns.append(0.0)
+                    dd_val = 0.0
+                    
+                ret = (exit_p - entry_p) / entry_p
+                lump_returns.append(ret)
+                valid_counts += 1
+                
+                # LOG TRADE
+                trade_log.append({
+                    "Period": p,
+                    "Entry Date": df_full_future.iloc[idx][date_col].strftime('%Y-%m-%d'),
+                    "Entry Price": entry_p,
+                    "RSI": df_full_future.iloc[idx]['RSI'],
+                    "Exit Date": df_full_future.iloc[idx + p][date_col].strftime('%Y-%m-%d'),
+                    "Exit Price": exit_p,
+                    "Return %": ret * 100,
+                    "Max Drawdown %": dd_val
+                })
+                
+                if dedupe_signals: last_exit_index = idx + p
+
+            if valid_counts == 0: continue
+
+            # OPTIMIZE DCA
+            best_dca_ev = np.mean(lump_returns) * 100
+            best_dca_days = 1
+            best_dca_wr = np.mean(np.array(lump_returns) > 0) * 100
+            
+            # DCA Loop
+            for d_win in range(2, RSI_BOT_DCA_WINDOW_MAX + 1): 
+                temp_dca_rets = []
+                last_exit_index_dca = -1
+                
+                for idx in full_df_idx_map:
+                    if dedupe_signals and idx < last_exit_index_dca: continue
+                    if idx + d_win >= total_len or idx + p >= total_len: continue
+                    
+                    entries = full_closes[idx : idx + d_win]
+                    if len(entries) < d_win: continue
+                    avg_entry = np.mean(entries)
+                    exit_p = full_closes[idx + p]
+                    temp_dca_rets.append((exit_p - avg_entry) / avg_entry)
+                    
+                    if dedupe_signals: last_exit_index_dca = idx + p
+                
+                if temp_dca_rets:
+                    dca_mean = np.mean(temp_dca_rets) * 100
+                    if dca_mean > best_dca_ev:
+                        best_dca_ev = dca_mean
+                        best_dca_days = d_win
+                        best_dca_wr = np.mean(np.array(temp_dca_rets) > 0) * 100
+
+            dd_arr = np.array(drawdowns) * 100
+            strat_text = "Lump Sum" if best_dca_days == 1 else f"DCA ({best_dca_days}d)"
+            
+            results.append({
+                "Days": p,
+                "Count": valid_counts,
+                "Lump EV": np.mean(lump_returns) * 100,
+                "Lump WR": np.mean(np.array(lump_returns) > 0) * 100,
+                "Optimal Entry": strat_text,
+                "Optimal EV": best_dca_ev,
+                "Optimal WR": best_dca_wr,
+                "Avg DD": np.mean(dd_arr),
+                "Median DD": np.median(dd_arr),
+                "Min DD": np.max(dd_arr), # Best case (closest to 0 or positive)
+                "Max DD": np.min(dd_arr)  # Worst case (most negative)
+            })
+
+    return {
+        "current_row": current_row,
+        "current_rsi": current_rsi,
+        "rsi_rank": rsi_rank,
+        "ref_date_str": current_row[date_col].strftime('%Y-%m-%d'),
+        "close_price": current_row[close_col],
+        "matches_count": len(matches),
+        "results_df": pd.DataFrame(results) if results else pd.DataFrame(),
+        "trade_log": trade_log
+    }
+
+def get_rsi_backtest_styled(df):
+    """Returns a styled dataframe for the RSI Backtest results."""
+    def highlight_ev(val):
+        if pd.isna(val) or val < 10.0: return ''
+        return 'color: #71d28a; font-weight: bold;'
+    
+    def highlight_wr(val):
+        if pd.isna(val) or val < 75.0: return ''
+        return 'color: #71d28a; font-weight: bold;'
+        
+    def color_dd(val):
+        if val < -15: return 'color: #c5221f; font-weight: bold;' 
+        return 'color: #e67e22;'
+
+    return df.style\
+        .format({
+            "Lump EV": "{:+.2f}%", "Lump WR": "{:.1f}%",
+            "Optimal EV": "{:+.2f}%", "Optimal WR": "{:.1f}%",
+            "Avg DD": "{:.1f}%", "Median DD": "{:.1f}%", 
+            "Min DD": "{:.1f}%", "Max DD": "{:.1f}%"
+        })\
+        .map(highlight_ev, subset=["Lump EV", "Optimal EV"])\
+        .map(highlight_wr, subset=["Lump WR", "Optimal WR"])\
+        .map(color_dd, subset=["Max DD", "Avg DD"])
 
 
 
