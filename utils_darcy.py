@@ -14,8 +14,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # --- IMPORT SHARED UTILS ---
 from utils_shared import get_gdrive_binary_data, get_table_height
 
-# --- CONSTANTS ---
-VOL_SMA_PERIOD = 30
+# --- PRICE HISTORY CONSTANTS ---
+VOL_SMA_PERIOD = 30 # For 
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
 
@@ -76,7 +76,6 @@ def get_parquet_config():
         st.stop()
     return config
 
-
 @st.cache_data(ttl=CACHE_TTL, show_spinner="Loading Dataset...")
 def load_parquet_and_clean(key):
     """
@@ -128,7 +127,6 @@ def load_parquet_and_clean(key):
     except Exception as e:
         st.error(f"Error processing {clean_key}: {e}")
         return None
-
 
 @st.cache_data(ttl=CACHE_TTL)
 def load_ticker_map():
@@ -319,7 +317,6 @@ def get_stock_indicators(sym: str):
     except: 
         return None, None, None, None, None
 
-
 def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, optimize_for='PF', lookback_period=90, price_source='High/Low', strict_validation=True, recent_days_filter=25, rsi_diff_threshold=2.0):
     # Logic unchanged, assumes df_tf has 'RSI', 'Price', 'Volume', 'VolSMA'
     divergences = []
@@ -474,7 +471,6 @@ def find_divergences(df_tf, ticker, timeframe, min_n=0, periods_input=None, opti
         divergences.append(div_obj)
             
     return divergences
-
 
 def prepare_data(df):
     """
