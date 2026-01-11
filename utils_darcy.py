@@ -14,10 +14,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # --- IMPORT SHARED UTILS ---
 from utils_shared import get_gdrive_binary_data, get_table_height
 
-# --- PRICE HISTORY CONSTANTS ---
-VOL_SMA_PERIOD = 30  
-
-
 # --- CONSTANTS: DATABASE APP ---
 DB_DEFAULT_EXPIRY_OFFSET = 365
 DB_TABLE_MAX_ROWS = 30
@@ -51,6 +47,7 @@ SZ_BUCKET_LABELS = ["0-7d", "8-30d", "31-60d", "61-90d", "91-120d", "121-180d", 
 DIV_LOOKBACK_DEFAULT = 90
 DIV_DAYS_SINCE_DEFAULT = 25
 DIV_RSI_DIFF_DEFAULT = 2.0
+VOL_SMA_PERIOD = 30  # Lookback for calculating Volume SMA (used to detect spikes)
 DIV_STRICT_DEFAULT = "Yes"
 DIV_SOURCE_DEFAULT = "High/Low"
 
@@ -94,7 +91,7 @@ EMA_DIST_BACKTEST_DAYS = 30
 EMA_DIST_BACKTEST_DD = -0.08  # -8% Drawdown
 EMA_DIST_CHART_LOOKBACK = 3650  # 10 Years
 
-# SMA Constants (EMA8/21 already exist above)
+# SMA Constants 
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
 SMA50_PERIOD = 50
