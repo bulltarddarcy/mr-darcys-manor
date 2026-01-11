@@ -19,6 +19,22 @@ VOL_SMA_PERIOD = 30
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
 
+# --- CONSTANTS: DATABASE APP ---
+DB_DEFAULT_EXPIRY_OFFSET = 365
+DB_TABLE_MAX_ROWS = 30
+DB_DATE_FMT = "%d %b %y"
+# Styling
+STYLE_BULL_CSS = 'background-color: rgba(113, 210, 138, 0.15); color: #71d28a; font-weight: 600;'
+STYLE_BEAR_CSS = 'background-color: rgba(242, 156, 160, 0.15); color: #f29ca0; font-weight: 600;'
+
+# --- CONSTANTS: RANKING APP ---
+RANK_LOOKBACK_DAYS = 14
+RANK_LIMIT_DEFAULT = 20
+RANK_MC_THRESHOLDS = {"0B": 0, "2B": 2e9, "10B": 1e10, "50B": 5e10, "100B": 1e11}
+RANK_SM_WEIGHTS = {'Sentiment': 0.35, 'Impact': 0.30, 'Momentum': 0.35}
+RANK_CONVICTION_DIVISOR = 25.0
+RANK_TOP_IDEAS_COUNT = 3
+
 # REFRESH TIME: 600 seconds = 10 minutes
 CACHE_TTL = 600 
 
