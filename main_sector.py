@@ -735,7 +735,7 @@ def run_sector_rotation_app(df_global=None):
     
     # --- FILTER BUILDER ---
     st.markdown("### 🔍 Custom Filters")
-    st.caption("Build up to 5 filters. Filters apply automatically as you change them.")
+    st.caption("Build up to 6 filters. Filters apply automatically as you change them.")
     
     # Filterable columns (numeric and categorical)
     numeric_columns = ["Price", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
@@ -760,13 +760,14 @@ def run_sector_rotation_app(df_global=None):
             1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
             2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
             3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gaining Momentum & Outperforming', 'logic': 'OR'},
-            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gaining Momentum & Underperforming'}
+            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gaining Momentum & Underperforming'},
+            5: {}  # 6th filter starts empty
         }
     
-    # Create 5 filter rows (always visible)
+    # Create 6 filter rows (always visible)
     filters = []
     
-    for i in range(5):
+    for i in range(6):
         cols = st.columns([0.20, 0.08, 0.22, 0.35, 0.15])
         
         # Get default for this filter if exists
@@ -980,7 +981,7 @@ def run_sector_rotation_app(df_global=None):
         
         with cols[4]:
             # Logic connector (except for last filter)
-            if i < 4 and column is not None:
+            if i < 5 and column is not None:
                 logic = st.radio(
                     "Logic",
                     ["AND", "OR"],
@@ -1005,35 +1006,11 @@ def run_sector_rotation_app(df_global=None):
             })
     
     # Clear filters button
-    if st.button("🗑️ Clear All Filters"):
-        # Clear all filter widget states
-        keys_to_clear = []
-        for i in range(5):
-            keys_to_clear.extend([
-                f"filter_{i}_column",
-                f"filter_{i}_operator",
-                f"filter_{i}_operator_cat",
-                f"filter_{i}_type",
-                f"filter_{i}_value",
-                f"filter_{i}_value_column",
-                f"filter_{i}_value_theme",
-                f"filter_{i}_value_category",
-                f"filter_{i}_value_div",
-                f"filter_{i}_value_8ema",
-                f"filter_{i}_value_21ema",
-                f"filter_{i}_value_50ma",
-                f"filter_{i}_value_200ma",
-                f"filter_{i}_logic"
-            ])
-        
-        for key in keys_to_clear:
-            if key in st.session_state:
+    if st.button("🗑️ Clear All Filters", key="clear_all_filters_btn", type="secondary"):
+        # Simply delete the default_filters_set flag to trigger reinitialization
+        for key in list(st.session_state.keys()):
+            if key.startswith('filter_') or key == 'default_filters_set':
                 del st.session_state[key]
-        
-        # Also clear the filters_set flag
-        if 'default_filters_set' in st.session_state:
-            del st.session_state['default_filters_set']
-        
         st.rerun()
     
     # Apply filters automatically
