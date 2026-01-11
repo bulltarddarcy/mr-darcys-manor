@@ -303,24 +303,28 @@ def run_pivot_tables_app(df):
         st.subheader("Calls Bought")
         tbl = ud.get_pivot_styled_view(df_cb_f)
         if not tbl.empty: 
-            st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
+            # UPDATED: column_config=ud.COLUMN_CONFIG_PIVOT
+            st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=ud.COLUMN_CONFIG_PIVOT)
             
     with row1_c2:
         st.subheader("Puts Sold")
         tbl = ud.get_pivot_styled_view(df_ps_f)
         if not tbl.empty: 
-            st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
+            # UPDATED: column_config=ud.COLUMN_CONFIG_PIVOT
+            st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=ud.COLUMN_CONFIG_PIVOT)
             
     with row1_c3:
         st.subheader("Puts Bought")
         tbl = ud.get_pivot_styled_view(df_pb_f)
         if not tbl.empty: 
-            st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
+            # UPDATED: column_config=ud.COLUMN_CONFIG_PIVOT
+            st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=ud.COLUMN_CONFIG_PIVOT)
     
     st.subheader("Risk Reversals")
     tbl_rr = ud.get_pivot_styled_view(df_rr_f, is_rr=True)
     if not tbl_rr.empty: 
-        st.dataframe(tbl_rr.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl_rr, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
+        # UPDATED: column_config=ud.COLUMN_CONFIG_PIVOT
+        st.dataframe(tbl_rr.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl_rr, max_rows=50), column_config=ud.COLUMN_CONFIG_PIVOT)
         st.markdown("<br><br>", unsafe_allow_html=True)
     else: 
         st.caption("No matched RR pairs found.")
