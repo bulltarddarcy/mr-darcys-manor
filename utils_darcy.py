@@ -941,3 +941,82 @@ def get_ticker_technicals(ticker: str, mapping: dict):
             return add_technicals(df)
         except Exception: return None
     return None
+
+# --- DATABASE APP HELPERS ---
+
+def initialize_database_state(max_date):
+    """Initializes session state variables for the Database app."""
+    defaults = {
+        'saved_db_ticker': "",
+        'saved_db_start': max_date,
+        'saved_db_end': max_date,
+        'saved_db_exp': (date.today() + timedelta(days=365)),
+        'saved_db_inc_cb': True,
+        'saved_db_inc_ps': True,
+        'saved_db_inc_pb': True
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+def filter_database_trades(df, ticker, start_date, end_date, exp_end, inc_cb, inc_ps, inc_pb):
+    """Filters the global dataframe based on UI inputs."""
+    if df.empty: return pd.DataFrame()
+
+    f = df.copy()
+    
+    # Date & Ticker Filters
+    if ticker: 
+        f = f[f["Symbol"].astype(str).str.upper().eq(ticker)]
+    if start_date: 
+        f = f[f["Trade Date"].dt.date >= start_date]
+    if end_date: 
+        f = f[f["Trade Date"].dt.date <= end_date]
+    if exp_end: 
+        f = f[f["Expiry_DT"].dt.date <= exp_end]
+    
+    # Order Type Logic
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    allowed_types = []
+    if inc_cb: allowed_types.append("Calls Bought")
+    if inc_ps: allowed_types.append("Puts Sold")
+    if inc_pb: allowed_types.append("Puts Bought")
+    
+    f = f[f[order_type_col].isin(allowed_types)]
+    
+    # Sort for display
+    return f.sort_values(by=["Trade Date", "Symbol"], ascending=[False, True])
+
+def _highlight_db_order_type(val):
+    """Internal styling function for order types."""
+    if val in ["Calls Bought", "Puts Sold"]: 
+        return 'background-color: rgba(113, 210, 138, 0.15); color: #71d28a; font-weight: 600;'
+    elif val == "Puts Bought": 
+        return 'background-color: rgba(242, 156, 160, 0.15); color: #f29ca0; font-weight: 600;'
+    return ''
+
+def get_database_styled_view(df):
+    """Prepares the Styler object for the database table."""
+    if df.empty: return df
+    
+    order_type_col = "Order Type" if "Order Type" in df.columns else "Order type"
+    display_cols = ["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
+    
+    # Create display copy to avoid modifying original dates in memory
+    f_display = df[display_cols].copy()
+    
+    # Format Dates for Display
+    if not pd.api.types.is_string_dtype(f_display["Trade Date"]):
+        f_display["Trade Date"] = f_display["Trade Date"].dt.strftime("%d %b %y")
+    
+    # Handle Expiry (check if it's already string or needs datetime conversion)
+    try:
+        f_display["Expiry"] = pd.to_datetime(f_display["Expiry"]).dt.strftime("%d %b %y")
+    except:
+        pass # Keep as is if conversion fails
+        
+    # Return Styler
+    return f_display.style.format({
+        "Dollars": "${:,.0f}", 
+        "Contracts": "{:,.0f}"
+    }).applymap(_highlight_db_order_type, subset=[order_type_col])
