@@ -1157,6 +1157,99 @@ def calculate_consensus_theme_score(
         logger.error(f"Error calculating consensus score: {e}")
         return None
 
+def calculate_days_in_category(df: pd.DataFrame) -> Dict[str, int]:
+    """
+    Calculate how many consecutive days a theme has been in its current category.
+    
+    Args:
+        df: Theme dataframe with RRG data
+        
+    Returns:
+        Dict with days_in_category and category_name
+    """
+    if df is None or df.empty or len(df) < 4:
+        return {'days': 0, 'category': 'Unknown'}
+    
+    try:
+        # Get last 20 days to look back
+        recent_days = df.tail(20)
+        
+        # Calculate category for each day
+        daily_categories = []
+        
+        for i in range(len(recent_days)):
+            if i < 3:
+                # Need at least 4 days to calculate trend
+                continue
+            
+            # Get last 4 days up to this point
+            window = recent_days.iloc[max(0, i-3):i+1]
+            
+            if len(window) < 4:
+                continue
+            
+            # Extract 10-day positions for last 4 days in window
+            positions_10d = []
+            for j in range(4):
+                row = window.iloc[j]
+                positions_10d.append({
+                    'ratio': row.get('RRG_Ratio_Med', 100),
+                    'momentum': row.get('RRG_Mom_Med', 100)
+                })
+            
+            # Calculate average of older 3 days
+            avg_ratio_old = (positions_10d[0]['ratio'] + positions_10d[1]['ratio'] + positions_10d[2]['ratio']) / 3
+            avg_momentum_old = (positions_10d[0]['momentum'] + positions_10d[1]['momentum'] + positions_10d[2]['momentum']) / 3
+            
+            # Compare today to average
+            today_ratio = positions_10d[3]['ratio']
+            today_momentum = positions_10d[3]['momentum']
+            
+            # Determine category
+            if today_ratio > avg_ratio_old:
+                perf = "outperforming"
+            else:
+                perf = "underperforming"
+            
+            if today_momentum > avg_momentum_old:
+                mom = "gaining"
+            else:
+                mom = "losing"
+            
+            category = f"{mom}_{perf}"
+            daily_categories.append(category)
+        
+        if not daily_categories:
+            return {'days': 0, 'category': 'Unknown'}
+        
+        # Count consecutive days in current category (starting from end)
+        current_category = daily_categories[-1]
+        consecutive_days = 1
+        
+        for i in range(len(daily_categories) - 2, -1, -1):
+            if daily_categories[i] == current_category:
+                consecutive_days += 1
+            else:
+                break
+        
+        # Convert to readable name
+        category_names = {
+            'gaining_outperforming': 'Gaining Momentum & Outperforming',
+            'gaining_underperforming': 'Gaining Momentum & Underperforming',
+            'losing_outperforming': 'Losing Momentum & Outperforming',
+            'losing_underperforming': 'Losing Momentum & Underperforming'
+        }
+        
+        return {
+            'days': consecutive_days,
+            'category': category_names.get(current_category, 'Unknown')
+        }
+        
+    except Exception as e:
+        logger.error(f"Error calculating days in category: {e}")
+        return {'days': 0, 'category': 'Unknown'}
+
+
 def get_momentum_performance_categories(
     etf_data_cache: Dict,
     theme_map: Dict
@@ -1273,6 +1366,9 @@ def get_momentum_performance_categories(
             # Build reason
             reason = f"10d: {momentum_direction.lower()} & {performance_direction.lower()}, {confirmation}"
             
+            # Calculate days in this category
+            days_info = calculate_days_in_category(df)
+            
             theme_info = {
                 'theme': theme,
                 'category': category_label,
@@ -1281,7 +1377,8 @@ def get_momentum_performance_categories(
                 'quadrant_10d': quad_10d,
                 'quadrant_20d': quad_20d,
                 'confirmation': confirmation,
-                'reason': reason
+                'reason': reason,
+                'days_in_category': days_info['days']
             }
             
             categories[bucket].append(theme_info)
