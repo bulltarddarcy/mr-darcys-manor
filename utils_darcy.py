@@ -1020,3 +1020,156 @@ def get_database_styled_view(df):
         "Dollars": "${:,.0f}", 
         "Contracts": "{:,.0f}"
     }).applymap(_highlight_db_order_type, subset=[order_type_col])
+
+# --- RANKINGS APP HELPERS ---
+
+def initialize_rankings_state(start_default, max_date):
+    """Initializes session state for Rankings app."""
+    defaults = {
+        'saved_rank_start': start_default,
+        'saved_rank_end': max_date,
+        'saved_rank_limit': 20,
+        'saved_rank_mc': "10B",
+        'saved_rank_ema': False
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+def filter_rankings_data(df, start_date, end_date):
+    """Filters data for the rankings period and valid order types."""
+    if df.empty: return pd.DataFrame()
+    
+    f = df.copy()
+    if start_date: f = f[f["Trade Date"].dt.date >= start_date]
+    if end_date: f = f[f["Trade Date"].dt.date <= end_date]
+    
+    # Filter for valid directional trades only
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
+    f = f[f[order_type_col].isin(target_types)]
+    
+    return f
+
+def generate_top_ideas(top_bulls_df, global_df):
+    """
+    Analyzes top bullish candidates to generate trade ideas.
+    Combines Smart Money score with Technical Analysis.
+    """
+    if top_bulls_df.empty: return []
+
+    candidates = []
+    bull_list = top_bulls_df["Symbol"].tolist()
+    
+    # Batch fetch technicals for speed
+    batch_results = fetch_technicals_batch(bull_list)
+    
+    # We use a progress bar here since this can take a moment
+    prog_bar = st.progress(0, text="Analyzing technicals...")
+    
+    for i, t in enumerate(bull_list):
+        prog_bar.progress((i + 1) / len(bull_list), text=f"Checking {t}...")
+        
+        # 1. Get Technical Data
+        data_tuple = batch_results.get(t)
+        t_df = data_tuple[4] if data_tuple else None
+
+        if t_df is None or t_df.empty:
+            t_df = fetch_yahoo_data(t)
+
+        # 2. Analyze
+        if t_df is not None and not t_df.empty:
+            # Retrieve the Smart Money Score calculated earlier
+            sm_row = top_bulls_df[top_bulls_df["Symbol"] == t]
+            sm_score = sm_row["Score"].iloc[0] if not sm_row.empty else 0
+            
+            # Run Trade Setup Analysis
+            tech_score, reasons, suggs = analyze_trade_setup(t, t_df, global_df)
+            
+            # Weighted Final Score: Smart Money (max 4pts) + Technicals (max ~6pts)
+            final_conviction = (sm_score / 25.0) + tech_score 
+            
+            price = t_df.iloc[-1].get('CLOSE') or t_df.iloc[-1].get('Close')
+            
+            candidates.append({
+                "Ticker": t,
+                "Score": final_conviction,
+                "Price": price,
+                "Reasons": reasons,
+                "Suggestions": suggs
+            })
+    
+    prog_bar.empty()
+    
+    # Return Top 3 Sorted by Score
+    return sorted(candidates, key=lambda x: x['Score'], reverse=True)[:3]
+
+def calculate_volume_rankings(f_filtered, mc_thresh, filter_ema, limit):
+    """
+    Calculates the 'Bulltard' style volume rankings.
+    Score = (Calls + Puts Sold) - (Puts Bought)
+    """
+    if f_filtered.empty: return pd.DataFrame(), pd.DataFrame()
+
+    order_type_col = "Order Type" if "Order Type" in f_filtered.columns else "Order type"
+    target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
+
+    # 1. Pivot Count
+    counts = f_filtered.groupby(["Symbol", order_type_col]).size().unstack(fill_value=0)
+    for col in target_types:
+        if col not in counts.columns: counts[col] = 0
+        
+    # 2. Calculate Score
+    scores_df = pd.DataFrame(index=counts.index)
+    scores_df["Score"] = counts["Calls Bought"] + counts["Puts Sold"] - counts["Puts Bought"]
+    scores_df["Trade Count"] = counts.sum(axis=1)
+    
+    # 3. Add Last Trade Date
+    last_trade_series = f_filtered.groupby("Symbol")["Trade Date"].max()
+    scores_df["Last Trade"] = last_trade_series.dt.strftime("%d %b %y")
+    
+    res = scores_df.reset_index()
+    
+    # 4. Map Market Caps
+    unique_ts = res["Symbol"].unique().tolist()
+    caps = fetch_market_caps_batch(unique_ts)
+    res["Market Cap"] = res["Symbol"].map(caps)
+    res = res[res["Market Cap"] >= mc_thresh]
+
+    # 5. Sort Lists
+    pre_bull_df = res.sort_values(by=["Score", "Trade Count"], ascending=[False, False])
+    pre_bear_df = res.sort_values(by=["Score", "Trade Count"], ascending=[True, False])
+
+    # 6. Apply EMA Filter (Helper)
+    def _apply_ema_limit(source_df, mode="Bull"):
+        if not filter_ema:
+            return source_df.head(limit)
+        
+        # Fetch extra candidates to account for filtering attrition
+        candidates = source_df.head(limit * 3)
+        final_list = []
+        needed_tickers = candidates["Symbol"].tolist()
+        
+        # Small batch fetch for just these candidates
+        mini_batch = fetch_technicals_batch(needed_tickers)
+        
+        for _, r in candidates.iterrows():
+            try:
+                # Tuple: (spot, ema8, ema21, sma200, history)
+                t_data = mini_batch.get(r["Symbol"], (None, None, None, None, None))
+                spot, ema8 = t_data[0], t_data[1]
+                
+                if spot and ema8:
+                    if mode == "Bull" and spot > ema8: final_list.append(r)
+                    elif mode == "Bear" and spot < ema8: final_list.append(r)
+            except: 
+                pass
+            
+            if len(final_list) >= limit: break
+        
+        return pd.DataFrame(final_list)
+
+    bull_df = _apply_ema_limit(pre_bull_df, "Bull")
+    bear_df = _apply_ema_limit(pre_bear_df, "Bear")
+    
+    return bull_df, bear_df
