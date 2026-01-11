@@ -162,10 +162,10 @@ def add_technicals(df):
     
     # Check if we already have the columns to avoid re-calc overhead
     cols = set(df.columns)
-    has_rsi = 'RSI' in cols or 'RSI_14' in cols
-    has_ema8 = 'EMA_8' in cols
-    has_ema21 = 'EMA_21' in cols
-    has_sma200 = 'SMA_200' in cols
+    has_rsi = 'RSI_14' in cols or 'RSI14' in cols 
+    has_ema8 = 'EMA_8' in cols or 'EMA8' in cols
+    has_ema21 = 'EMA_21' in cols or 'EMA21' in cols
+    has_sma200 = 'SMA_200' in cols or 'SMA200' in cols
     
     if has_rsi and has_ema8 and has_ema21 and has_sma200:
         return df
