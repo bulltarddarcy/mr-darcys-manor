@@ -185,9 +185,66 @@ def run_sector_rotation_app(df_global=None):
     view_key = timeframe_map[st.session_state.sector_view]
 
     # --- 6. RRG CHART ---
+    
+    # Get categories for filtering
+    categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
+    
+    # Category filter buttons
+    st.markdown("**Filter Chart by Category:**")
+    
+    # Row 1: All Themes button
+    if st.button("🎯 All Themes", use_container_width=False, key="filter_all"):
+        st.session_state.chart_filter = "all"
+        st.rerun()
+    
+    # Row 2: Category buttons
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⬈ Gaining Momentum & Outperforming", use_container_width=True, key="filter_gain_out"):
+            st.session_state.chart_filter = "gaining_mom_outperforming"
+            st.rerun()
+    with col2:
+        if st.button("⬉ Gaining Momentum & Underperforming", use_container_width=True, key="filter_gain_under"):
+            st.session_state.chart_filter = "gaining_mom_underperforming"
+            st.rerun()
+    
+    # Row 3: Category buttons
+    col3, col4 = st.columns(2)
+    with col3:
+        if st.button("⬊ Losing Momentum & Outperforming", use_container_width=True, key="filter_lose_out"):
+            st.session_state.chart_filter = "losing_mom_outperforming"
+            st.rerun()
+    with col4:
+        if st.button("⬋ Losing Momentum & Underperforming", use_container_width=True, key="filter_lose_under"):
+            st.session_state.chart_filter = "losing_mom_underperforming"
+            st.rerun()
+    
+    # Initialize filter if not set
+    if 'chart_filter' not in st.session_state:
+        st.session_state.chart_filter = "all"
+    
+    # Apply filter to theme map
+    if st.session_state.chart_filter == "all":
+        filtered_map_chart = filtered_map
+        st.caption(f"Showing all {len(filtered_map_chart)} themes")
+    else:
+        # Get themes in selected category
+        selected_themes = [t['theme'] for t in categories.get(st.session_state.chart_filter, [])]
+        filtered_map_chart = {k: v for k, v in filtered_map.items() if k in selected_themes}
+        
+        # Get category name for display
+        category_names = {
+            'gaining_mom_outperforming': '⬈ Gaining Momentum & Outperforming',
+            'gaining_mom_underperforming': '⬉ Gaining Momentum & Underperforming',
+            'losing_mom_outperforming': '⬊ Losing Momentum & Outperforming',
+            'losing_mom_underperforming': '⬋ Losing Momentum & Underperforming'
+        }
+        st.caption(f"Showing {len(filtered_map_chart)} themes in {category_names.get(st.session_state.chart_filter, 'category')}")
+    
+    # Display chart with filtered themes
     chart_placeholder = st.empty()
     with chart_placeholder:
-        fig = us.plot_simple_rrg(etf_data_cache, filtered_map, view_key, st.session_state.sector_trails)
+        fig = us.plot_simple_rrg(etf_data_cache, filtered_map_chart, view_key, st.session_state.sector_trails)
         chart_event = st.plotly_chart(
             fig,
             use_container_width=True,
@@ -217,24 +274,24 @@ def run_sector_rotation_app(df_global=None):
             
             Sectors are categorized based on their **10-day trend direction**:
             
-            **⬈ Gaining Momentum & Gaining Performance**
+            **⬈ Gaining Momentum & Outperforming**
             - Moving up AND right on RRG chart
-            - Both speeding up AND outperforming
-            → **Best opportunity** - sector accelerating
+            - Both accelerating AND outperforming benchmark
+            → **Best opportunity** - sector gaining strength
             
-            **⬉ Gaining Momentum & Losing Performance**
+            **⬉ Gaining Momentum & Underperforming**
             - Moving up but still on left side
-            - Speeding up but still underperforming
+            - Accelerating but still behind benchmark
             → **Potential reversal** - watch for breakout
             
-            **⬊ Losing Momentum & Gaining Performance**
+            **⬊ Losing Momentum & Outperforming**
             - Moving down but still on right side
-            - Slowing down but still outperforming
+            - Decelerating but still ahead of benchmark
             → **Topping** - take profits, avoid new entries
             
-            **⬋ Losing Momentum & Losing Performance**
+            **⬋ Losing Momentum & Underperforming**
             - Moving down AND left on RRG chart
-            - Both slowing down AND underperforming
+            - Both decelerating AND underperforming
             → **Avoid** - sector in decline
             
             ---
@@ -261,7 +318,7 @@ def run_sector_rotation_app(df_global=None):
             
             Each of the 4 main categories can have 3 confirmation states from the 5-day window.
             
-            ### 1. ⬈ Gaining Momentum & Gaining Performance
+            ### 1. ⬈ Gaining Momentum & Outperforming
             
             **Best case - sector improving on both axes**
             
@@ -285,9 +342,9 @@ def run_sector_rotation_app(df_global=None):
             
             ---
             
-            ### 2. ⬉ Gaining Momentum & Losing Performance
+            ### 2. ⬉ Gaining Momentum & Underperforming
             
-            **Bottoming - picking up speed but still underperforming**
+            **Bottoming - picking up speed but still behind benchmark**
             
             - **2a. 5d accelerating ahead** 🔄⭐
               - 10d: Moving up but left
@@ -309,9 +366,9 @@ def run_sector_rotation_app(df_global=None):
             
             ---
             
-            ### 3. ⬊ Losing Momentum & Gaining Performance
+            ### 3. ⬊ Losing Momentum & Outperforming
             
-            **Topping - still outperforming but slowing down**
+            **Topping - still ahead of benchmark but decelerating**
             
             - **3a. 5d accelerating ahead** ⚠️
               - 10d: Moving right but down
@@ -333,7 +390,7 @@ def run_sector_rotation_app(df_global=None):
             
             ---
             
-            ### 4. ⬋ Losing Momentum & Losing Performance
+            ### 4. ⬋ Losing Momentum & Underperforming
             
             **Worst case - decline on both axes**
             
@@ -373,12 +430,12 @@ def run_sector_rotation_app(df_global=None):
     # Get momentum/performance categories
     categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
     
-    # --- CATEGORY 1: Gaining Momentum & Gaining Performance ---
-    if categories['gaining_both']:
-        st.success(f"⬈ **GAINING MOMENTUM & GAINING PERFORMANCE** ({len(categories['gaining_both'])} sectors)")
+    # --- CATEGORY 1: Gaining Momentum & Outperforming ---
+    if categories['gaining_mom_outperforming']:
+        st.success(f"⬈ **GAINING MOMENTUM & OUTPERFORMING** ({len(categories['gaining_mom_outperforming'])} sectors)")
         
         data = []
-        for theme_info in categories['gaining_both']:
+        for theme_info in categories['gaining_mom_outperforming']:
             data.append({
                 "Sector": theme_info['theme'],
                 "Category": theme_info['arrow'] + " " + theme_info['category'],
@@ -395,14 +452,14 @@ def run_sector_rotation_app(df_global=None):
         )
         st.caption("✅ **Best Opportunities** - Sectors accelerating with momentum building")
     else:
-        st.info("⬈ **GAINING MOMENTUM & GAINING PERFORMANCE** - No sectors currently in this category")
+        st.info("⬈ **GAINING MOMENTUM & OUTPERFORMING** - No sectors currently in this category")
     
-    # --- CATEGORY 2: Gaining Momentum & Losing Performance ---
-    if categories['gaining_mom_losing_perf']:
-        st.info(f"⬉ **GAINING MOMENTUM & LOSING PERFORMANCE** ({len(categories['gaining_mom_losing_perf'])} sectors)")
+    # --- CATEGORY 2: Gaining Momentum & Underperforming ---
+    if categories['gaining_mom_underperforming']:
+        st.info(f"⬉ **GAINING MOMENTUM & UNDERPERFORMING** ({len(categories['gaining_mom_underperforming'])} sectors)")
         
         data = []
-        for theme_info in categories['gaining_mom_losing_perf']:
+        for theme_info in categories['gaining_mom_underperforming']:
             data.append({
                 "Sector": theme_info['theme'],
                 "Category": theme_info['arrow'] + " " + theme_info['category'],
@@ -419,14 +476,14 @@ def run_sector_rotation_app(df_global=None):
         )
         st.caption("🔄 **Potential Reversals** - Sectors bottoming, watch for breakout")
     else:
-        st.info("⬉ **GAINING MOMENTUM & LOSING PERFORMANCE** - No sectors currently in this category")
+        st.info("⬉ **GAINING MOMENTUM & UNDERPERFORMING** - No sectors currently in this category")
     
-    # --- CATEGORY 3: Losing Momentum & Gaining Performance ---
-    if categories['losing_mom_gaining_perf']:
-        st.warning(f"⬊ **LOSING MOMENTUM & GAINING PERFORMANCE** ({len(categories['losing_mom_gaining_perf'])} sectors)")
+    # --- CATEGORY 3: Losing Momentum & Outperforming ---
+    if categories['losing_mom_outperforming']:
+        st.warning(f"⬊ **LOSING MOMENTUM & OUTPERFORMING** ({len(categories['losing_mom_outperforming'])} sectors)")
         
         data = []
-        for theme_info in categories['losing_mom_gaining_perf']:
+        for theme_info in categories['losing_mom_outperforming']:
             data.append({
                 "Sector": theme_info['theme'],
                 "Category": theme_info['arrow'] + " " + theme_info['category'],
@@ -443,14 +500,14 @@ def run_sector_rotation_app(df_global=None):
         )
         st.caption("⚠️ **Topping** - Take profits, avoid new entries")
     else:
-        st.info("⬊ **LOSING MOMENTUM & GAINING PERFORMANCE** - No sectors currently in this category")
+        st.info("⬊ **LOSING MOMENTUM & OUTPERFORMING** - No sectors currently in this category")
     
-    # --- CATEGORY 4: Losing Momentum & Losing Performance ---
-    if categories['losing_both']:
-        st.error(f"⬋ **LOSING MOMENTUM & LOSING PERFORMANCE** ({len(categories['losing_both'])} sectors)")
+    # --- CATEGORY 4: Losing Momentum & Underperforming ---
+    if categories['losing_mom_underperforming']:
+        st.error(f"⬋ **LOSING MOMENTUM & UNDERPERFORMING** ({len(categories['losing_mom_underperforming'])} sectors)")
         
         data = []
-        for theme_info in categories['losing_both']:
+        for theme_info in categories['losing_mom_underperforming']:
             data.append({
                 "Sector": theme_info['theme'],
                 "Category": theme_info['arrow'] + " " + theme_info['category'],
@@ -467,7 +524,7 @@ def run_sector_rotation_app(df_global=None):
         )
         st.caption("❌ **Avoid** - Sectors declining on both metrics")
     else:
-        st.info("⬋ **LOSING MOMENTUM & LOSING PERFORMANCE** - No sectors currently in this category")
+        st.info("⬋ **LOSING MOMENTUM & UNDERPERFORMING** - No sectors currently in this category")
     
     st.markdown("---")
     
@@ -495,14 +552,14 @@ def run_sector_rotation_app(df_global=None):
     
     # Build theme -> category mapping
     theme_category_map = {}
-    for theme_info in categories.get('gaining_both', []):
-        theme_category_map[theme_info['theme']] = "⬈ Gaining Momentum & Gaining Performance"
-    for theme_info in categories.get('gaining_mom_losing_perf', []):
-        theme_category_map[theme_info['theme']] = "⬉ Gaining Momentum & Losing Performance"
-    for theme_info in categories.get('losing_mom_gaining_perf', []):
-        theme_category_map[theme_info['theme']] = "⬊ Losing Momentum & Gaining Performance"
-    for theme_info in categories.get('losing_both', []):
-        theme_category_map[theme_info['theme']] = "⬋ Losing Momentum & Losing Performance"
+    for theme_info in categories.get('gaining_mom_outperforming', []):
+        theme_category_map[theme_info['theme']] = "⬈ Gaining Momentum & Outperforming"
+    for theme_info in categories.get('gaining_mom_underperforming', []):
+        theme_category_map[theme_info['theme']] = "⬉ Gaining Momentum & Underperforming"
+    for theme_info in categories.get('losing_mom_outperforming', []):
+        theme_category_map[theme_info['theme']] = "⬊ Losing Momentum & Outperforming"
+    for theme_info in categories.get('losing_mom_underperforming', []):
+        theme_category_map[theme_info['theme']] = "⬋ Losing Momentum & Underperforming"
     
     # Filter stocks for selected theme(s)
     if selected_theme == "All":
