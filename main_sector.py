@@ -72,7 +72,7 @@ def run_sector_rotation_app(df_global=None):
         return
 
     if "sector_target" not in st.session_state or st.session_state.sector_target not in all_themes:
-        st.session_state.sector_target = all_themes[0]
+        st.session_state.sector_target = "All"  # Default to All instead of first theme
     
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
@@ -709,16 +709,44 @@ def run_sector_rotation_app(df_global=None):
     unique_themes = sorted(df_stocks['Theme'].unique().tolist())
     unique_categories = sorted(df_stocks['Theme Category'].unique().tolist())
     
+    # Initialize default filters on first load
+    if 'default_filters_set' not in st.session_state:
+        st.session_state.default_filters_set = True
+        st.session_state.filter_defaults = {
+            0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0},
+            1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
+            2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+            3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gaining Momentum & Outperforming', 'logic': 'OR'},
+            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gaining Momentum & Underperforming'}
+        }
+    
     # Create 5 filter rows (always visible)
     filters = []
     
     for i in range(5):
         cols = st.columns([0.20, 0.08, 0.22, 0.35, 0.15])
         
+        # Get default for this filter if exists
+        default = st.session_state.filter_defaults.get(i, {})
+        default_column = default.get('column')
+        default_operator = default.get('operator', '>=')
+        default_type = default.get('type', 'Number')
+        default_value = default.get('value', 0.0)
+        default_value_column = default.get('value_column', 'Alpha 10d')
+        default_value_cat = default.get('value_cat', '')
+        default_logic = default.get('logic', 'AND')
+        
         with cols[0]:
+            # Set default index
+            if default_column and default_column in all_filter_columns:
+                default_index = all_filter_columns.index(default_column) + 1
+            else:
+                default_index = 0
+            
             column = st.selectbox(
                 f"Filter {i+1} Column",
                 [None] + all_filter_columns,
+                index=default_index,
                 key=f"filter_{i}_column",
                 label_visibility="collapsed",
                 placeholder="Select column..."
@@ -733,6 +761,7 @@ def run_sector_rotation_app(df_global=None):
                 operator = st.selectbox(
                     "Operator",
                     [">=", "<="],
+                    index=0 if default_operator == '>=' else 1,
                     key=f"filter_{i}_operator",
                     label_visibility="collapsed",
                     disabled=column is None
@@ -742,6 +771,7 @@ def run_sector_rotation_app(df_global=None):
                 value_type = st.radio(
                     "Type",
                     ["Number", "Column"],
+                    index=0 if default_type == 'Number' else 1,
                     key=f"filter_{i}_type",
                     horizontal=True,
                     label_visibility="collapsed",
@@ -752,7 +782,7 @@ def run_sector_rotation_app(df_global=None):
                 if value_type == "Number":
                     value = st.number_input(
                         "Value",
-                        value=0.0,
+                        value=default_value,
                         step=0.1,
                         format="%.2f",
                         key=f"filter_{i}_value",
@@ -762,9 +792,16 @@ def run_sector_rotation_app(df_global=None):
                     value_column = None
                     value_categorical = None
                 else:  # Column
+                    # Get index for default column
+                    if default_value_column in numeric_columns:
+                        col_index = numeric_columns.index(default_value_column)
+                    else:
+                        col_index = 0
+                    
                     value_column = st.selectbox(
                         "Compare to",
                         numeric_columns,
+                        index=col_index,
                         key=f"filter_{i}_value_column",
                         label_visibility="collapsed",
                         disabled=column is None
@@ -788,16 +825,30 @@ def run_sector_rotation_app(df_global=None):
             
             with cols[3]:
                 if column == "Theme":
+                    # Get index for default
+                    if default_value_cat in unique_themes:
+                        cat_index = unique_themes.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    
                     value_categorical = st.selectbox(
                         "Select Theme",
                         unique_themes,
+                        index=cat_index,
                         key=f"filter_{i}_value_theme",
                         label_visibility="collapsed"
                     )
                 elif column == "Theme Category":
+                    # Get index for default
+                    if default_value_cat in unique_categories:
+                        cat_index = unique_categories.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    
                     value_categorical = st.selectbox(
                         "Select Category",
                         unique_categories,
+                        index=cat_index,
                         key=f"filter_{i}_value_category",
                         label_visibility="collapsed"
                     )
@@ -828,6 +879,7 @@ def run_sector_rotation_app(df_global=None):
                 logic = st.radio(
                     "Logic",
                     ["AND", "OR"],
+                    index=0 if default_logic == 'AND' else 1,
                     key=f"filter_{i}_logic",
                     horizontal=True,
                     label_visibility="collapsed"
@@ -849,6 +901,8 @@ def run_sector_rotation_app(df_global=None):
     
     # Clear filters button
     if st.button("🗑️ Clear All Filters"):
+        # Reset to defaults
+        st.session_state.default_filters_set = False
         st.rerun()
     
     # Apply filters automatically
