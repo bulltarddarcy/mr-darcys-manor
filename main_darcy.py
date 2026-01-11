@@ -25,7 +25,6 @@ from utils_darcy import (
 
 # --- 1. GLOBAL DATA LOADING & UTILITIES ---
 
-
 DATA_KEYS_PARQUET = get_parquet_config()
 
 # --- 2. APP MODULES ---
@@ -331,24 +330,16 @@ def run_pivot_tables_app(df):
 
 def run_strike_zones_app(df):
     st.title("📊 Strike Zones")
-    exp_range_default = (date.today() + timedelta(days=365))
     
-    if 'saved_sz_ticker' not in st.session_state: st.session_state.saved_sz_ticker = "AMZN"
-    if 'saved_sz_start' not in st.session_state: st.session_state.saved_sz_start = None
-    if 'saved_sz_end' not in st.session_state: st.session_state.saved_sz_end = None
-    if 'saved_sz_exp' not in st.session_state: st.session_state.saved_sz_exp = exp_range_default
-    if 'saved_sz_view' not in st.session_state: st.session_state.saved_sz_view = "Price Zones"
-    if 'saved_sz_width_mode' not in st.session_state: st.session_state.saved_sz_width_mode = "Auto"
-    if 'saved_sz_fixed' not in st.session_state: st.session_state.saved_sz_fixed = 10
-    if 'saved_sz_inc_cb' not in st.session_state: st.session_state.saved_sz_inc_cb = True
-    if 'saved_sz_inc_ps' not in st.session_state: st.session_state.saved_sz_inc_ps = True
-    if 'saved_sz_inc_pb' not in st.session_state: st.session_state.saved_sz_inc_pb = True
+    # 1. Initialize State via Utils
+    exp_range_default = (date.today() + timedelta(days=ud.SZ_DEFAULT_EXP_OFFSET))
+    ud.initialize_strike_zone_state(exp_range_default)
 
-    # FIX: Added safety check for key existence
     def save_sz_state(key, saved_key):
         if key in st.session_state:
             st.session_state[saved_key] = st.session_state[key]
     
+    # 2. UI Inputs
     col_settings, col_visuals = st.columns([1, 2.5], gap="large")
     
     with col_settings:
@@ -366,7 +357,7 @@ def run_strike_zones_app(df):
             width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], index=0 if st.session_state.saved_sz_width_mode == "Auto" else 1, label_visibility="collapsed", key="sz_width_mode", on_change=save_sz_state, args=("sz_width_mode", "saved_sz_width_mode"))
             if width_mode == "Fixed": 
                 fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=st.session_state.saved_sz_fixed, key="sz_fixed", on_change=save_sz_state, args=("sz_fixed", "saved_sz_fixed"))
-            else: fixed_size_choice = 10
+            else: fixed_size_choice = ud.SZ_DEFAULT_FIXED_SIZE
         
         with c_sub2:
             st.markdown("**Include**")
@@ -374,85 +365,60 @@ def run_strike_zones_app(df):
             inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_sz_inc_ps, key="sz_inc_ps", on_change=save_sz_state, args=("sz_inc_ps", "saved_sz_inc_ps"))
             inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_sz_inc_pb, key="sz_inc_pb", on_change=save_sz_state, args=("sz_inc_pb", "saved_sz_inc_pb"))
             
-        hide_empty = True
-        show_table = True
-    
     with col_visuals:
         chart_container = st.container()
 
-    f_base = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
-    if td_start: f_base = f_base[f_base["Trade Date"].dt.date >= td_start]
-    if td_end: f_base = f_base[f_base["Trade Date"].dt.date <= td_end]
-    today_val = date.today()
-    f_base = f_base[(f_base["Expiry_DT"].dt.date >= today_val) & (f_base["Expiry_DT"].dt.date <= exp_end)]
-    order_type_col = "Order Type" if "Order Type" in f_base.columns else "Order type"
-    
-    allowed_sz_types = []
-    if inc_cb: allowed_sz_types.append("Calls Bought")
-    if inc_ps: allowed_sz_types.append("Puts Sold")
-    if inc_pb: allowed_sz_types.append("Puts Bought")
-    
-    edit_pool_raw = f_base[f_base[order_type_col].isin(allowed_sz_types)].copy()
+    # 3. Filter Data via Utils
+    edit_pool_raw = ud.filter_strike_zone_data(df, ticker, td_start, td_end, exp_end, inc_cb, inc_ps, inc_pb)
     
     if edit_pool_raw.empty:
         with col_visuals:
             st.warning("No trades match current filters.")
         return
 
-    if "Include" not in edit_pool_raw.columns:
-        edit_pool_raw.insert(0, "Include", True)
+    # 4. Data Editor (UI Component)
+    # We keep this in main because it interacts directly with the user
+    order_type_col = "Order Type" if "Order Type" in edit_pool_raw.columns else "Order type"
+    editor_input = edit_pool_raw[["Include", "Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"]].copy()
     
-    if show_table:
-        editor_input = edit_pool_raw[["Include", "Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"]].copy()
-        
-        editor_input["Dollars"] = pd.to_numeric(editor_input["Dollars"], errors='coerce').fillna(0)
-        editor_input["Contracts"] = pd.to_numeric(editor_input["Contracts"], errors='coerce').fillna(0)
+    editor_input["Dollars"] = pd.to_numeric(editor_input["Dollars"], errors='coerce').fillna(0)
+    editor_input["Contracts"] = pd.to_numeric(editor_input["Contracts"], errors='coerce').fillna(0)
 
-        column_configuration = {
-            "Include": st.column_config.CheckboxColumn("Include", default=True),
-            "Trade Date": st.column_config.DateColumn("Trade Date", format="DD MMM YY"),
-            "Expiry_DT": st.column_config.DateColumn("Expiry", format="DD MMM YY"),
-            "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
-            "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
-            order_type_col: st.column_config.TextColumn("Order Type"),
-            "Symbol": st.column_config.TextColumn("Symbol"),
-            "Strike": st.column_config.TextColumn("Strike"),
-        }
-        
-        st.subheader("Data Table & Selection")
-        
-        edited_df = st.data_editor(
-            editor_input,
-            column_config=column_configuration,
-            disabled=["Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"],
-            hide_index=True,
-            use_container_width=True,
-            key="sz_editor"
-        )
-        f = edit_pool_raw[edited_df["Include"]].copy()
-        st.markdown("<br><br>", unsafe_allow_html=True)
-    else:
-        f = edit_pool_raw.copy()
+    column_configuration = {
+        "Include": st.column_config.CheckboxColumn("Include", default=True),
+        "Trade Date": st.column_config.DateColumn("Trade Date", format="DD MMM YY"),
+        "Expiry_DT": st.column_config.DateColumn("Expiry", format="DD MMM YY"),
+        "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
+        "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
+        order_type_col: st.column_config.TextColumn("Order Type"),
+        "Symbol": st.column_config.TextColumn("Symbol"),
+        "Strike": st.column_config.TextColumn("Strike"),
+    }
+    
+    st.subheader("Data Table & Selection")
+    
+    edited_df = st.data_editor(
+        editor_input,
+        column_config=column_configuration,
+        disabled=["Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"],
+        hide_index=True,
+        use_container_width=True,
+        key="sz_editor"
+    )
+    
+    # Apply Editor Mask
+    f_final = edit_pool_raw[edited_df["Include"]].copy()
+    st.markdown("<br><br>", unsafe_allow_html=True)
 
+    # 5. Render Chart via Utils
     with chart_container:
-        if f.empty:
+        if f_final.empty:
             st.info("No rows selected. Check the 'Include' boxes below.")
         else:
-            spot, ema8, ema21, sma200, history = get_stock_indicators(ticker)
+            # Get Technicals
+            spot, ema8, ema21, sma200 = ud.get_strike_zone_technicals(ticker)
             
-            if spot is None:
-                df_y = fetch_yahoo_data(ticker)
-                if df_y is not None and not df_y.empty:
-                    try:
-                        spot = float(df_y["CLOSE"].iloc[-1])
-                        ema8 = float(df_y["CLOSE"].ewm(span=8, adjust=False).mean().iloc[-1])
-                        ema21 = float(df_y["CLOSE"].ewm(span=21, adjust=False).mean().iloc[-1])
-                        sma200 = float(df_y["CLOSE"].rolling(window=200).mean().iloc[-1]) if len(df_y) >= 200 else None
-                    except: 
-                        pass
-
-            if spot is None: spot = 100.0
-
+            # Helper for badge text
             def pct_from_spot(x):
                 if x is None or np.isnan(x): return "—"
                 return f"{(x/spot-1)*100:+.1f}%"
@@ -463,82 +429,13 @@ def run_strike_zones_app(df):
             if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
             st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
 
-            f["Signed Dollars"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), 1, -1) * f["Dollars"].fillna(0.0)
-            
-            fmt_neg = lambda x: f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
-
+            # Generate HTML based on view mode
             if view_mode == "Price Zones":
-                strike_vals = f["Strike (Actual)"].values
-                strike_min, strike_max = float(np.nanmin(strike_vals)), float(np.nanmax(strike_vals))
-                if width_mode == "Auto": 
-                    denom = 12.0
-                    zone_w = float(next((s for s in [1, 2, 5, 10, 25, 50, 100] if s >= (max(1e-9, strike_max - strike_min) / denom)), 100))
-                else: zone_w = float(fixed_size_choice)
-                
-                n_dn = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w))
-                n_up = int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
-                
-                lower_edge = spot - n_dn * zone_w
-                total = max(1, n_dn + n_up)
-                
-                f["ZoneIdx"] = np.clip(
-                    np.floor((f["Strike (Actual)"] - lower_edge) / zone_w).astype(int), 
-                    0, 
-                    total - 1
-                )
-
-                agg = f.groupby("ZoneIdx").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
-                
-                zone_df = pd.DataFrame([(z, lower_edge + z*zone_w, lower_edge + (z+1)*zone_w) for z in range(total)], columns=["ZoneIdx","Zone_Low","Zone_High"])
-                zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
-                
-                if hide_empty: zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
-                
-                html_out = ['<div class="zones-panel">']
-                
-                max_val = max(1.0, zs["Net_Dollars"].abs().max())
-                sorted_zs = zs.sort_values("ZoneIdx", ascending=False)
-                
-                upper_zones = sorted_zs[sorted_zs["Zone_Low"] + (zone_w/2) > spot]
-                lower_zones = sorted_zs[sorted_zs["Zone_Low"] + (zone_w/2) <= spot]
-                
-                for _, r in upper_zones.iterrows():
-                    color = "zone-bull" if r["Net_Dollars"] >= 0 else "zone-bear"
-                    pct = (abs(r['Net_Dollars']) / max_val) * 100
-                    val_str = fmt_neg(r["Net_Dollars"])
-                    html_out.append(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-wrapper"><div class="zone-bar {color}" style="width:{pct:.1f}%"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div></div>')
-                
-                html_out.append(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>')
-                
-                for _, r in lower_zones.iterrows():
-                    color = "zone-bull" if r["Net_Dollars"] >= 0 else "zone-bear"
-                    pct = (abs(r['Net_Dollars']) / max_val) * 100
-                    val_str = fmt_neg(r["Net_Dollars"])
-                    html_out.append(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-wrapper"><div class="zone-bar {color}" style="width:{pct:.1f}%"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div></div>')
-                
-                html_out.append('</div>')
-                st.markdown("".join(html_out), unsafe_allow_html=True)
-                
+                html_code = ud.generate_price_zones_html(f_final, spot, width_mode, fixed_size_choice)
+                st.markdown(html_code, unsafe_allow_html=True)
             else:
-                e = f.copy()
-                days_diff = (pd.to_datetime(e["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days)
-                
-                new_bins = [0, 7, 30, 60, 90, 120, 180, 365, 10000]
-                new_labels = ["0-7d", "8-30d", "31-60d", "61-90d", "91-120d", "121-180d", "181-365d", ">365d"]
-                
-                e["Bucket"] = pd.cut(days_diff, bins=new_bins, labels=new_labels, include_lowest=True)
-                
-                agg = e.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()
-                
-                max_val = max(1.0, agg["Net_Dollars"].abs().max())
-                html_out = []
-                for _, r in agg.iterrows():
-                    color = "zone-bull" if r["Net_Dollars"] >= 0 else "zone-bear"
-                    pct = (abs(r['Net_Dollars']) / max_val) * 100
-                    val_str = fmt_neg(r["Net_Dollars"])
-                    html_out.append(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-wrapper"><div class="zone-bar {color}" style="width:{pct:.1f}%"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div></div>')
-                
-                st.markdown("".join(html_out), unsafe_allow_html=True)
+                html_code = ud.generate_expiry_buckets_html(f_final)
+                st.markdown(html_code, unsafe_allow_html=True)
             
             st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them in the Data Tables box below.")
 

@@ -40,6 +40,14 @@ PIVOT_NOTIONAL_MAP = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}
 PIVOT_MC_MAP = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}
 PIVOT_TABLE_FMT = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
 
+# --- CONSTANTS: STRIKE ZONES APP ---
+SZ_DEFAULT_EXP_OFFSET = 365
+SZ_DEFAULT_FIXED_SIZE = 10
+SZ_AUTO_WIDTH_DENOM = 12.0
+SZ_AUTO_STEPS = [1, 2, 5, 10, 25, 50, 100]
+SZ_BUCKET_BINS = [0, 7, 30, 60, 90, 120, 180, 365, 10000]
+SZ_BUCKET_LABELS = ["0-7d", "8-30d", "31-60d", "61-90d", "91-120d", "121-180d", "181-365d", ">365d"]
+
 # REFRESH TIME: 600 seconds = 10 minutes
 CACHE_TTL = 600 
 
@@ -1310,6 +1318,170 @@ COLUMN_CONFIG_PIVOT = {
     "Contracts": st.column_config.NumberColumn("Qty", width=None),
     "Dollars": st.column_config.NumberColumn("Dollars", width=None),
 }
+
+# --- STRIKE ZONES APP HELPERS ---
+
+def initialize_strike_zone_state(exp_default):
+    """Initializes session state for Strike Zones app."""
+    defaults = {
+        'saved_sz_ticker': "AMZN",
+        'saved_sz_start': None,
+        'saved_sz_end': None,
+        'saved_sz_exp': exp_default,
+        'saved_sz_view': "Price Zones",
+        'saved_sz_width_mode': "Auto",
+        'saved_sz_fixed': SZ_DEFAULT_FIXED_SIZE,
+        'saved_sz_inc_cb': True,
+        'saved_sz_inc_ps': True,
+        'saved_sz_inc_pb': True
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+def filter_strike_zone_data(df, ticker, start_date, end_date, exp_end, inc_cb, inc_ps, inc_pb):
+    """Filters the dataframe for the Strike Zones editor."""
+    f = df[df["Symbol"].astype(str).str.upper().eq(ticker)].copy()
+    if f.empty: return f
+
+    if start_date: f = f[f["Trade Date"].dt.date >= start_date]
+    if end_date: f = f[f["Trade Date"].dt.date <= end_date]
+    
+    # Expiry Filter (Today to End Range)
+    today_val = date.today()
+    f = f[(f["Expiry_DT"].dt.date >= today_val) & (f["Expiry_DT"].dt.date <= exp_end)]
+    
+    # Order Types
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    allowed = []
+    if inc_cb: allowed.append("Calls Bought")
+    if inc_ps: allowed.append("Puts Sold")
+    if inc_pb: allowed.append("Puts Bought")
+    
+    f = f[f[order_type_col].isin(allowed)].copy()
+    
+    # Initialize Include col for editor
+    if not f.empty and "Include" not in f.columns:
+        f.insert(0, "Include", True)
+        
+    return f
+
+def get_strike_zone_technicals(ticker):
+    """Retrieves technicals, falling back to Yahoo calculation if needed."""
+    spot, ema8, ema21, sma200, _ = get_stock_indicators(ticker)
+
+    if spot is None:
+        df_y = fetch_yahoo_data(ticker)
+        if df_y is not None and not df_y.empty:
+            try:
+                spot = float(df_y["CLOSE"].iloc[-1])
+                ema8 = float(df_y["CLOSE"].ewm(span=EMA8_PERIOD, adjust=False).mean().iloc[-1])
+                ema21 = float(df_y["CLOSE"].ewm(span=EMA21_PERIOD, adjust=False).mean().iloc[-1])
+                sma200 = float(df_y["CLOSE"].rolling(window=200).mean().iloc[-1]) if len(df_y) >= 200 else None
+            except: 
+                pass
+
+    if spot is None: spot = 100.0
+    return spot, ema8, ema21, sma200
+
+def generate_price_zones_html(df, spot, width_mode, fixed_size, hide_empty=True):
+    """Calculates price zones and returns the HTML string for the chart."""
+    f = df.copy()
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    
+    # Calculate Signed Dollars
+    f["Signed Dollars"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), 1, -1) * f["Dollars"].fillna(0.0)
+    
+    # Determine Zone Width
+    strike_vals = f["Strike (Actual)"].values
+    strike_min, strike_max = float(np.nanmin(strike_vals)), float(np.nanmax(strike_vals))
+    
+    if width_mode == "Auto": 
+        denom = SZ_AUTO_WIDTH_DENOM
+        raw_w = max(1e-9, strike_max - strike_min) / denom
+        # Find nearest step >= raw_w from constants
+        zone_w = float(next((s for s in SZ_AUTO_STEPS if s >= raw_w), 100))
+    else: 
+        zone_w = float(fixed_size)
+    
+    # Calculate Buckets relative to Spot
+    n_dn = int(math.ceil(max(0.0, (spot - strike_min)) / zone_w))
+    n_up = int(math.ceil(max(0.0, (strike_max - spot)) / zone_w))
+    
+    lower_edge = spot - n_dn * zone_w
+    total = max(1, n_dn + n_up)
+    
+    f["ZoneIdx"] = np.clip(
+        np.floor((f["Strike (Actual)"] - lower_edge) / zone_w).astype(int), 
+        0, 
+        total - 1
+    )
+
+    # Aggregation
+    agg = f.groupby("ZoneIdx").agg(
+        Net_Dollars=("Signed Dollars","sum"), 
+        Trades=("Signed Dollars","count")
+    ).reset_index()
+    
+    zone_df = pd.DataFrame([(z, lower_edge + z*zone_w, lower_edge + (z+1)*zone_w) for z in range(total)], columns=["ZoneIdx","Zone_Low","Zone_High"])
+    zs = zone_df.merge(agg, on="ZoneIdx", how="left").fillna(0)
+    
+    if hide_empty: 
+        zs = zs[~((zs["Trades"]==0) & (zs["Net_Dollars"].abs()<1e-6))]
+    
+    # Build HTML
+    html_out = ['<div class="zones-panel">']
+    max_val = max(1.0, zs["Net_Dollars"].abs().max())
+    sorted_zs = zs.sort_values("ZoneIdx", ascending=False)
+    
+    upper_zones = sorted_zs[sorted_zs["Zone_Low"] + (zone_w/2) > spot]
+    lower_zones = sorted_zs[sorted_zs["Zone_Low"] + (zone_w/2) <= spot]
+    
+    def _fmt_neg(x): return f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
+    
+    def _add_rows(rows):
+        for _, r in rows.iterrows():
+            color = "zone-bull" if r["Net_Dollars"] >= 0 else "zone-bear"
+            pct = (abs(r['Net_Dollars']) / max_val) * 100
+            val_str = _fmt_neg(r["Net_Dollars"])
+            html_out.append(f'<div class="zone-row"><div class="zone-label">${r.Zone_Low:.0f}-${r.Zone_High:.0f}</div><div class="zone-wrapper"><div class="zone-bar {color}" style="width:{pct:.1f}%"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div></div>')
+
+    _add_rows(upper_zones)
+    html_out.append(f'<div class="price-divider"><div class="price-badge">SPOT: ${spot:,.2f}</div></div>')
+    _add_rows(lower_zones)
+    
+    html_out.append('</div>')
+    return "".join(html_out)
+
+def generate_expiry_buckets_html(df):
+    """Calculates time buckets and returns the HTML string."""
+    f = df.copy()
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    
+    # Calculate Signed Dollars
+    f["Signed Dollars"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), 1, -1) * f["Dollars"].fillna(0.0)
+    
+    days_diff = (pd.to_datetime(f["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days)
+    
+    f["Bucket"] = pd.cut(days_diff, bins=SZ_BUCKET_BINS, labels=SZ_BUCKET_LABELS, include_lowest=True)
+    
+    agg = f.groupby("Bucket").agg(
+        Net_Dollars=("Signed Dollars","sum"), 
+        Trades=("Signed Dollars","count")
+    ).reset_index()
+    
+    max_val = max(1.0, agg["Net_Dollars"].abs().max())
+    html_out = []
+    
+    def _fmt_neg(x): return f"(${abs(x):,.0f})" if x < 0 else f"${x:,.0f}"
+
+    for _, r in agg.iterrows():
+        color = "zone-bull" if r["Net_Dollars"] >= 0 else "zone-bear"
+        pct = (abs(r['Net_Dollars']) / max_val) * 100
+        val_str = _fmt_neg(r["Net_Dollars"])
+        html_out.append(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-wrapper"><div class="zone-bar {color}" style="width:{pct:.1f}%"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div></div>')
+    
+    return "".join(html_out)
 
 
 
