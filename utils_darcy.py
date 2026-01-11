@@ -75,6 +75,19 @@ RSI_BOT_HOLD_PERIODS = [5, 10, 21, 42, 63, 126, 252]
 RSI_BOT_DCA_WINDOW_MAX = 10
 RSI_BOT_FILTERS_OPTS = ["Any", "Above", "Below"]
 
+# --- CONSTANTS: SEASONALITY APP ---
+SEAS_DEFAULT_LOOKBACK_YEARS = 10
+SEAS_SCAN_MIN_YEARS = 5
+SEAS_SCAN_MAX_YEARS = 20
+SEAS_SCAN_DEFAULT_YEARS = 10
+SEAS_SCAN_WINDOW_DAYS = 3  # +/- days for DOY matching
+SEAS_SCAN_MIN_SAMPLES = 3  # Min historical years required
+SEAS_SCAN_MC_OPTIONS = {"0B": 0, "2B": 2e9, "10B": 1e10, "50B": 5e10, "100B": 1e11}
+SEAS_SCAN_PERIODS = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
+SEAS_ARB_EV_THRESH = 3.0
+SEAS_ARB_RECENT_THRESH = -3.0
+SEAS_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
 # REFRESH TIME: 600 seconds = 10 minutes
 CACHE_TTL = 600 
 
@@ -1866,5 +1879,213 @@ def get_rsi_backtest_styled(df):
         .map(highlight_wr, subset=["Lump WR", "Optimal WR"])\
         .map(color_dd, subset=["Max DD", "Avg DD"])
 
+# --- SEASONALITY APP HELPERS ---
+
+def fmt_finance_str(val):
+    """Formats a float as a percentage string with parentheses for negatives."""
+    if pd.isna(val): return ""
+    if isinstance(val, str): return val
+    if val < 0: return f"({abs(val):.1f}%)"
+    return f"{val:.1f}%"
+
+def calculate_seasonality_stats(df, start_year, end_year):
+    """
+    Processes historical data to return Monthly Stats, Current Year performance,
+    and formatted DataFrames for charting.
+    """
+    if df is None or df.empty: return None
+
+    # Standardize columns
+    df.columns = [c.strip().upper() for c in df.columns]
+    date_col = next((c for c in df.columns if 'DATE' in c), None)
+    close_col = next((c for c in df.columns if 'CLOSE' in c), None)
+    
+    if not date_col or not close_col: return None
+
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df.set_index(date_col).sort_index()
+    
+    # Resample
+    df_monthly = df[close_col].resample('M').last()
+    df_pct = df_monthly.pct_change() * 100
+    
+    season_df = pd.DataFrame({
+        'Pct': df_pct,
+        'Year': df_pct.index.year,
+        'Month': df_pct.index.month
+    }).dropna()
+
+    today = date.today()
+    current_year = today.year
+    
+    # Filter History vs Current
+    hist_df = season_df[(season_df['Year'] >= start_year) & (season_df['Year'] <= end_year) & (season_df['Year'] < current_year)].copy()
+    curr_df = season_df[season_df['Year'] == current_year].copy()
+    
+    if hist_df.empty: return None
+
+    # Calculate Stats
+    avg_stats = hist_df.groupby('Month')['Pct'].mean().reindex(range(1, 13), fill_value=0)
+    win_rates = hist_df.groupby('Month')['Pct'].apply(lambda x: (x > 0).mean() * 100).reindex(range(1, 13), fill_value=0)
+    
+    return {
+        "hist_df": hist_df,
+        "curr_df": curr_df,
+        "avg_stats": avg_stats,
+        "win_rates": win_rates,
+        "season_df": season_df # returned for heatmap usage
+    }
+
+def prepare_seasonality_heatmap(hist_df, curr_df):
+    """Prepares the pivoted dataframe for the heatmap display."""
+    pivot_hist = hist_df.pivot(index='Year', columns='Month', values='Pct')
+    
+    if not curr_df.empty:
+        pivot_curr = curr_df.pivot(index='Year', columns='Month', values='Pct')
+        full_pivot = pd.concat([pivot_curr, pivot_hist])
+    else:
+        full_pivot = pivot_hist
+
+    # Ensure all months exist
+    full_pivot.columns = [SEAS_MONTH_NAMES[c-1] for c in full_pivot.columns]
+    for m in SEAS_MONTH_NAMES:
+        if m not in full_pivot.columns: full_pivot[m] = np.nan
+            
+    full_pivot = full_pivot[SEAS_MONTH_NAMES].sort_index(ascending=False)
+    
+    # Calc Year Total (Compounded)
+    full_pivot["Year Total"] = full_pivot.apply(
+        lambda x: ((1 + x/100).prod(skipna=True) - 1) * 100 if x.notna().any() else np.nan, 
+        axis=1
+    )
+    
+    # Calc Month Average Row
+    avg_row = full_pivot[SEAS_MONTH_NAMES].mean(axis=0)
+    avg_row["Year Total"] = full_pivot["Year Total"].mean()
+    avg_row.name = "Month Average"
+    
+    return pd.concat([full_pivot, avg_row.to_frame().T])
+
+def run_seasonality_scan(ticker_map, scan_date, scan_lookback, mc_thresh_val):
+    """
+    Multithreaded scanner for Seasonality opportunities.
+    Returns (results_df, csv_details_dict).
+    """
+    all_tickers = [k for k in ticker_map.keys() if not k.upper().endswith('_PARQUET')]
+    valid_tickers = []
+    
+    # 1. Filter by Market Cap
+    def check_mc(t):
+        if get_market_cap(t) < mc_thresh_val: return None
+        return t
+
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        futures = {executor.submit(check_mc, t): t for t in all_tickers}
+        for future in as_completed(futures):
+            res = future.result()
+            if res: valid_tickers.append(res)
+    
+    results = []
+    all_csv_rows = {k: [] for k in SEAS_SCAN_PERIODS.keys()}
+    
+    # 2. Scanner Logic
+    def calc_forward_returns(ticker_sym):
+        try:
+            d_df = fetch_history_optimized(ticker_sym, ticker_map)
+            if d_df is None or d_df.empty: return None, None
+            
+            d_df.columns = [c.strip().upper() for c in d_df.columns]
+            date_c = next((c for c in d_df.columns if 'DATE' in c), None)
+            close_c = next((c for c in d_df.columns if 'CLOSE' in c), None)
+            if not date_c or not close_c: return None, None
+            
+            d_df[date_c] = pd.to_datetime(d_df[date_c])
+            d_df = d_df.sort_values(date_c).reset_index(drop=True)
+            
+            cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
+            d_df_hist = d_df[d_df[date_c] >= cutoff].copy().reset_index(drop=True)
+            if len(d_df_hist) < 252: return None, None
+            
+            # Recent Perf (Last 21d)
+            recent_perf = 0.0
+            if len(d_df) > 21:
+                last_p = d_df[close_c].iloc[-1]
+                prev_p = d_df[close_c].iloc[-22] 
+                recent_perf = ((last_p - prev_p) / prev_p) * 100
+            
+            target_doy = scan_date.timetuple().tm_yday
+            d_df_hist['DOY'] = d_df_hist[date_c].dt.dayofyear
+            
+            # Match Window
+            matches = d_df_hist[(d_df_hist['DOY'] >= target_doy - SEAS_SCAN_WINDOW_DAYS) & 
+                                (d_df_hist['DOY'] <= target_doy + SEAS_SCAN_WINDOW_DAYS)].copy()
+            matches['Year'] = matches[date_c].dt.year
+            matches = matches.drop_duplicates(subset=['Year'])
+            curr_y = date.today().year
+            matches = matches[matches['Year'] < curr_y]
+            
+            if len(matches) < SEAS_SCAN_MIN_SAMPLES: return None, None
+            
+            stats_row = {'Ticker': ticker_sym, 'N': len(matches), 'Recent_21d': recent_perf}
+            
+            # Hist Lag Returns
+            hist_lag_returns = []
+            for idx in matches.index:
+                if idx >= 21:
+                    p_now = d_df_hist.loc[idx, close_c]
+                    p_prev = d_df_hist.loc[idx - 21, close_c]
+                    hist_lag_returns.append((p_now - p_prev) / p_prev)
+            
+            stats_row['Hist_Lag_21d'] = (np.mean(hist_lag_returns) * 100) if hist_lag_returns else 0.0
+            
+            ticker_csv_rows = {k: [] for k in SEAS_SCAN_PERIODS.keys()}
+            
+            for p_name, trading_days in SEAS_SCAN_PERIODS.items():
+                returns = []
+                for idx in matches.index:
+                    entry_p = d_df_hist.loc[idx, close_c]
+                    exit_idx = idx + trading_days
+                    if exit_idx < len(d_df_hist):
+                        exit_p = d_df_hist.loc[exit_idx, close_c]
+                        ret = (exit_p - entry_p) / entry_p
+                        returns.append(ret)
+                        
+                        ticker_csv_rows[p_name].append({
+                            "Ticker": ticker_sym,
+                            "Start Date": d_df_hist.loc[idx, date_c].date(),
+                            "Entry Price": entry_p,
+                            "Exit Date": d_df_hist.loc[exit_idx, date_c].date(),
+                            "Exit Price": exit_p,
+                            "Return (%)": ret * 100
+                        })
+                            
+                if returns:
+                    returns_arr = np.array(returns)
+                    avg_ret = np.mean(returns_arr) * 100
+                    win_r = np.mean(returns_arr > 0) * 100
+                    std_dev = np.std(returns_arr) * 100
+                    sharpe = avg_ret / std_dev if std_dev > 0.1 else 0.0
+                else:
+                    avg_ret = 0.0; win_r = 0.0; sharpe = 0.0
+                    
+                stats_row[f"{p_name}_EV"] = avg_ret
+                stats_row[f"{p_name}_WR"] = win_r
+                stats_row[f"{p_name}_Sharpe"] = sharpe
+                
+            return stats_row, ticker_csv_rows
+        except Exception:
+            return None, None
+
+    # Execute Scanner
+    with ThreadPoolExecutor(max_workers=20) as executor: 
+        futures = {executor.submit(calc_forward_returns, t): t for t in valid_tickers}
+        for future in as_completed(futures):
+            res_stats, res_details = future.result()
+            if res_stats: results.append(res_stats)
+            if res_details:
+                for k in all_csv_rows.keys():
+                    if res_details[k]: all_csv_rows[k].extend(res_details[k])
+                    
+    return pd.DataFrame(results) if results else pd.DataFrame(), all_csv_rows
 
 
