@@ -560,21 +560,48 @@ def run_sector_rotation_app(df_global=None):
     st.markdown("---")
 
     # --- 9. STOCK ANALYSIS WITH SCORING HELP ---
-    st.subheader(f"📊 {st.session_state.sector_target} - Stock Analysis")
+    st.subheader(f"📊 Stock Analysis")
     
-    # Get theme quadrant for reference
-    theme_etf_ticker = theme_map.get(st.session_state.sector_target)
-    theme_df = etf_data_cache.get(theme_etf_ticker)
-    theme_quadrant = us.get_quadrant_status(theme_df, 'Short') if theme_df is not None else "N/A"
+    # Theme selector with "All" option
+    all_themes = ["All"] + sorted(theme_map.keys())
+    selected_theme = st.selectbox(
+        "Select Theme",
+        all_themes,
+        index=0 if st.session_state.sector_target == "All" else all_themes.index(st.session_state.sector_target),
+        key="theme_selector"
+    )
     
-    # Filter stocks for current theme
-    stock_tickers = uni_df[
-        (uni_df['Theme'] == st.session_state.sector_target) & 
-        (uni_df['Role'] == 'Stock')
-    ]['Ticker'].tolist()
+    # Update session state
+    if selected_theme != st.session_state.sector_target:
+        st.session_state.sector_target = selected_theme
+    
+    # Get lifecycle categories for theme categorization
+    categories = us.get_actionable_theme_summary(etf_data_cache, theme_map)
+    
+    # Build theme -> category mapping
+    theme_category_map = {}
+    for theme_info in categories.get('early_stage', []):
+        theme_category_map[theme_info['theme']] = "Early Stage Leadership"
+    for theme_info in categories.get('established', []):
+        theme_category_map[theme_info['theme']] = "Established Leadership"
+    for theme_info in categories.get('topping', []):
+        theme_category_map[theme_info['theme']] = "Topping / Weakening"
+    for theme_info in categories.get('weak', []):
+        theme_category_map[theme_info['theme']] = "Weak / Lagging"
+    
+    # Filter stocks for selected theme(s)
+    if selected_theme == "All":
+        stock_tickers = uni_df[uni_df['Role'] == 'Stock']['Ticker'].tolist()
+        themes_to_process = theme_map.keys()
+    else:
+        stock_tickers = uni_df[
+            (uni_df['Theme'] == selected_theme) & 
+            (uni_df['Role'] == 'Stock')
+        ]['Ticker'].tolist()
+        themes_to_process = [selected_theme]
     
     if not stock_tickers:
-        st.info(f"No stocks found for {st.session_state.sector_target}")
+        st.info(f"No stocks found")
         return
     
     # Build data for all stocks
@@ -585,6 +612,12 @@ def run_sector_rotation_app(df_global=None):
             sdf = etf_data_cache.get(stock)
             
             if sdf is None or sdf.empty or len(sdf) < 20:
+                continue
+            
+            # Get stock's theme from universe
+            stock_theme = uni_df[uni_df['Ticker'] == stock]['Theme'].iloc[0] if stock in uni_df['Ticker'].values else None
+            
+            if stock_theme is None:
                 continue
             
             try:
@@ -598,13 +631,15 @@ def run_sector_rotation_app(df_global=None):
                 last = sdf.iloc[-1]
                 
                 # Get theme-specific metrics
-                alpha_5d = last.get(f"Alpha_Short_{st.session_state.sector_target}", 0)
-                alpha_10d = last.get(f"Alpha_Med_{st.session_state.sector_target}", 0)
-                alpha_20d = last.get(f"Alpha_Long_{st.session_state.sector_target}", 0)
-                beta = last.get(f"Beta_{st.session_state.sector_target}", 1.0)
+                alpha_5d = last.get(f"Alpha_Short_{stock_theme}", 0)
+                alpha_10d = last.get(f"Alpha_Med_{stock_theme}", 0)
+                alpha_20d = last.get(f"Alpha_Long_{stock_theme}", 0)
+                beta = last.get(f"Beta_{stock_theme}", 1.0)
                 
                 stock_data.append({
                     "Ticker": stock,
+                    "Theme": stock_theme,
+                    "Theme Category": theme_category_map.get(stock_theme, "Unknown"),
                     "Price": last['Close'],
                     "Beta": beta,
                     "Alpha 5d": alpha_5d,
@@ -624,96 +659,146 @@ def run_sector_rotation_app(df_global=None):
                 continue
 
     if not stock_data:
-        st.info(f"No stocks found for {st.session_state.sector_target} (or filtered by volume).")
+        st.info(f"No stocks found (or filtered by volume).")
         return
     
     df_stocks = pd.DataFrame(stock_data)
     
     # --- FILTER BUILDER ---
     st.markdown("### 🔍 Custom Filters")
-    st.caption("Build up to 5 filters. Click 'Apply Filters' to update the table.")
+    st.caption("Build up to 5 filters. Filters apply automatically as you change them.")
     
-    # Filterable columns
-    filter_columns = ["Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
+    # Filterable columns (numeric and categorical)
+    numeric_columns = ["Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
+    categorical_columns = ["Theme", "Theme Category"]
+    all_filter_columns = numeric_columns + categorical_columns
     
-    # Initialize filter state if not exists
-    if 'filter_configs' not in st.session_state:
-        st.session_state.filter_configs = [
-            {'column': None, 'operator': '>=', 'value_type': 'Number', 'value': 0.0, 'value_column': None, 'logic': 'AND'}
-            for _ in range(5)
-        ]
+    # Get unique values for categorical columns
+    unique_themes = sorted(df_stocks['Theme'].unique().tolist())
+    unique_categories = sorted(df_stocks['Theme Category'].unique().tolist())
     
     # Create 5 filter rows (always visible)
     filters = []
     
     for i in range(5):
-        cols = st.columns([0.18, 0.08, 0.22, 0.30, 0.12, 0.10])
+        cols = st.columns([0.20, 0.08, 0.22, 0.35, 0.15])
         
         with cols[0]:
             column = st.selectbox(
                 f"Filter {i+1} Column",
-                [None] + filter_columns,
+                [None] + all_filter_columns,
                 key=f"filter_{i}_column",
-                index=0 if st.session_state.filter_configs[i]['column'] is None else filter_columns.index(st.session_state.filter_configs[i]['column']) + 1,
                 label_visibility="collapsed",
                 placeholder="Select column..."
             )
         
-        with cols[1]:
-            operator = st.selectbox(
-                "Operator",
-                [">=", "<="],
-                key=f"filter_{i}_operator",
-                index=0 if st.session_state.filter_configs[i]['operator'] == '>=' else 1,
-                label_visibility="collapsed",
-                disabled=column is None
-            )
+        # Determine if column is numeric or categorical
+        is_numeric = column in numeric_columns
+        is_categorical = column in categorical_columns
         
-        with cols[2]:
-            value_type = st.radio(
-                "Type",
-                ["Number", "Column"],
-                key=f"filter_{i}_type",
-                index=0 if st.session_state.filter_configs[i]['value_type'] == 'Number' else 1,
-                horizontal=True,
-                label_visibility="collapsed",
-                disabled=column is None
-            )
-        
-        with cols[3]:
-            if value_type == "Number":
-                value = st.number_input(
-                    "Value",
-                    value=st.session_state.filter_configs[i]['value'] if isinstance(st.session_state.filter_configs[i]['value'], (int, float)) else 0.0,
-                    step=0.1,
-                    format="%.2f",
-                    key=f"filter_{i}_value",
+        if is_numeric:
+            with cols[1]:
+                operator = st.selectbox(
+                    "Operator",
+                    [">=", "<="],
+                    key=f"filter_{i}_operator",
                     label_visibility="collapsed",
                     disabled=column is None
                 )
-                value_column = None
-            else:  # Column
-                value_column = st.selectbox(
-                    "Compare to",
-                    filter_columns,
-                    key=f"filter_{i}_value_column",
-                    index=0 if st.session_state.filter_configs[i]['value_column'] is None else filter_columns.index(st.session_state.filter_configs[i]['value_column']),
+            
+            with cols[2]:
+                value_type = st.radio(
+                    "Type",
+                    ["Number", "Column"],
+                    key=f"filter_{i}_type",
+                    horizontal=True,
                     label_visibility="collapsed",
                     disabled=column is None
                 )
+            
+            with cols[3]:
+                if value_type == "Number":
+                    value = st.number_input(
+                        "Value",
+                        value=0.0,
+                        step=0.1,
+                        format="%.2f",
+                        key=f"filter_{i}_value",
+                        label_visibility="collapsed",
+                        disabled=column is None
+                    )
+                    value_column = None
+                    value_categorical = None
+                else:  # Column
+                    value_column = st.selectbox(
+                        "Compare to",
+                        numeric_columns,
+                        key=f"filter_{i}_value_column",
+                        label_visibility="collapsed",
+                        disabled=column is None
+                    )
+                    value = None
+                    value_categorical = None
+        
+        elif is_categorical:
+            # For categorical columns, show = operator and dropdown
+            with cols[1]:
+                operator = st.selectbox(
+                    "Operator",
+                    ["="],
+                    key=f"filter_{i}_operator_cat",
+                    label_visibility="collapsed",
+                    disabled=column is None
+                )
+            
+            with cols[2]:
+                st.write("")  # Placeholder
+            
+            with cols[3]:
+                if column == "Theme":
+                    value_categorical = st.selectbox(
+                        "Select Theme",
+                        unique_themes,
+                        key=f"filter_{i}_value_theme",
+                        label_visibility="collapsed"
+                    )
+                elif column == "Theme Category":
+                    value_categorical = st.selectbox(
+                        "Select Category",
+                        unique_categories,
+                        key=f"filter_{i}_value_category",
+                        label_visibility="collapsed"
+                    )
+                else:
+                    value_categorical = None
+                
                 value = None
+                value_column = None
+                value_type = "Categorical"
+        
+        else:
+            # No column selected
+            with cols[1]:
+                st.write("")
+            with cols[2]:
+                st.write("")
+            with cols[3]:
+                st.write("")
+            operator = None
+            value = None
+            value_column = None
+            value_categorical = None
+            value_type = None
         
         with cols[4]:
             # Logic connector (except for last filter)
-            if i < 4:
+            if i < 4 and column is not None:
                 logic = st.radio(
                     "Logic",
                     ["AND", "OR"],
                     key=f"filter_{i}_logic",
-                    index=0 if st.session_state.filter_configs[i]['logic'] == 'AND' else 1,
                     horizontal=True,
-                    label_visibility="collapsed",
-                    disabled=column is None
+                    label_visibility="collapsed"
                 )
             else:
                 logic = None
@@ -726,26 +811,18 @@ def run_sector_rotation_app(df_global=None):
                 'value_type': value_type,
                 'value': value,
                 'value_column': value_column,
+                'value_categorical': value_categorical,
                 'logic': logic
             })
     
-    # Buttons
-    col1, col2, col3 = st.columns([1, 1, 3])
-    with col1:
-        apply_clicked = st.button("✅ Apply Filters", type="primary")
-    with col2:
-        if st.button("🗑️ Clear All"):
-            # Reset all filter configs
-            st.session_state.filter_configs = [
-                {'column': None, 'operator': '>=', 'value_type': 'Number', 'value': 0.0, 'value_column': None, 'logic': 'AND'}
-                for _ in range(5)
-            ]
-            st.rerun()
+    # Clear filters button
+    if st.button("🗑️ Clear All Filters"):
+        st.rerun()
     
-    # Apply filters only when button clicked
+    # Apply filters automatically
     df_filtered = df_stocks.copy()
     
-    if apply_clicked and filters:
+    if filters:
         # Build filter conditions
         conditions = []
         
@@ -759,19 +836,25 @@ def run_sector_rotation_app(df_global=None):
                     condition = df_filtered[col] >= val
                 else:  # <=
                     condition = df_filtered[col] <= val
-            else:  # Column comparison
+            elif f['value_type'] == 'Column':
                 val_col = f['value_column']
                 if op == '>=':
                     condition = df_filtered[col] >= df_filtered[val_col]
                 else:  # <=
                     condition = df_filtered[col] <= df_filtered[val_col]
+            elif f['value_type'] == 'Categorical':
+                # Categorical comparison
+                val_cat = f['value_categorical']
+                condition = df_filtered[col] == val_cat
+            else:
+                continue
             
             conditions.append(condition)
         
         # Combine conditions with AND/OR logic
         if len(conditions) == 1:
             final_condition = conditions[0]
-        else:
+        elif len(conditions) > 1:
             final_condition = conditions[0]
             for i in range(1, len(conditions)):
                 logic = filters[i-1].get('logic', 'AND')
@@ -779,14 +862,8 @@ def run_sector_rotation_app(df_global=None):
                     final_condition = final_condition & conditions[i]
                 else:  # OR
                     final_condition = final_condition | conditions[i]
-        
-        df_filtered = df_filtered[final_condition]
-        
-        # Save current filter state
-        st.session_state.filter_configs = filters + [
-            {'column': None, 'operator': '>=', 'value_type': 'Number', 'value': 0.0, 'value_column': None, 'logic': 'AND'}
-            for _ in range(5 - len(filters))
-        ]
+            
+            df_filtered = df_filtered[final_condition]
     
     # Display results
     st.markdown("---")
@@ -795,6 +872,8 @@ def run_sector_rotation_app(df_global=None):
     # Column configuration
     column_config = {
         "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+        "Theme": st.column_config.TextColumn("Theme", width="medium"),
+        "Theme Category": st.column_config.TextColumn("Theme Category", width="medium"),
         "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
         "Beta": st.column_config.NumberColumn("Beta", format="%.2f"),
         "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
