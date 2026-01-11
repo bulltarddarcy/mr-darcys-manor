@@ -701,7 +701,7 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 5d": last.get('RVOL_Short', 0),
                     "RVOL 10d": last.get('RVOL_Med', 0),
                     "RVOL 20d": last.get('RVOL_Long', 0),
-                    "Days (20)": score_data.get('days_positive', 0),
+                    "Age": score_data.get('days_positive', 0),
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
                     "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
@@ -750,7 +750,7 @@ def run_sector_rotation_app(df_global=None):
         "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.2fx"),
         "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
         "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
-        "Days (20)": st.column_config.NumberColumn("Days (20)", format="%.0f", help="Days positive out of last 20 trading days"),
+        "Age": st.column_config.NumberColumn("Age", format="%.0f", help="Days outperforming sector in last 20 (low = fresh, high = mature)"),
         "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
         "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
         "50 MA": st.column_config.TextColumn("50 MA", width="small"),
@@ -819,15 +819,15 @@ def run_sector_rotation_app(df_global=None):
             - RVOL declining = Weak move ✗
             
             ### Maturity
-            - **Days (20):** How many days out of the last 20 trading days the stock had positive alpha
+            - **Age:** How many days out of the last 20 trading days the stock had positive alpha
             
             *Why this matters:*
-            - 3/20 days = Fresh (just starting) ✓ Best entries
-            - 10/20 days = Building (mid-stage) 
-            - 18/20 days = Mature/Extended (late stage) ✗ Too late
+            - 3 days = Fresh (just starting) ✓ Best entries
+            - 10 days = Building (mid-stage) 
+            - 18 days = Mature/Extended (late stage) ✗ Too late
             
             *This prevents false "fresh" signals:* A stock that ran for 15 days, pulled back 2 days, 
-            then bounced will show 18/20 days (correctly identified as extended), not 2 days 
+            then bounced will show Age 18 (correctly identified as extended), not Age 2 
             (which would falsely look fresh).
             
             ### Technical Position
@@ -842,23 +842,23 @@ def run_sector_rotation_app(df_global=None):
             
             1. **Category** - What type of setup
             2. **Score** - How good is the entry
-            3. **Alpha 5d** - Current momentum (want 0-2% for optimal entry)
-            4. **Days (20)** - Maturity (low = fresh, high = late)
+            3. **Alpha 5d** - Current momentum (want 0-3% for optimal entry)
+            4. **Age** - Maturity (low = fresh, high = late)
             5. **Pattern** - Any technical patterns detected
             
-            ### Key Insight: Alpha vs Days
+            ### Key Insight: Alpha vs Age
             
             **Scenario 1: Fresh Entry**
             - Alpha 5d: +1.2%
-            - Days: 3/20
+            - Age: 3
             - Translation: Just turned positive, very fresh! ✓
             
             **Scenario 2: Pullback in Extended Stock**
             - Alpha 5d: +1.5% (looks similar!)
-            - Days: 18/20 (extended!)
+            - Age: 18 (extended!)
             - Translation: Was +8%, pulled back, bouncing. NOT fresh! ✗
             
-            Days (20) prevents you from buying "dips" that are really just bounces in extended stocks.
+            Age prevents you from buying "dips" that are really just bounces in extended stocks.
             """)
     
     with tab2:
