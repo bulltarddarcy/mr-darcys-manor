@@ -631,109 +631,125 @@ def run_sector_rotation_app(df_global=None):
     
     # --- FILTER BUILDER ---
     st.markdown("### 🔍 Custom Filters")
-    st.caption("Build up to 3 filters. Filters apply automatically as you change them.")
-    
-    # Initialize filter state
-    if 'filters_enabled' not in st.session_state:
-        st.session_state.filters_enabled = [False, False, False]
+    st.caption("Build up to 5 filters. Click 'Apply Filters' to update the table.")
     
     # Filterable columns
     filter_columns = ["Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
     
-    # Create 3 filter rows
+    # Initialize filter state if not exists
+    if 'filter_configs' not in st.session_state:
+        st.session_state.filter_configs = [
+            {'column': None, 'operator': '>=', 'value_type': 'Number', 'value': 0.0, 'value_column': None, 'logic': 'AND'}
+            for _ in range(5)
+        ]
+    
+    # Create 5 filter rows (always visible)
     filters = []
     
-    for i in range(3):
-        cols = st.columns([0.12, 0.18, 0.08, 0.22, 0.25, 0.15])
+    for i in range(5):
+        cols = st.columns([0.18, 0.08, 0.22, 0.30, 0.12, 0.10])
         
         with cols[0]:
-            enabled = st.checkbox(f"#{i+1}", value=st.session_state.filters_enabled[i], key=f"filter_{i}_enabled")
-            st.session_state.filters_enabled[i] = enabled
+            column = st.selectbox(
+                f"Filter {i+1} Column",
+                [None] + filter_columns,
+                key=f"filter_{i}_column",
+                index=0 if st.session_state.filter_configs[i]['column'] is None else filter_columns.index(st.session_state.filter_configs[i]['column']) + 1,
+                label_visibility="collapsed",
+                placeholder="Select column..."
+            )
         
-        if enabled:
-            with cols[1]:
-                column = st.selectbox(
-                    "Column",
+        with cols[1]:
+            operator = st.selectbox(
+                "Operator",
+                [">=", "<="],
+                key=f"filter_{i}_operator",
+                index=0 if st.session_state.filter_configs[i]['operator'] == '>=' else 1,
+                label_visibility="collapsed",
+                disabled=column is None
+            )
+        
+        with cols[2]:
+            value_type = st.radio(
+                "Type",
+                ["Number", "Column"],
+                key=f"filter_{i}_type",
+                index=0 if st.session_state.filter_configs[i]['value_type'] == 'Number' else 1,
+                horizontal=True,
+                label_visibility="collapsed",
+                disabled=column is None
+            )
+        
+        with cols[3]:
+            if value_type == "Number":
+                value = st.number_input(
+                    "Value",
+                    value=st.session_state.filter_configs[i]['value'] if isinstance(st.session_state.filter_configs[i]['value'], (int, float)) else 0.0,
+                    step=0.1,
+                    format="%.2f",
+                    key=f"filter_{i}_value",
+                    label_visibility="collapsed",
+                    disabled=column is None
+                )
+                value_column = None
+            else:  # Column
+                value_column = st.selectbox(
+                    "Compare to",
                     filter_columns,
-                    key=f"filter_{i}_column",
-                    label_visibility="collapsed"
+                    key=f"filter_{i}_value_column",
+                    index=0 if st.session_state.filter_configs[i]['value_column'] is None else filter_columns.index(st.session_state.filter_configs[i]['value_column']),
+                    label_visibility="collapsed",
+                    disabled=column is None
                 )
-            
-            with cols[2]:
-                operator = st.selectbox(
-                    "Op",
-                    [">=", "<="],
-                    key=f"filter_{i}_operator",
-                    label_visibility="collapsed"
-                )
-            
-            with cols[3]:
-                value_type = st.radio(
-                    "Type",
-                    ["Number", "Column"],
-                    key=f"filter_{i}_type",
+                value = None
+        
+        with cols[4]:
+            # Logic connector (except for last filter)
+            if i < 4:
+                logic = st.radio(
+                    "Logic",
+                    ["AND", "OR"],
+                    key=f"filter_{i}_logic",
+                    index=0 if st.session_state.filter_configs[i]['logic'] == 'AND' else 1,
                     horizontal=True,
-                    label_visibility="collapsed"
+                    label_visibility="collapsed",
+                    disabled=column is None
                 )
-            
-            with cols[4]:
-                if value_type == "Number":
-                    value = st.number_input(
-                        "Value",
-                        value=0.0,
-                        step=0.1,
-                        format="%.2f",
-                        key=f"filter_{i}_value",
-                        label_visibility="collapsed"
-                    )
-                else:  # Column
-                    value = st.selectbox(
-                        "Compare to",
-                        filter_columns,
-                        key=f"filter_{i}_value_column",
-                        label_visibility="collapsed"
-                    )
-            
-            with cols[5]:
-                # Logic connector (except for last filter)
-                if i < 2:
-                    logic = st.radio(
-                        "Logic",
-                        ["AND", "OR"],
-                        key=f"filter_{i}_logic",
-                        horizontal=True,
-                        label_visibility="collapsed"
-                    )
-                else:
-                    logic = None
-            
+            else:
+                logic = None
+        
+        # Store filter config (only if column is selected)
+        if column is not None:
             filters.append({
-                'enabled': True,
                 'column': column,
                 'operator': operator,
                 'value_type': value_type,
                 'value': value,
+                'value_column': value_column,
                 'logic': logic
             })
-        else:
-            filters.append({'enabled': False})
     
-    # Clear filters button
+    # Buttons
     col1, col2, col3 = st.columns([1, 1, 3])
     with col1:
+        apply_clicked = st.button("✅ Apply Filters", type="primary")
+    with col2:
         if st.button("🗑️ Clear All"):
-            st.session_state.filters_enabled = [False, False, False]
+            # Reset all filter configs
+            st.session_state.filter_configs = [
+                {'column': None, 'operator': '>=', 'value_type': 'Number', 'value': 0.0, 'value_column': None, 'logic': 'AND'}
+                for _ in range(5)
+            ]
             st.rerun()
     
-    # Apply filters
+    # Apply filters only when button clicked
     df_filtered = df_stocks.copy()
-    active_filters = [f for f in filters if f.get('enabled')]
     
-    if active_filters:
+    if apply_clicked and filters:
         # Build filter conditions
         conditions = []
         
-        for f in active_filters:
+        for f in filters:
             col = f['column']
             op = f['operator']
             
@@ -744,7 +760,7 @@ def run_sector_rotation_app(df_global=None):
                 else:  # <=
                     condition = df_filtered[col] <= val
             else:  # Column comparison
-                val_col = f['value']
+                val_col = f['value_column']
                 if op == '>=':
                     condition = df_filtered[col] >= df_filtered[val_col]
                 else:  # <=
@@ -758,13 +774,19 @@ def run_sector_rotation_app(df_global=None):
         else:
             final_condition = conditions[0]
             for i in range(1, len(conditions)):
-                logic = active_filters[i-1].get('logic', 'AND')
+                logic = filters[i-1].get('logic', 'AND')
                 if logic == 'AND':
                     final_condition = final_condition & conditions[i]
                 else:  # OR
                     final_condition = final_condition | conditions[i]
         
         df_filtered = df_filtered[final_condition]
+        
+        # Save current filter state
+        st.session_state.filter_configs = filters + [
+            {'column': None, 'operator': '>=', 'value_type': 'Number', 'value': 0.0, 'value_column': None, 'logic': 'AND'}
+            for _ in range(5 - len(filters))
+        ]
     
     # Display results
     st.markdown("---")
