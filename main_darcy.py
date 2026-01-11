@@ -213,26 +213,18 @@ def run_rankings_app(df):
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
-    max_data_date = get_max_trade_date(df)
-            
-    col_filters, col_calculator = st.columns([1, 1], gap="medium")
+    max_data_date = ud.get_max_trade_date(df)
     
-    if 'saved_pv_start' not in st.session_state: st.session_state.saved_pv_start = max_data_date
-    if 'saved_pv_end' not in st.session_state: st.session_state.saved_pv_end = max_data_date
-    if 'saved_pv_ticker' not in st.session_state: st.session_state.saved_pv_ticker = ""
-    if 'saved_pv_notional' not in st.session_state: st.session_state.saved_pv_notional = "0M"
-    if 'saved_pv_mkt_cap' not in st.session_state: st.session_state.saved_pv_mkt_cap = "0B"
-    if 'saved_pv_ema' not in st.session_state: st.session_state.saved_pv_ema = "All"
-    
-    if 'saved_calc_strike' not in st.session_state: st.session_state.saved_calc_strike = 100.0
-    if 'saved_calc_premium' not in st.session_state: st.session_state.saved_calc_premium = 2.50
-    if 'saved_calc_expiry' not in st.session_state: st.session_state.saved_calc_expiry = date.today() + timedelta(days=30)
+    # 1. Initialize State via Utils
+    ud.initialize_pivot_state(max_data_date, max_data_date)
 
-    # FIX: Added safety check for key existence
     def save_pv_state(key, saved_key):
         if key in st.session_state:
             st.session_state[saved_key] = st.session_state[key]
 
+    # 2. UI: Filters & Calculator
+    col_filters, col_calculator = st.columns([1, 1], gap="medium")
+    
     with col_filters:
         st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>🔍 Filters</h4>", unsafe_allow_html=True)
         fc1, fc2, fc3 = st.columns(3)
@@ -245,18 +237,20 @@ def run_pivot_tables_app(df):
         
         fc4, fc5, fc6 = st.columns(3)
         with fc4: 
-            opts_not = ["0M", "5M", "10M", "50M", "100M"]
+            # Use Keys from Constants
+            opts_not = list(ud.PIVOT_NOTIONAL_MAP.keys())
             curr_not = st.session_state.saved_pv_notional
             idx_not = opts_not.index(curr_not) if curr_not in opts_not else 0
             sel_not = st.selectbox("Min Dollars", options=opts_not, index=idx_not, key="pv_notional", on_change=save_pv_state, args=("pv_notional", "saved_pv_notional"))
-            min_notional = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}[sel_not]
+            min_notional = ud.PIVOT_NOTIONAL_MAP[sel_not]
             
         with fc5: 
-            opts_mc = ["0B", "10B", "50B", "100B", "200B", "500B", "1T"]
+            # Use Keys from Constants
+            opts_mc = list(ud.PIVOT_MC_MAP.keys())
             curr_mc = st.session_state.saved_pv_mkt_cap
             idx_mc = opts_mc.index(curr_mc) if curr_mc in opts_mc else 0
             sel_mc = st.selectbox("Mkt Cap Min", options=opts_mc, index=idx_mc, key="pv_mkt_cap", on_change=save_pv_state, args=("pv_mkt_cap", "saved_pv_mkt_cap"))
-            min_mkt_cap = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}[sel_mc]
+            min_mkt_cap = ud.PIVOT_MC_MAP[sel_mc]
             
         with fc6: 
             opts_ema = ["All", "Yes"]
@@ -296,102 +290,47 @@ def run_pivot_tables_app(df):
     st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Market Cap filtering can be buggy. If empty, reset \'Mkt Cap Min\' to 0B.</div>', unsafe_allow_html=True)
     st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Scroll down to see the Risk Reversals table.</div>', unsafe_allow_html=True)
 
+    # 3. Data Processing via Utils
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
-    # --- FIX: Replaced 'f' with 'df' ---
-    order_type_col = "Order Type" if "Order Type" in df.columns else "Order type"
+    # Helper: Split & Match RR
+    cb_pool, ps_pool, pb_pool, df_rr = ud.generate_pivot_pools(d_range)
+
+    # Helper: Apply Filters
+    df_cb_f = ud.filter_pivot_dataframe(cb_pool, ticker_filter, min_notional, min_mkt_cap, ema_filter)
+    df_ps_f = ud.filter_pivot_dataframe(ps_pool, ticker_filter, min_notional, min_mkt_cap, ema_filter)
+    df_pb_f = ud.filter_pivot_dataframe(pb_pool, ticker_filter, min_notional, min_mkt_cap, ema_filter)
+    df_rr_f = ud.filter_pivot_dataframe(df_rr, ticker_filter, min_notional, min_mkt_cap, ema_filter)
+
+    # 4. Display Tables
+    row1_c1, row1_c2, row1_c3 = st.columns(3)
     
-    cb_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy()
-    ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
-    pb_pool = d_range[d_range[order_type_col] == "Puts Bought"].copy()
-    
-    keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
-    cb_pool['occ'], ps_pool['occ'] = cb_pool.groupby(keys).cumcount(), ps_pool.groupby(keys).cumcount()
-    rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
-    
-    if not rr_matches.empty:
-        rr_c = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_c', 'Strike_c']].copy()
-        rr_c.rename(columns={'Dollars_c': 'Dollars', 'Strike_c': 'Strike'}, inplace=True)
-        rr_c['Pair_ID'] = rr_matches.index
-        rr_c['Pair_Side'] = 0
-        
-        rr_p = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_p', 'Strike_p']].copy()
-        rr_p.rename(columns={'Dollars_p': 'Dollars', 'Strike_p': 'Strike'}, inplace=True)
-        rr_p['Pair_ID'] = rr_matches.index
-        rr_p['Pair_Side'] = 1
-        
-        df_rr = pd.concat([rr_c, rr_p])
-        df_rr['Strike'] = df_rr['Strike'].apply(clean_strike_fmt)
-        
-        match_keys = keys + ['occ']
-        def filter_out_matches(pool, matches):
-            temp_matches = matches[match_keys].copy()
-            temp_matches['_remove'] = True
-            merged = pool.merge(temp_matches, on=match_keys, how='left')
-            return merged[merged['_remove'].isna()].drop(columns=['_remove'])
-        cb_pool = filter_out_matches(cb_pool, rr_matches)
-        ps_pool = filter_out_matches(ps_pool, rr_matches)
-    else:
-        df_rr = pd.DataFrame(columns=['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars', 'Strike', 'Pair_ID', 'Pair_Side'])
-
-    def apply_f(data):
-        if data.empty: return data
-        f = data.copy()
-        if ticker_filter: f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
-        f = f[f["Dollars"] >= min_notional]
-        
-        if not f.empty:
-            unique_symbols = f["Symbol"].unique()
-            valid_symbols = set(unique_symbols)
-            
-            if min_mkt_cap > 0:
-                valid_symbols = {s for s in valid_symbols if get_market_cap(s) >= float(min_mkt_cap)}
-            
-            if ema_filter == "Yes":
-                batch_results = fetch_technicals_batch(list(valid_symbols))
-                valid_symbols = {
-                    s for s in valid_symbols 
-                    if batch_results.get(s, (None, None))[2] is None or 
-                    (batch_results[s][0] is not None and batch_results[s][2] is not None and batch_results[s][0] > batch_results[s][2])
-                }
-            
-            f = f[f["Symbol"].isin(valid_symbols)]
-            
-        return f
-
-    df_cb_f, df_ps_f, df_pb_f, df_rr_f = apply_f(cb_pool), apply_f(ps_pool), apply_f(pb_pool), apply_f(df_rr)
-
-    def get_p(data, is_rr=False):
-        if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
-        sr = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
-        if is_rr: piv = data.merge(sr, on="Symbol").sort_values(by=["Total_Sym_Dollars", "Pair_ID", "Pair_Side"], ascending=[False, True, True])
-        else:
-            piv = data.groupby(["Symbol", "Strike", "Expiry_DT"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index().merge(sr, on="Symbol")
-            piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
-        piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
-        
-        piv["Symbol_Display"] = np.where(piv["Symbol"] == piv["Symbol"].shift(1), "", piv["Symbol"])
-        
-        return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
-
-    row1_c1, row1_c2, row1_c3 = st.columns(3); fmt = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
     with row1_c1:
-        st.subheader("Calls Bought"); tbl = get_p(df_cb_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
+        st.subheader("Calls Bought")
+        tbl = ud.get_pivot_styled_view(df_cb_f)
+        if not tbl.empty: 
+            st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
+            
     with row1_c2:
-        st.subheader("Puts Sold"); tbl = get_p(df_ps_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
+        st.subheader("Puts Sold")
+        tbl = ud.get_pivot_styled_view(df_ps_f)
+        if not tbl.empty: 
+            st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
+            
     with row1_c3:
-        st.subheader("Puts Bought"); tbl = get_p(df_pb_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
+        st.subheader("Puts Bought")
+        tbl = ud.get_pivot_styled_view(df_pb_f)
+        if not tbl.empty: 
+            st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
     
     st.subheader("Risk Reversals")
-    tbl_rr = get_p(df_rr_f, is_rr=True)
+    tbl_rr = ud.get_pivot_styled_view(df_rr_f, is_rr=True)
     if not tbl_rr.empty: 
-        st.dataframe(tbl_rr.style.format(fmt).map(highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=get_table_height(tbl_rr, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
+        st.dataframe(tbl_rr.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl_rr, max_rows=50), column_config=COLUMN_CONFIG_PIVOT)
         st.markdown("<br><br>", unsafe_allow_html=True)
-    else: st.caption("No matched RR pairs found.")
+    else: 
+        st.caption("No matched RR pairs found.")
 
 def run_strike_zones_app(df):
     st.title("📊 Strike Zones")

@@ -36,8 +36,9 @@ RANK_CONVICTION_DIVISOR = 25.0
 RANK_TOP_IDEAS_COUNT = 3
 
 # --- CONSTANTS: PIVOT APP ---
-PIVOT_LOOKBACK_DAYS = 7
-PIVOT_MIN_TRADES = 1
+PIVOT_NOTIONAL_MAP = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}
+PIVOT_MC_MAP = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}
+PIVOT_TABLE_FMT = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
 
 # REFRESH TIME: 600 seconds = 10 minutes
 CACHE_TTL = 600 
@@ -1183,5 +1184,123 @@ def calculate_volume_rankings(f_filtered, mc_thresh, filter_ema, limit):
 
 # --- PIVOT APP HELPERS ---
 
+def initialize_pivot_state(start_default, max_date):
+    """Initializes session state for Pivot app."""
+    defaults = {
+        'saved_pv_start': max_date,
+        'saved_pv_end': max_date,
+        'saved_pv_ticker': "",
+        'saved_pv_notional': "0M",
+        'saved_pv_mkt_cap': "0B",
+        'saved_pv_ema': "All",
+        'saved_calc_strike': 100.0,
+        'saved_calc_premium': 2.50,
+        'saved_calc_expiry': date.today() + timedelta(days=30)
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+def generate_pivot_pools(d_range):
+    """
+    Splits data into pools and identifies Risk Reversals (Matched Calls/Puts).
+    Replicates original logic: Matches 'Calls Bought' with 'Puts Sold' by Symbol/Date/Expiry.
+    """
+    order_type_col = "Order Type" if "Order Type" in d_range.columns else "Order type"
+    
+    cb_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy()
+    ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
+    pb_pool = d_range[d_range[order_type_col] == "Puts Bought"].copy()
+    
+    # Risk Reversal Matching Logic
+    keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
+    
+    # Use groupby cumcount to handle multiple identical trades on same day
+    cb_pool['occ'] = cb_pool.groupby(keys).cumcount()
+    ps_pool['occ'] = ps_pool.groupby(keys).cumcount()
+    
+    rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
+    
+    if not rr_matches.empty:
+        # Construct RR DataFrame
+        rr_c = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_c', 'Strike_c']].copy()
+        rr_c.rename(columns={'Dollars_c': 'Dollars', 'Strike_c': 'Strike'}, inplace=True)
+        rr_c['Pair_ID'] = rr_matches.index
+        rr_c['Pair_Side'] = 0 # Call Side
+        
+        rr_p = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_p', 'Strike_p']].copy()
+        rr_p.rename(columns={'Dollars_p': 'Dollars', 'Strike_p': 'Strike'}, inplace=True)
+        rr_p['Pair_ID'] = rr_matches.index
+        rr_p['Pair_Side'] = 1 # Put Side
+        
+        df_rr = pd.concat([rr_c, rr_p])
+        df_rr['Strike'] = df_rr['Strike'].apply(clean_strike_fmt)
+        
+        # Filter matched rows out of the original pools
+        match_keys = keys + ['occ']
+        def _filter_out(pool, matches):
+            temp = matches[match_keys].copy()
+            temp['_remove'] = True
+            merged = pool.merge(temp, on=match_keys, how='left')
+            return merged[merged['_remove'].isna()].drop(columns=['_remove'])
+            
+        cb_pool = _filter_out(cb_pool, rr_matches)
+        ps_pool = _filter_out(ps_pool, rr_matches)
+    else:
+        df_rr = pd.DataFrame(columns=['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars', 'Strike', 'Pair_ID', 'Pair_Side'])
+        
+    return cb_pool, ps_pool, pb_pool, df_rr
+
+def filter_pivot_dataframe(data, ticker_filter, min_notional, min_mkt_cap, ema_filter):
+    """Applies the Filters (Ticker, Notional, Market Cap, EMA) to a dataframe."""
+    if data.empty: return data
+    f = data.copy()
+    
+    if ticker_filter: 
+        f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
+    
+    f = f[f["Dollars"] >= min_notional]
+    
+    # Advanced Filters (Market Cap & EMA)
+    if not f.empty and (min_mkt_cap > 0 or ema_filter == "Yes"):
+        unique_symbols = f["Symbol"].unique()
+        valid_symbols = set(unique_symbols)
+        
+        if min_mkt_cap > 0:
+            valid_symbols = {s for s in valid_symbols if get_market_cap(s) >= float(min_mkt_cap)}
+        
+        if ema_filter == "Yes":
+            # Check EMA > SMA using batch fetch
+            batch_results = fetch_technicals_batch(list(valid_symbols))
+            # Keep symbol if data missing OR if Price > EMA21 (Tuple index 0 is Price, index 2 is EMA21)
+            valid_symbols = {
+                s for s in valid_symbols 
+                if batch_results.get(s, (None, None))[2] is None or 
+                (batch_results[s][0] is not None and batch_results[s][2] is not None and batch_results[s][0] > batch_results[s][2])
+            }
+        
+        f = f[f["Symbol"].isin(valid_symbols)]
+        
+    return f
+
+def get_pivot_styled_view(data, is_rr=False):
+    """Aggregates data by Symbol/Strike/Expiry for display."""
+    if data.empty: 
+        return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
+    
+    sr = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
+    
+    if is_rr: 
+        piv = data.merge(sr, on="Symbol").sort_values(by=["Total_Sym_Dollars", "Pair_ID", "Pair_Side"], ascending=[False, True, True])
+    else:
+        piv = data.groupby(["Symbol", "Strike", "Expiry_DT"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index().merge(sr, on="Symbol")
+        piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
+    
+    piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
+    
+    # Hide repeated symbols for cleaner look
+    piv["Symbol_Display"] = np.where(piv["Symbol"] == piv["Symbol"].shift(1), "", piv["Symbol"])
+    
+    return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
 
 
