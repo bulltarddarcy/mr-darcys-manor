@@ -756,23 +756,36 @@ def run_sector_rotation_app(df_global=None):
     col_clear, col_space = st.columns([1, 5])
     with col_clear:
         if st.button("🗑️ Clear Filters", type="secondary", use_container_width=True):
-            # Delete all filter-related keys
-            keys_to_delete = [k for k in st.session_state.keys() if k.startswith('filter_') or k == 'default_filters_set']
+            # Delete all filter-related keys EXCEPT the cleared flag
+            keys_to_delete = [k for k in st.session_state.keys() if k.startswith('filter_')]
             for key in keys_to_delete:
                 del st.session_state[key]
+            # Set a flag that we've cleared (so defaults don't reload)
+            st.session_state.filters_were_cleared = True
+            st.session_state.default_filters_set = False
             st.rerun()
     
-    # Initialize default filters on first load
+    # Initialize default filters on first load ONLY (not after clearing)
     if 'default_filters_set' not in st.session_state:
-        st.session_state.default_filters_set = True
-        st.session_state.filter_defaults = {
-            0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0},
-            1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
-            2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
-            3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gaining Momentum & Outperforming', 'logic': 'OR'},
-            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gaining Momentum & Underperforming'},
-            5: {}  # 6th filter starts empty
-        }
+        # Only set defaults if we haven't just cleared
+        if not st.session_state.get('filters_were_cleared', False):
+            st.session_state.default_filters_set = True
+            st.session_state.filter_defaults = {
+                0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0},
+                1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
+                2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+                3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gaining Momentum & Outperforming', 'logic': 'OR'},
+                4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gaining Momentum & Underperforming'},
+                5: {}  # 6th filter starts empty
+            }
+        else:
+            # We just cleared, so set empty defaults
+            st.session_state.default_filters_set = True
+            st.session_state.filter_defaults = {
+                0: {}, 1: {}, 2: {}, 3: {}, 4: {}, 5: {}
+            }
+            # Clear the flag for next time
+            st.session_state.filters_were_cleared = False
     
     # Create 6 filter rows (always visible)
     filters = []
