@@ -1157,171 +1157,156 @@ def calculate_consensus_theme_score(
         logger.error(f"Error calculating consensus score: {e}")
         return None
 
-def get_actionable_theme_summary(
+def get_momentum_performance_categories(
     etf_data_cache: Dict,
     theme_map: Dict
 ) -> Dict[str, List[Dict]]:
     """
-    Group themes by lifecycle stage using momentum trends and score quality.
+    Categorize themes by momentum and performance direction.
     
-    Categorization Logic (in plain English):
+    Categories based on 10-day trend direction:
+    1. Gaining Momentum & Gaining Performance (⬈) - Best
+    2. Gaining Momentum & Losing Performance (⬉) - Bottoming
+    3. Losing Momentum & Gaining Performance (⬊) - Topping
+    4. Losing Momentum & Losing Performance (⬋) - Worst
     
-    EARLY STAGE (Best new entries):
-    - Fresh position (Day 1-3 in current quadrant)
-    - 2+ timeframes bullish (Leading or Improving)
-    - Score 60+ (decent quality)
-    - Momentum accelerating (5d > 10d > 20d) OR at least stable
-    
-    ESTABLISHED (Hold but don't chase):
-    - NOT fresh (Day 4+)
-    - High score (65+)
-    - 2+ timeframes bullish
-    - Even if momentum stable/declining - it's mature
-    
-    TOPPING (Take profits):
-    - Momentum declining (5d < 10d or 5d < 20d) 
-    - OR 5-day showing weakness (Weakening quadrant)
-    - OR was bullish on 20d but losing on 5d
-    - Score typically 40-65 range
-    
-    WEAK (Avoid):
-    - Low score (<40) OR
-    - Fewer than 2 timeframes bullish OR
-    - All timeframes showing Lagging
+    Uses 5-day as confirmation indicator.
     
     Args:
         etf_data_cache: Cache of theme dataframes
         theme_map: Dict mapping theme names to tickers
         
     Returns:
-        Dict with themes grouped by lifecycle stage + explanation
+        Dict with themes grouped by direction category
     """
     categories = {
-        'early_stage': [],        # Fresh bullish - BEST NEW ENTRIES
-        'established': [],        # Mature leadership - HOLD
-        'topping': [],           # Losing momentum - TAKE PROFITS
-        'weak': []               # Lagging - AVOID
+        'gaining_both': [],           # ⬈ Best
+        'gaining_mom_losing_perf': [], # ⬉ Bottoming
+        'losing_mom_gaining_perf': [], # ⬊ Topping
+        'losing_both': []             # ⬋ Worst
     }
     
     for theme, ticker in theme_map.items():
         df = etf_data_cache.get(ticker)
-        if df is None or df.empty:
+        if df is None or df.empty or len(df) < 4:
             continue
         
-        consensus = calculate_consensus_theme_score(df)
-        if not consensus:
+        try:
+            # Get last 4 days of 10-day window positions
+            if len(df) < 4:
+                continue
+                
+            recent_4_days = df.tail(4)
+            
+            # Extract 10-day positions for last 4 days
+            positions_10d = []
+            for i in range(4):
+                row = recent_4_days.iloc[i]
+                positions_10d.append({
+                    'ratio': row.get('RRG_Ratio_Med', 100),
+                    'momentum': row.get('RRG_Mom_Med', 100)
+                })
+            
+            # Calculate average of older 3 days
+            avg_ratio_old = (positions_10d[0]['ratio'] + positions_10d[1]['ratio'] + positions_10d[2]['ratio']) / 3
+            avg_momentum_old = (positions_10d[0]['momentum'] + positions_10d[1]['momentum'] + positions_10d[2]['momentum']) / 3
+            
+            # Compare today to average
+            today_ratio = positions_10d[3]['ratio']
+            today_momentum = positions_10d[3]['momentum']
+            
+            # Determine direction
+            if today_ratio > avg_ratio_old:
+                performance_direction = "Gaining Performance"
+                perf_dir_short = "gaining_perf"
+            else:
+                performance_direction = "Losing Performance"
+                perf_dir_short = "losing_perf"
+            
+            if today_momentum > avg_momentum_old:
+                momentum_direction = "Gaining Momentum"
+                mom_dir_short = "gaining_mom"
+            else:
+                momentum_direction = "Losing Momentum"
+                mom_dir_short = "losing_mom"
+            
+            # Get current quadrants for all timeframes
+            quad_5d = get_quadrant_name(
+                recent_4_days.iloc[-1].get('RRG_Ratio_Short', 100),
+                recent_4_days.iloc[-1].get('RRG_Mom_Short', 100)
+            )
+            quad_10d = get_quadrant_name(today_ratio, today_momentum)
+            quad_20d = get_quadrant_name(
+                recent_4_days.iloc[-1].get('RRG_Ratio_Long', 100),
+                recent_4_days.iloc[-1].get('RRG_Mom_Long', 100)
+            )
+            
+            # Get 5-day confirmation
+            ratio_5d = recent_4_days.iloc[-1].get('RRG_Ratio_Short', 100)
+            momentum_5d = recent_4_days.iloc[-1].get('RRG_Mom_Short', 100)
+            
+            # Check if 5d is ahead of 10d
+            if ratio_5d > today_ratio and momentum_5d > today_momentum:
+                confirmation = "5d accelerating ahead"
+            elif ratio_5d > today_ratio or momentum_5d > today_momentum:
+                confirmation = "5d confirming trend"
+            else:
+                confirmation = "5d lagging behind"
+            
+            # Build category label
+            category_label = f"{momentum_direction} & {performance_direction}"
+            
+            # Determine which bucket
+            if mom_dir_short == "gaining_mom" and perf_dir_short == "gaining_perf":
+                bucket = 'gaining_both'
+                arrow = "⬈"
+            elif mom_dir_short == "gaining_mom" and perf_dir_short == "losing_perf":
+                bucket = 'gaining_mom_losing_perf'
+                arrow = "⬉"
+            elif mom_dir_short == "losing_mom" and perf_dir_short == "gaining_perf":
+                bucket = 'losing_mom_gaining_perf'
+                arrow = "⬊"
+            else:  # losing both
+                bucket = 'losing_both'
+                arrow = "⬋"
+            
+            # Build reason
+            reason = f"10d: {momentum_direction.lower()} & {performance_direction.lower()}, {confirmation}"
+            
+            theme_info = {
+                'theme': theme,
+                'category': category_label,
+                'arrow': arrow,
+                'quadrant_5d': quad_5d,
+                'quadrant_10d': quad_10d,
+                'quadrant_20d': quad_20d,
+                'confirmation': confirmation,
+                'reason': reason
+            }
+            
+            categories[bucket].append(theme_info)
+            
+        except Exception as e:
+            logger.error(f"Error categorizing {theme}: {e}")
             continue
-        
-        # Extract data
-        score = consensus['consensus_score']
-        
-        # Get scores for each timeframe (not just quadrant!)
-        score_5d = consensus['timeframes']['5d']['score']
-        score_10d = consensus['timeframes']['10d']['score']
-        score_20d = consensus['timeframes']['20d']['score']
-        
-        # Get quadrants
-        quad_5d = consensus['timeframes']['5d']['quadrant']
-        quad_10d = consensus['timeframes']['10d']['quadrant']
-        quad_20d = consensus['timeframes']['20d']['quadrant']
-        
-        # Check freshness
-        freshness = consensus['freshness']
-        is_fresh = freshness in ["🆕 Fresh", "⭐ Early"]
-        
-        # Check if bullish (Leading or Improving)
-        bullish_quads = ['🟢 Leading', '🔵 Improving']
-        is_5d_bullish = quad_5d in bullish_quads
-        is_10d_bullish = quad_10d in bullish_quads
-        is_20d_bullish = quad_20d in bullish_quads
-        bullish_count = sum([is_5d_bullish, is_10d_bullish, is_20d_bullish])
-        
-        # CRITICAL: Check momentum trend (is it accelerating or declining?)
-        momentum_accelerating = score_5d > score_10d > score_20d
-        momentum_stable = score_5d >= score_10d >= score_20d
-        momentum_declining = score_5d < score_10d or score_5d < score_20d
-        
-        # Determine reason for categorization
-        reason = ""
-        
-        theme_info = {
-            'theme': theme,
-            'consensus_score': score,
-            'grade': consensus['grade'],
-            'freshness': consensus['freshness'],
-            'freshness_detail': consensus['freshness_detail'],
-            'tf_5d': quad_5d,
-            'tf_10d': quad_10d,
-            'tf_20d': quad_20d,
-            'score_5d': score_5d,
-            'score_10d': score_10d,
-            'score_20d': score_20d
-        }
-        
-        # ═══════════════════════════════════════════════════════
-        # CATEGORIZATION LOGIC
-        # ═══════════════════════════════════════════════════════
-        
-        # --- EARLY STAGE: Fresh (Day 1-3) + Building + Good Score ---
-        if (
-            is_fresh and 
-            bullish_count >= 2 and 
-            score >= 60 and
-            (momentum_accelerating or momentum_stable)
-        ):
-            if momentum_accelerating:
-                reason = f"Fresh position (Day {consensus['freshness_detail'].split()[-1]}), 2+ timeframes bullish, momentum accelerating ({score_5d:.0f} > {score_10d:.0f} > {score_20d:.0f})"
-            else:
-                reason = f"Fresh position (Day {consensus['freshness_detail'].split()[-1]}), 2+ timeframes bullish, momentum stable ({score_5d:.0f} ≈ {score_10d:.0f})"
-            
-            theme_info['reason'] = reason
-            categories['early_stage'].append(theme_info)
-        
-        # --- ESTABLISHED: High score (65+) + 2+ bullish + Not fresh ---
-        elif (
-            score >= 65 and
-            bullish_count >= 2
-        ):
-            # If we're here with score 65+ and 2+ bullish, it's Established
-            days = consensus['freshness_detail']
-            if momentum_declining:
-                reason = f"Strong score ({score:.0f}), 2+ timeframes bullish, momentum declining ({score_5d:.0f} < {score_10d:.0f})"
-            else:
-                reason = f"Strong score ({score:.0f}), 2+ timeframes bullish, mature trend"
-            
-            theme_info['reason'] = reason
-            categories['established'].append(theme_info)
-        
-        # --- TOPPING: Moderate score (40-64) + Momentum declining ---
-        elif (
-            40 <= score < 65 and
-            momentum_declining and
-            (is_20d_bullish or is_10d_bullish)
-        ):
-            reason = f"Momentum declining ({score_5d:.0f} < {score_10d:.0f}), score {score:.0f}"
-            if quad_5d == '🟡 Weakening':
-                reason += f", 5-day already weakening"
-            
-            theme_info['reason'] = reason
-            categories['topping'].append(theme_info)
-        
-        # --- WEAK: Low score OR insufficient bullish timeframes ---
-        else:
-            if score < 40:
-                reason = f"Low score ({score:.0f}), weak positioning"
-            elif bullish_count < 2:
-                reason = f"Only {bullish_count} of 3 timeframes bullish, insufficient confirmation"
-            else:
-                reason = f"Score {score:.0f}, {bullish_count} bullish, but mixed momentum"
-            
-            theme_info['reason'] = reason
-            categories['weak'].append(theme_info)
     
-    # Sort each category by score
-    for category in categories:
-        categories[category].sort(key=lambda x: x['consensus_score'], reverse=True)
+    # Sort each category by theme name
+    for category in categories.values():
+        category.sort(key=lambda x: x['theme'])
     
     return categories
+
+
+def get_quadrant_name(ratio: float, momentum: float) -> str:
+    """Convert ratio/momentum to quadrant name with emoji."""
+    if ratio >= 100 and momentum >= 100:
+        return "🟢 Leading"
+    elif ratio < 100 and momentum >= 100:
+        return "🔵 Improving"
+    elif ratio >= 100 and momentum < 100:
+        return "🟡 Weakening"
+    else:
+        return "🔴 Lagging"
     """
     Calculate comprehensive score for a theme/sector (0-100 with grade).
     
