@@ -433,6 +433,7 @@ def run_sector_rotation_app(df_global=None):
     # --- CATEGORY 1: Gaining Momentum & Outperforming ---
     if categories['gaining_mom_outperforming']:
         st.success(f"⬈ **GAINING MOMENTUM & OUTPERFORMING** ({len(categories['gaining_mom_outperforming'])} sectors)")
+        st.caption("✅ **Best Opportunities** - Sectors accelerating with momentum building. 🆕 Day 1 = Fresh entry!")
         
         data = []
         for theme_info in categories['gaining_mom_outperforming']:
@@ -468,13 +469,13 @@ def run_sector_rotation_app(df_global=None):
                 "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
             }
         )
-        st.caption("✅ **Best Opportunities** - Sectors accelerating with momentum building. 🆕 Day 1 = Fresh entry!")
     else:
         st.info("⬈ **GAINING MOMENTUM & OUTPERFORMING** - No sectors currently in this category")
     
     # --- CATEGORY 2: Gaining Momentum & Underperforming ---
     if categories['gaining_mom_underperforming']:
         st.info(f"⬉ **GAINING MOMENTUM & UNDERPERFORMING** ({len(categories['gaining_mom_underperforming'])} sectors)")
+        st.caption("🔄 **Potential Reversals** - Sectors bottoming, watch for breakout. 🆕 Day 1 = Fresh reversal!")
         
         data = []
         for theme_info in categories['gaining_mom_underperforming']:
@@ -508,13 +509,13 @@ def run_sector_rotation_app(df_global=None):
                 "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
             }
         )
-        st.caption("🔄 **Potential Reversals** - Sectors bottoming, watch for breakout. 🆕 Day 1 = Fresh reversal!")
     else:
         st.info("⬉ **GAINING MOMENTUM & UNDERPERFORMING** - No sectors currently in this category")
     
     # --- CATEGORY 3: Losing Momentum & Outperforming ---
     if categories['losing_mom_outperforming']:
         st.warning(f"⬊ **LOSING MOMENTUM & OUTPERFORMING** ({len(categories['losing_mom_outperforming'])} sectors)")
+        st.caption("⚠️ **Topping** - Take profits, avoid new entries. 🆕 Day 1 = Just started losing steam")
         
         data = []
         for theme_info in categories['losing_mom_outperforming']:
@@ -548,13 +549,13 @@ def run_sector_rotation_app(df_global=None):
                 "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
             }
         )
-        st.caption("⚠️ **Topping** - Take profits, avoid new entries. 🆕 Day 1 = Just started losing steam")
     else:
         st.info("⬊ **LOSING MOMENTUM & OUTPERFORMING** - No sectors currently in this category")
     
     # --- CATEGORY 4: Losing Momentum & Underperforming ---
     if categories['losing_mom_underperforming']:
         st.error(f"⬋ **LOSING MOMENTUM & UNDERPERFORMING** ({len(categories['losing_mom_underperforming'])} sectors)")
+        st.caption("❌ **Avoid** - Sectors declining on both metrics")
         
         data = []
         for theme_info in categories['losing_mom_underperforming']:
@@ -588,7 +589,6 @@ def run_sector_rotation_app(df_global=None):
                 "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
             }
         )
-        st.caption("❌ **Avoid** - Sectors declining on both metrics")
     else:
         st.info("⬋ **LOSING MOMENTUM & UNDERPERFORMING** - No sectors currently in this category")
     
@@ -883,18 +883,71 @@ def run_sector_rotation_app(df_global=None):
             
             conditions.append(condition)
         
-        # Combine conditions with AND/OR logic
-        if len(conditions) == 1:
-            final_condition = conditions[0]
-        elif len(conditions) > 1:
-            final_condition = conditions[0]
-            for i in range(1, len(conditions)):
-                logic = filters[i-1].get('logic', 'AND')
-                if logic == 'AND':
-                    final_condition = final_condition & conditions[i]
-                else:  # OR
-                    final_condition = final_condition | conditions[i]
+        # Separate numeric and categorical conditions
+        numeric_conditions = []
+        categorical_conditions = []
+        
+        for i, f in enumerate(filters):
+            col = f['column']
+            op = f['operator']
             
+            if f['value_type'] == 'Number':
+                val = f['value']
+                if op == '>=':
+                    condition = df_filtered[col] >= val
+                else:  # <=
+                    condition = df_filtered[col] <= val
+                numeric_conditions.append(condition)
+                
+            elif f['value_type'] == 'Column':
+                val_col = f['value_column']
+                if op == '>=':
+                    condition = df_filtered[col] >= df_filtered[val_col]
+                else:  # <=
+                    condition = df_filtered[col] <= df_filtered[val_col]
+                numeric_conditions.append(condition)
+                
+            elif f['value_type'] == 'Categorical':
+                # Categorical comparison
+                val_cat = f['value_categorical']
+                condition = df_filtered[col] == val_cat
+                categorical_conditions.append((condition, f.get('logic', 'AND')))
+        
+        # Build final condition with proper grouping:
+        # All numeric filters combined with AND
+        # All categorical filters combined with OR (or their specified logic)
+        # Then: (Numeric AND conditions) AND (Categorical OR conditions)
+        
+        final_condition = None
+        
+        # Step 1: Combine all numeric conditions with AND
+        if numeric_conditions:
+            numeric_combined = numeric_conditions[0]
+            for cond in numeric_conditions[1:]:
+                numeric_combined = numeric_combined & cond
+            final_condition = numeric_combined
+        
+        # Step 2: Combine categorical conditions with their logic
+        if categorical_conditions:
+            # Get first categorical condition
+            cat_combined = categorical_conditions[0][0]
+            
+            # Combine with subsequent categorical conditions using their logic
+            for i in range(1, len(categorical_conditions)):
+                condition, logic = categorical_conditions[i]
+                if logic == 'OR':
+                    cat_combined = cat_combined | condition
+                else:  # AND
+                    cat_combined = cat_combined & condition
+            
+            # Combine with numeric conditions
+            if final_condition is not None:
+                final_condition = final_condition & cat_combined
+            else:
+                final_condition = cat_combined
+        
+        # Apply filter if we have any conditions
+        if final_condition is not None:
             df_filtered = df_filtered[final_condition]
     
     # Display results
