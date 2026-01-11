@@ -267,299 +267,266 @@ def run_sector_rotation_app(df_global=None):
     with col_help_theme2:
         st.markdown("**⚖️ Established:** Mature trends - hold but don't add")
     with col_help_theme3:
-        with st.popover("📖 How Lifecycle Works", use_container_width=True):
+        with st.popover("📖 How Categories Work", use_container_width=True):
             st.markdown("""
-            ### Sector Lifecycle Stages
+            ### Understanding Momentum & Performance Categories
             
-            **🎯 Early Stage Leadership**
-            - Just entered bullish quadrants
-            - 2+ timeframes confirming
-            - Score 60+
-            → **Action:** Best time to enter new positions
+            Sectors are categorized based on their **10-day trend direction**:
             
-            **⚖️ Established Leadership**  
-            - Strong but been leading for days
-            - High score but not fresh
-            → **Action:** Hold positions, don't chase
+            **⬈ Gaining Momentum & Gaining Performance**
+            - Moving up AND right on RRG chart
+            - Both speeding up AND outperforming
+            → **Best opportunity** - sector accelerating
             
-            **📉 Topping/Weakening**
-            - Was strong, now losing momentum
-            - 5d weaker than 20d
-            → **Action:** Take profits, exit positions
+            **⬉ Gaining Momentum & Losing Performance**
+            - Moving up but still on left side
+            - Speeding up but still underperforming
+            → **Potential reversal** - watch for breakout
             
-            **🚫 Weak/Lagging**
-            - Poor positioning across timeframes
-            - Low scores
-            → **Action:** Stay away, no allocation
+            **⬊ Losing Momentum & Gaining Performance**
+            - Moving down but still on right side
+            - Slowing down but still outperforming
+            → **Topping** - take profits, avoid new entries
+            
+            **⬋ Losing Momentum & Losing Performance**
+            - Moving down AND left on RRG chart
+            - Both slowing down AND underperforming
+            → **Avoid** - sector in decline
+            
+            ---
+            
+            **5-Day Confirmation** shows if short-term trend supports the 10-day direction:
+            - "5d accelerating ahead" = Very strong ⭐⭐⭐
+            - "5d confirming trend" = Strong ⭐⭐
+            - "5d lagging behind" = Weak ⭐
             """)
             st.markdown("---")
-            if st.button("📖 View Complete Theme Guide", use_container_width=True):
-                st.session_state.show_theme_guide = True
+            if st.button("📖 View All Possible Combinations", use_container_width=True):
+                st.session_state.show_full_guide = True
                 st.rerun()
     
-    # Show full theme guide if requested
-    if st.session_state.get('show_theme_guide', False):
-        with st.expander("📖 Complete Theme Scoring Guide", expanded=True):
-            if st.button("✖️ Close Theme Guide"):
-                st.session_state.show_theme_guide = False
+    # Show full combinations guide if requested
+    if st.session_state.get('show_full_guide', False):
+        with st.expander("📖 All 12 Possible Combinations", expanded=True):
+            if st.button("✖️ Close Guide"):
+                st.session_state.show_full_guide = False
                 st.rerun()
             
-            try:
-                with open("THEME_SCORING_GUIDE.md", "r") as f:
-                    st.markdown(f.read())
-            except FileNotFoundError:
-                st.error("THEME_SCORING_GUIDE.md not found. Please ensure it's in the repo root directory.")
-    
-    # Get lifecycle-based theme summary
-    categories = us.get_actionable_theme_summary(etf_data_cache, theme_map)
-    
-    # --- EARLY STAGE: Best new entries ---
-    if categories['early_stage']:
-        st.success(f"🎯 **EARLY STAGE LEADERSHIP** ({len(categories['early_stage'])} sectors)")
-        
-        early_data = []
-        for theme_info in categories['early_stage']:
-            # Format momentum trend
-            s5, s10, s20 = theme_info['score_5d'], theme_info['score_10d'], theme_info['score_20d']
-            if s5 > s10 > s20:
-                momentum_trend = f"🚀 {s5:.0f} > {s10:.0f} > {s20:.0f}"
-            else:
-                momentum_trend = f"➡️ {s5:.0f} ≈ {s10:.0f}"
+            st.markdown("""
+            ## Complete Category Guide
             
-            early_data.append({
+            Each of the 4 main categories can have 3 confirmation states from the 5-day window.
+            
+            ### 1. ⬈ Gaining Momentum & Gaining Performance
+            
+            **Best case - sector improving on both axes**
+            
+            - **1a. 5d accelerating ahead** ⭐⭐⭐
+              - 10d: Moving up-right
+              - 5d: Even MORE up-right
+              - **Action:** Strong buy - momentum building fast
+              - **Example:** Tech sector breaking out with volume
+            
+            - **1b. 5d confirming trend** ⭐⭐
+              - 10d: Moving up-right
+              - 5d: Also up-right, tracking 10d
+              - **Action:** Buy - steady improvement
+              - **Example:** Tech in consistent uptrend
+            
+            - **1c. 5d lagging behind** ⭐
+              - 10d: Moving up-right
+              - 5d: Behind 10d (pullback)
+              - **Action:** Caution - might be losing steam
+              - **Example:** Tech taking a breather
+            
+            ---
+            
+            ### 2. ⬉ Gaining Momentum & Losing Performance
+            
+            **Bottoming - picking up speed but still underperforming**
+            
+            - **2a. 5d accelerating ahead** 🔄⭐
+              - 10d: Moving up but left
+              - 5d: Accelerating faster
+              - **Action:** Watch closely - reversal starting
+              - **Example:** Beaten-down sector showing life
+            
+            - **2b. 5d confirming trend** 🔄
+              - 10d: Moving up but left
+              - 5d: Also moving up-left
+              - **Action:** Early reversal stage
+              - **Example:** Weak sector starting to improve
+            
+            - **2c. 5d lagging behind** 🔄
+              - 10d: Moving up but left
+              - 5d: Not keeping pace
+              - **Action:** False start - not ready
+              - **Example:** Weak sector with brief bounce
+            
+            ---
+            
+            ### 3. ⬊ Losing Momentum & Gaining Performance
+            
+            **Topping - still outperforming but slowing down**
+            
+            - **3a. 5d accelerating ahead** ⚠️
+              - 10d: Moving right but down
+              - 5d: Ahead of 10d
+              - **Action:** Possible last push up
+              - **Example:** Leader showing one more surge
+            
+            - **3b. 5d confirming trend** ⚠️⚠️
+              - 10d: Moving right but down
+              - 5d: Also moving right-down
+              - **Action:** Take profits - top is forming
+              - **Example:** Strong sector losing steam
+            
+            - **3c. 5d lagging behind** ⚠️⚠️⚠️
+              - 10d: Moving right but down
+              - 5d: Even weaker
+              - **Action:** Avoid - topping accelerating
+              - **Example:** Leader rolling over
+            
+            ---
+            
+            ### 4. ⬋ Losing Momentum & Losing Performance
+            
+            **Worst case - decline on both axes**
+            
+            - **4a. 5d accelerating ahead** ❌
+              - 10d: Moving down-left
+              - 5d: Less bad than 10d
+              - **Action:** Still avoid, but may bottom soon
+              - **Example:** Downtrend slowing
+            
+            - **4b. 5d confirming trend** ❌❌
+              - 10d: Moving down-left
+              - 5d: Also down-left
+              - **Action:** Avoid - consistent weakness
+              - **Example:** Weak sector staying weak
+            
+            - **4c. 5d lagging behind** ❌❌❌
+              - 10d: Moving down-left
+              - 5d: Even worse
+              - **Action:** Avoid strongly - accelerating lower
+              - **Example:** Sector in free fall
+            
+            ---
+            
+            ## Key Insights
+            
+            **Best Setups:**
+            - ⬈ with 5d accelerating = Strongest momentum
+            - ⬉ with 5d accelerating = Early reversal catch
+            
+            **Profit-Taking Signals:**
+            - ⬊ with any 5d = Momentum fading
+            
+            **Stay Away:**
+            - ⬋ with any 5d = Both metrics declining
+            """)
+    
+    # Get momentum/performance categories
+    categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
+    
+    # --- CATEGORY 1: Gaining Momentum & Gaining Performance ---
+    if categories['gaining_both']:
+        st.success(f"⬈ **GAINING MOMENTUM & GAINING PERFORMANCE** ({len(categories['gaining_both'])} sectors)")
+        
+        data = []
+        for theme_info in categories['gaining_both']:
+            data.append({
                 "Sector": theme_info['theme'],
-                "Score": theme_info['consensus_score'],
-                "Grade": theme_info['grade'],
-                "Momentum Trend": momentum_trend,
-                "Stage": theme_info['freshness_detail'],
-                "5d": theme_info['tf_5d'],
-                "10d": theme_info['tf_10d'],
-                "20d": theme_info['tf_20d'],
+                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
                 "Why Selected": theme_info['reason']
             })
         
         st.dataframe(
-            pd.DataFrame(early_data),
+            pd.DataFrame(data),
             hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                "Grade": st.column_config.TextColumn("Grade", width="small"),
-                "Stage": st.column_config.TextColumn("Stage", width="small"),
-                "Why Selected": st.column_config.TextColumn("Why Selected", width="large"),
-            }
+            use_container_width=True
         )
-        st.caption("✅ **Trading Action:** Fresh momentum building - best time to initiate new swing positions. High risk/reward.")
-        
-        with st.expander("📖 Why These Are 'Early Stage'"):
-            st.markdown("""
-            **Selection Criteria (ALL must be true):**
-            
-            1. ✅ **Fresh Entry:** Day 1-3 in current quadrant
-               - *Why:* Early = better risk/reward than chasing
-            
-            2. ✅ **Multi-Timeframe Confirmation:** 2+ timeframes bullish (Leading or Improving)
-               - *Why:* Need confirmation across timeframes for swing trades
-            
-            3. ✅ **Quality Score:** 60+ points
-               - *Why:* Filters out weak setups
-            
-            4. ✅ **Momentum Accelerating or Stable:** 5d ≥ 10d ≥ 20d scores
-               - *Why:* Want building momentum, not declining
-               - *Example:* Score trend 78 > 75 > 71 = accelerating ✓
-               - *Example:* Score trend 72 < 75 < 78 = declining ✗
-            """)
+        st.caption("✅ **Best Opportunities** - Sectors accelerating with momentum building")
     else:
-        st.info("🎯 **EARLY STAGE LEADERSHIP** - No sectors currently showing fresh momentum buildup")
+        st.info("⬈ **GAINING MOMENTUM & GAINING PERFORMANCE** - No sectors currently in this category")
     
-    # --- ESTABLISHED: Hold but don't chase ---
-    if categories['established']:
-        st.info(f"⚖️ **ESTABLISHED LEADERSHIP** ({len(categories['established'])} sectors)")
+    # --- CATEGORY 2: Gaining Momentum & Losing Performance ---
+    if categories['gaining_mom_losing_perf']:
+        st.info(f"⬉ **GAINING MOMENTUM & LOSING PERFORMANCE** ({len(categories['gaining_mom_losing_perf'])} sectors)")
         
-        established_data = []
-        for theme_info in categories['established']:
-            # Format momentum trend
-            s5, s10, s20 = theme_info['score_5d'], theme_info['score_10d'], theme_info['score_20d']
-            if s5 < s10 or s5 < s20:
-                momentum_trend = f"📉 {s5:.0f} < {s10:.0f}"
-            elif s5 > s10 > s20:
-                momentum_trend = f"🚀 {s5:.0f} > {s10:.0f} > {s20:.0f}"
-            else:
-                momentum_trend = f"➡️ {s5:.0f} ≈ {s10:.0f}"
-            
-            established_data.append({
+        data = []
+        for theme_info in categories['gaining_mom_losing_perf']:
+            data.append({
                 "Sector": theme_info['theme'],
-                "Score": theme_info['consensus_score'],
-                "Grade": theme_info['grade'],
-                "Momentum Trend": momentum_trend,
-                "Stage": theme_info['freshness_detail'],
-                "5d": theme_info['tf_5d'],
-                "10d": theme_info['tf_10d'],
-                "20d": theme_info['tf_20d'],
+                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
                 "Why Selected": theme_info['reason']
             })
         
         st.dataframe(
-            pd.DataFrame(established_data),
+            pd.DataFrame(data),
             hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                "Grade": st.column_config.TextColumn("Grade", width="small"),
-                "Stage": st.column_config.TextColumn("Stage", width="small"),
-                "Why Selected": st.column_config.TextColumn("Why Selected", width="large"),
-            }
+            use_container_width=True
         )
-        st.caption("⚖️ **Trading Action:** Mature uptrends - hold existing positions but avoid chasing. Look to Early Stage for new entries instead.")
-        
-        with st.expander("📖 Why These Are 'Established'"):
-            st.markdown("""
-            **Selection Criteria (ALL must be true):**
-            
-            1. ✅ **High Score:** 65+ points
-               - *Why:* Still strong positioning
-            
-            2. ✅ **Multi-Timeframe Confirmation:** 2+ timeframes bullish
-               - *Why:* Trend still intact
-            
-            3. ✅ **NOT Fresh:** Day 4+ in current quadrant
-               - *Why:* Been running for a while - late to enter
-            
-            **Note:** May show declining momentum (score 82 → 79 → 75) but still strong overall.
-            This is normal for mature trends. Hold but don't add.
-            """)
+        st.caption("🔄 **Potential Reversals** - Sectors bottoming, watch for breakout")
     else:
-        st.info("⚖️ **ESTABLISHED LEADERSHIP** - No sectors in mature leadership phase")
+        st.info("⬉ **GAINING MOMENTUM & LOSING PERFORMANCE** - No sectors currently in this category")
     
-    # --- TOPPING: Take profits ---
-    if categories['topping']:
-        st.warning(f"📉 **TOPPING / WEAKENING** ({len(categories['topping'])} sectors)")
+    # --- CATEGORY 3: Losing Momentum & Gaining Performance ---
+    if categories['losing_mom_gaining_perf']:
+        st.warning(f"⬊ **LOSING MOMENTUM & GAINING PERFORMANCE** ({len(categories['losing_mom_gaining_perf'])} sectors)")
         
-        topping_data = []
-        for theme_info in categories['topping']:
-            # Format momentum trend
-            s5, s10, s20 = theme_info['score_5d'], theme_info['score_10d'], theme_info['score_20d']
-            momentum_trend = f"📉 {s5:.0f} < {s10:.0f} or {s20:.0f}"
-            
-            topping_data.append({
+        data = []
+        for theme_info in categories['losing_mom_gaining_perf']:
+            data.append({
                 "Sector": theme_info['theme'],
-                "Score": theme_info['consensus_score'],
-                "Grade": theme_info['grade'],
-                "Momentum Trend": momentum_trend,
-                "Stage": theme_info['freshness_detail'],
-                "5d": theme_info['tf_5d'],
-                "10d": theme_info['tf_10d'],
-                "20d": theme_info['tf_20d'],
+                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
                 "Why Selected": theme_info['reason']
             })
         
         st.dataframe(
-            pd.DataFrame(topping_data),
+            pd.DataFrame(data),
             hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                "Grade": st.column_config.TextColumn("Grade", width="small"),
-                "Stage": st.column_config.TextColumn("Stage", width="small"),
-                "Why Selected": st.column_config.TextColumn("Why Selected", width="large"),
-            }
+            use_container_width=True
         )
-        st.caption("📉 **Trading Action:** Losing momentum - exit positions, take profits. Don't fight the rotation.")
-        
-        with st.expander("📖 Why These Are 'Topping'"):
-            st.markdown("""
-            **Selection Criteria (ANY can trigger):**
-            
-            1. ⚠️ **Momentum Declining:** 5-day score < 10-day or 20-day score
-               - *Why:* Recent momentum weaker than past = losing steam
-               - *Example:* Scores 68 < 72 < 75 = declining trend
-            
-            2. ⚠️ **5-Day Weakening:** Short-term moved to Weakening quadrant
-               - *Why:* Early warning sign of reversal
-            
-            3. ⚠️ **Mixed Signals:** Was bullish on 20d but not on 5d
-               - *Why:* Short-term turning negative
-            
-            **These are EXIT signals.** Don't wait for it to become fully weak.
-            Take profits while you still can!
-            """)
+        st.caption("⚠️ **Topping** - Take profits, avoid new entries")
     else:
-        st.success("✅ No sectors currently showing topping behavior")
+        st.info("⬊ **LOSING MOMENTUM & GAINING PERFORMANCE** - No sectors currently in this category")
     
-    # --- WEAK: Avoid ---
-    if categories['weak']:
-        with st.expander(f"🚫 **WEAK / LAGGING** ({len(categories['weak'])} sectors)", expanded=False):
-            weak_data = []
-            for theme_info in categories['weak']:
-                weak_data.append({
-                    "Sector": theme_info['theme'],
-                    "Score": theme_info['consensus_score'],
-                    "Grade": theme_info['grade'],
-                    "5d": theme_info['tf_5d'],
-                    "10d": theme_info['tf_10d'],
-                    "20d": theme_info['tf_20d'],
-                    "Why Weak": theme_info['reason']
-                })
-            
-            st.dataframe(
-                pd.DataFrame(weak_data),
-                hide_index=True,
-                use_container_width=True,
-                column_config={
-                    "Score": st.column_config.NumberColumn("Score", format="%.0f"),
-                    "Grade": st.column_config.TextColumn("Grade", width="small"),
-                    "Why Weak": st.column_config.TextColumn("Why Weak", width="large"),
-                }
-            )
-            st.caption("🚫 **Trading Action:** No allocation - stay away until lifecycle improves")
-            
-            st.markdown("""
-            **Why These Are 'Weak':**
-            - Low score (<40), OR
-            - Fewer than 2 timeframes bullish, OR
-            - All showing Lagging
-            """)
+    # --- CATEGORY 4: Losing Momentum & Losing Performance ---
+    if categories['losing_both']:
+        st.error(f"⬋ **LOSING MOMENTUM & LOSING PERFORMANCE** ({len(categories['losing_both'])} sectors)")
+        
+        data = []
+        for theme_info in categories['losing_both']:
+            data.append({
+                "Sector": theme_info['theme'],
+                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
+                "Why Selected": theme_info['reason']
+            })
+        
+        st.dataframe(
+            pd.DataFrame(data),
+            hide_index=True,
+            use_container_width=True
+        )
+        st.caption("❌ **Avoid** - Sectors declining on both metrics")
+    else:
+        st.info("⬋ **LOSING MOMENTUM & LOSING PERFORMANCE** - No sectors currently in this category")
     
-
     st.markdown("---")
-
-    # --- 8. STOCK EXPLORER ---
-    st.subheader(f"🔎 Explorer: Theme Drilldown")
     
-    # Search functionality
-    search_t = st.text_input(
-        "Input a ticker to find its theme(s)",
-        placeholder="NVDA..."
-    ).strip().upper()
-    
-    if search_t:
-        matches = uni_df[uni_df['Ticker'] == search_t]
-        if not matches.empty:
-            found = matches['Theme'].unique()
-            st.success(f"📍 Found **{search_t}** in: **{', '.join(found)}**")
-            if len(found) > 0:
-                st.session_state.sector_target = found[0]
-        else:
-            st.warning(f"Ticker {search_t} not found.")
-
-    # Theme selector with immediate update
-    curr_idx = all_themes.index(st.session_state.sector_target) \
-        if st.session_state.sector_target in all_themes else 0
-    
-    def update_theme():
-        st.session_state.sector_target = st.session_state.theme_selector
-    
-    new_target = st.selectbox(
-        "Select Theme to View Stocks", 
-        all_themes, 
-        index=curr_idx,
-        key="theme_selector",
-        on_change=update_theme
-    )
-
-    st.markdown("---")
-
-    # --- 9. STOCK ANALYSIS WITH SCORING HELP ---
     st.subheader(f"📊 Stock Analysis")
     
     # Theme selector with "All" option (unique key)
@@ -579,19 +546,19 @@ def run_sector_rotation_app(df_global=None):
     # Update session state
     st.session_state.sector_target = selected_theme
     
-    # Get lifecycle categories for theme categorization
-    categories = us.get_actionable_theme_summary(etf_data_cache, theme_map)
+    # Get momentum/performance categories for theme categorization
+    categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
     
     # Build theme -> category mapping
     theme_category_map = {}
-    for theme_info in categories.get('early_stage', []):
-        theme_category_map[theme_info['theme']] = "Early Stage Leadership"
-    for theme_info in categories.get('established', []):
-        theme_category_map[theme_info['theme']] = "Established Leadership"
-    for theme_info in categories.get('topping', []):
-        theme_category_map[theme_info['theme']] = "Topping / Weakening"
-    for theme_info in categories.get('weak', []):
-        theme_category_map[theme_info['theme']] = "Weak / Lagging"
+    for theme_info in categories.get('gaining_both', []):
+        theme_category_map[theme_info['theme']] = "⬈ Gaining Momentum & Gaining Performance"
+    for theme_info in categories.get('gaining_mom_losing_perf', []):
+        theme_category_map[theme_info['theme']] = "⬉ Gaining Momentum & Losing Performance"
+    for theme_info in categories.get('losing_mom_gaining_perf', []):
+        theme_category_map[theme_info['theme']] = "⬊ Losing Momentum & Gaining Performance"
+    for theme_info in categories.get('losing_both', []):
+        theme_category_map[theme_info['theme']] = "⬋ Losing Momentum & Losing Performance"
     
     # Filter stocks for selected theme(s)
     if selected_theme == "All":
