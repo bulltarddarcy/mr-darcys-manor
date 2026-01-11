@@ -1,7 +1,3 @@
-{
-type: uploaded file
-fileName: mr-darcys-manor-main (15).zip/mr-darcys-manor-main/main_sector.py
-fullContent:
 """
 Sector Rotation App - REFACTORED VERSION
 With multi-theme support, smart filters, and comprehensive scoring.
@@ -10,7 +6,6 @@ With multi-theme support, smart filters, and comprehensive scoring.
 import streamlit as st
 import pandas as pd
 import utils_sector as us
-import utils_darcy as ud  # Imported for shared Divergence & DB logic
 
 # ==========================================
 # UI HELPERS
@@ -551,10 +546,6 @@ def run_sector_rotation_app(df_global=None):
                 alpha_20d = last.get(f"Alpha_Long_{stock_theme}", 0)
                 beta = last.get(f"Beta_{stock_theme}", 1.0)
                 
-                # --- NEW COLUMNS: DIVERGENCE & LAST TRADE ---
-                div_sig = ud.get_latest_divergence_signal(sdf, stock)
-                last_trade_date, is_recent_trade = ud.get_last_trade_info(df_global, stock)
-
                 stock_data.append({
                     "Ticker": stock,
                     "Theme": stock_theme,
@@ -567,13 +558,10 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 5d": last.get('RVOL_Short', 0),
                     "RVOL 10d": last.get('RVOL_Med', 0),
                     "RVOL 20d": last.get('RVOL_Long', 0),
-                    "RSI Price Div": div_sig,
-                    "Last JB Trade": last_trade_date,
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
                     "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
                     "200 MA": get_ma_signal(last['Close'], last.get('Sma200', 0)),
-                    "_is_recent_trade": is_recent_trade, # Hidden col for styling
                 })
                 
             except Exception as e:
@@ -591,7 +579,7 @@ def run_sector_rotation_app(df_global=None):
     
     # Filterable columns (numeric and categorical)
     numeric_columns = ["Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
-    categorical_columns = ["Theme", "Theme Category", "RSI Price Div", "Last JB Trade"]
+    categorical_columns = ["Theme", "Theme Category"]
     all_filter_columns = numeric_columns + categorical_columns
     
     # Get unique values for categorical columns
@@ -688,15 +676,6 @@ def run_sector_rotation_app(df_global=None):
                         "Select Category",
                         unique_categories,
                         key=f"filter_{i}_value_category",
-                        label_visibility="collapsed"
-                    )
-                elif column in ["RSI Price Div", "Last JB Trade"]:
-                    # Get dynamic unique values for these new columns
-                    unique_vals = sorted([str(x) for x in df_stocks[column].dropna().unique().tolist()])
-                    value_categorical = st.selectbox(
-                        f"Select {column}",
-                        unique_vals,
-                        key=f"filter_{i}_value_dynamic",
                         label_visibility="collapsed"
                     )
                 else:
@@ -812,38 +791,15 @@ def run_sector_rotation_app(df_global=None):
         "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.2fx"),
         "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
         "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
-        "RSI Price Div": st.column_config.TextColumn("RSI Price Div", width="medium"),
-        "Last JB Trade": st.column_config.TextColumn("Last JB Trade", width="medium"),
         "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
         "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
         "50 MA": st.column_config.TextColumn("50 MA", width="small"),
         "200 MA": st.column_config.TextColumn("200 MA", width="small"),
-        "_is_recent_trade": st.column_config.Column("_is_recent_trade", hidden=True),
     }
-
-    # Style function for Last Trade Highlight
-    def highlight_recent_trade(row):
-        styles = [''] * len(row)
-        if row.get('_is_recent_trade', False):
-             # Find index of the column
-             try:
-                 idx = row.index.get_loc('Last JB Trade')
-                 styles[idx] = 'background-color: rgba(255, 235, 59, 0.25); color: #f57f17; font-weight: bold;'
-             except: pass
-        return styles
     
     st.dataframe(
-        df_filtered.style.apply(highlight_recent_trade, axis=1),
+        df_filtered,
         use_container_width=True,
         hide_index=True,
-        column_config=column_config,
-        column_order=[
-            "Ticker", "Theme", "Theme Category", "Price", 
-            "Alpha 5d", "Alpha 10d", "Alpha 20d", 
-            "RVOL 5d", "RVOL 10d", "RVOL 20d",
-            "RSI Price Div", "Last JB Trade",
-            "8 EMA", "21 EMA", "50 MA", "200 MA"
-        ]
+        column_config=column_config
     )
-
-}
