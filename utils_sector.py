@@ -527,6 +527,14 @@ def detect_relative_strength_divergence(
     
     return None
 
+def _score_to_grade(score: float) -> str:
+    """Convert numeric score to letter grade."""
+    if score >= 80: return 'A'
+    if score >= 70: return 'B'
+    if score >= 60: return 'C'
+    if score >= 50: return 'D'
+    return 'F'
+
 def calculate_comprehensive_stock_score(
     df: pd.DataFrame, 
     theme_suffix: str, 
