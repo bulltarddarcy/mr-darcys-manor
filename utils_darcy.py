@@ -48,6 +48,13 @@ SZ_AUTO_STEPS = [1, 2, 5, 10, 25, 50, 100]
 SZ_BUCKET_BINS = [0, 7, 30, 60, 90, 120, 180, 365, 10000]
 SZ_BUCKET_LABELS = ["0-7d", "8-30d", "31-60d", "61-90d", "91-120d", "121-180d", "181-365d", ">365d"]
 
+# --- CONSTANTS: PRICE DIVERGENCES APP ---
+DIV_LOOKBACK_DEFAULT = 90
+DIV_DAYS_SINCE_DEFAULT = 25
+DIV_RSI_DIFF_DEFAULT = 2.0
+DIV_CSV_PERIODS_DAYS = [5, 21, 63, 126, 252]
+DIV_CSV_PERIODS_WEEKS = [4, 13, 26, 52]
+
 # REFRESH TIME: 600 seconds = 10 minutes
 CACHE_TTL = 600 
 
@@ -1478,6 +1485,101 @@ def generate_expiry_buckets_html(df):
         html_out.append(f'<div class="zone-row"><div class="zone-label">{r.Bucket}</div><div class="zone-wrapper"><div class="zone-bar {color}" style="width:{pct:.1f}%"></div><div class="zone-value">{val_str} | n={int(r.Trades)}</div></div></div>')
     
     return "".join(html_out)
+
+# --- PRICE DIVERGENCES APP HELPERS ---
+
+def initialize_divergence_state():
+    """Initializes session state for Price Divergences app."""
+    # Active Tab Defaults
+    defaults = {
+        'saved_rsi_div_lookback': DIV_LOOKBACK_DEFAULT,
+        'saved_rsi_div_source': "High/Low",
+        'saved_rsi_div_strict': "Yes",
+        'saved_rsi_div_days_since': DIV_DAYS_SINCE_DEFAULT,
+        'saved_rsi_div_diff': DIV_RSI_DIFF_DEFAULT
+    }
+    
+    # History Tab Defaults
+    hist_defaults = {
+        'rsi_hist_ticker': "AMZN",
+        'rsi_hist_results': None,
+        'rsi_hist_last_run_params': {},
+        'rsi_hist_bulk_df': None
+    }
+    
+    # Merge and initialize
+    defaults.update(hist_defaults)
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+def inject_volume_data(results_list, data_df):
+    """
+    Looks up Volume for P1 and Signal dates and adds to results list.
+    Specific to Divergence app export logic.
+    """
+    if not results_list or data_df is None or data_df.empty:
+        return results_list
+    
+    # 1. Identify Volume Column
+    vol_col = next((c for c in data_df.columns if c.strip().upper() == 'VOLUME'), None)
+    if not vol_col: return results_list
+
+    # 2. Identify Date Index/Column for Lookup
+    lookup = {}
+    try:
+        temp_df = data_df.copy()
+        date_col = next((c for c in temp_df.columns if 'DATE' in c.upper()), None)
+        
+        if date_col:
+            temp_df[date_col] = pd.to_datetime(temp_df[date_col])
+            temp_df['__date_str'] = temp_df[date_col].dt.strftime('%Y-%m-%d')
+            lookup = dict(zip(temp_df['__date_str'], temp_df[vol_col]))
+        elif isinstance(temp_df.index, pd.DatetimeIndex):
+            temp_df['__date_str'] = temp_df.index.strftime('%Y-%m-%d')
+            lookup = dict(zip(temp_df['__date_str'], temp_df[vol_col]))
+    except:
+        return results_list
+    
+    # 3. Inject
+    for row in results_list:
+        d1 = row.get('P1_Date_ISO')
+        d2 = row.get('Signal_Date_ISO')
+        row['Vol1'] = lookup.get(d1, np.nan)
+        row['Vol2'] = lookup.get(d2, np.nan)
+    
+    return results_list
+
+def process_divergence_export_columns(df_in):
+    """
+    Renames Ret_XX columns to D_Ret_XX or W_Ret_XX based on timeframe 
+    and reorders columns for cleaner CSV export.
+    """
+    if df_in.empty: return df_in
+    out = df_in.copy()
+    
+    # Explicit Divergence Type Column
+    if 'Type' in out.columns:
+        out['Divergence Type'] = out['Type']
+
+    # Rename Returns columns based on timeframe context
+    cols = out.columns
+    ret_cols = [c for c in cols if c.startswith('Ret_')]
+    
+    for rc in ret_cols:
+        d_col_name = f"D_{rc}"
+        w_col_name = f"W_{rc}"
+        out[d_col_name] = out.apply(lambda x: x[rc] if x.get('Timeframe') == 'Daily' else None, axis=1)
+        out[w_col_name] = out.apply(lambda x: x[rc] if x.get('Timeframe') == 'Weekly' else None, axis=1)
+    
+    out = out.drop(columns=ret_cols)
+    
+    # Reorder for neatness
+    first_cols = ['Ticker', 'Divergence Type', 'Timeframe', 'Signal_Date_ISO', 'P1_Date_ISO', 'Price1', 'Price2', 'RSI1', 'RSI2', 'Vol1', 'Vol2']
+    existing_first = [c for c in first_cols if c in out.columns]
+    other_cols = [c for c in out.columns if c not in existing_first]
+    
+    return out[existing_first + other_cols]
 
 
 
