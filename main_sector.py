@@ -855,39 +855,19 @@ def run_sector_rotation_app(df_global=None):
     df_filtered = df_stocks.copy()
     
     if filters:
-        # Build filter conditions
-        conditions = []
-        
-        for f in filters:
-            col = f['column']
-            op = f['operator']
-            
-            if f['value_type'] == 'Number':
-                val = f['value']
-                if op == '>=':
-                    condition = df_filtered[col] >= val
-                else:  # <=
-                    condition = df_filtered[col] <= val
-            elif f['value_type'] == 'Column':
-                val_col = f['value_column']
-                if op == '>=':
-                    condition = df_filtered[col] >= df_filtered[val_col]
-                else:  # <=
-                    condition = df_filtered[col] <= df_filtered[val_col]
-            elif f['value_type'] == 'Categorical':
-                # Categorical comparison
-                val_cat = f['value_categorical']
-                condition = df_filtered[col] == val_cat
-            else:
-                continue
-            
-            conditions.append(condition)
-        
-        # Separate numeric and categorical conditions
-        numeric_conditions = []
-        categorical_conditions = []
+        # Separate numeric and categorical filters (keeping track of indices)
+        numeric_filters = []
+        categorical_filters = []
         
         for i, f in enumerate(filters):
+            if f['value_type'] in ['Number', 'Column']:
+                numeric_filters.append(f)
+            elif f['value_type'] == 'Categorical':
+                categorical_filters.append(f)
+        
+        # Build numeric conditions (all combined with AND)
+        numeric_conditions = []
+        for f in numeric_filters:
             col = f['column']
             op = f['operator']
             
@@ -895,58 +875,59 @@ def run_sector_rotation_app(df_global=None):
                 val = f['value']
                 if op == '>=':
                     condition = df_filtered[col] >= val
-                else:  # <=
+                else:
                     condition = df_filtered[col] <= val
-                numeric_conditions.append(condition)
-                
-            elif f['value_type'] == 'Column':
+            else:  # Column
                 val_col = f['value_column']
                 if op == '>=':
                     condition = df_filtered[col] >= df_filtered[val_col]
-                else:  # <=
+                else:
                     condition = df_filtered[col] <= df_filtered[val_col]
-                numeric_conditions.append(condition)
-                
-            elif f['value_type'] == 'Categorical':
-                # Categorical comparison
-                val_cat = f['value_categorical']
-                condition = df_filtered[col] == val_cat
-                categorical_conditions.append((condition, f.get('logic', 'AND')))
+            
+            numeric_conditions.append(condition)
         
-        # Build final condition with proper grouping:
-        # All numeric filters combined with AND
-        # All categorical filters combined with OR (or their specified logic)
-        # Then: (Numeric AND conditions) AND (Categorical OR conditions)
+        # Build categorical conditions (using logic from PREVIOUS categorical filter)
+        categorical_conditions = []
+        for i, f in enumerate(categorical_filters):
+            col = f['column']
+            val_cat = f['value_categorical']
+            condition = df_filtered[col] == val_cat
+            
+            # For first categorical filter, use None
+            # For subsequent, use the previous categorical filter's logic
+            if i == 0:
+                logic = None
+            else:
+                logic = categorical_filters[i-1].get('logic', 'AND')
+            
+            categorical_conditions.append((condition, logic))
         
+        # Combine all numeric conditions with AND
         final_condition = None
-        
-        # Step 1: Combine all numeric conditions with AND
         if numeric_conditions:
             numeric_combined = numeric_conditions[0]
             for cond in numeric_conditions[1:]:
                 numeric_combined = numeric_combined & cond
             final_condition = numeric_combined
         
-        # Step 2: Combine categorical conditions with their logic
+        # Combine all categorical conditions with their logic
         if categorical_conditions:
-            # Get first categorical condition
             cat_combined = categorical_conditions[0][0]
             
-            # Combine with subsequent categorical conditions using their logic
             for i in range(1, len(categorical_conditions)):
                 condition, logic = categorical_conditions[i]
                 if logic == 'OR':
                     cat_combined = cat_combined | condition
-                else:  # AND
+                else:  # AND (default)
                     cat_combined = cat_combined & condition
             
-            # Combine with numeric conditions
+            # Combine numeric and categorical with AND
             if final_condition is not None:
                 final_condition = final_condition & cat_combined
             else:
                 final_condition = cat_combined
         
-        # Apply filter if we have any conditions
+        # Apply the filter
         if final_condition is not None:
             df_filtered = df_filtered[final_condition]
     
