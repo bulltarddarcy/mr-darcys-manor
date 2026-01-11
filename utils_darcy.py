@@ -15,9 +15,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils_shared import get_gdrive_binary_data, get_table_height
 
 # --- PRICE HISTORY CONSTANTS ---
-VOL_SMA_PERIOD = 30 # For 
-EMA8_PERIOD = 8
-EMA21_PERIOD = 21
+VOL_SMA_PERIOD = 30  
+
 
 # --- CONSTANTS: DATABASE APP ---
 DB_DEFAULT_EXPIRY_OFFSET = 365
@@ -87,6 +86,20 @@ SEAS_SCAN_PERIODS = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
 SEAS_ARB_EV_THRESH = 3.0
 SEAS_ARB_RECENT_THRESH = -3.0
 SEAS_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+# --- CONSTANTS: EMA DISTANCE APP ---
+EMA_DIST_DEFAULT_TICKER = "QQQ"
+EMA_DIST_DEFAULT_YEARS = 10
+EMA_DIST_BACKTEST_DAYS = 30
+EMA_DIST_BACKTEST_DD = -0.08  # -8% Drawdown
+EMA_DIST_CHART_LOOKBACK = 3650  # 10 Years
+
+# SMA Constants (EMA8/21 already exist above)
+EMA8_PERIOD = 8
+EMA21_PERIOD = 21
+SMA50_PERIOD = 50
+SMA100_PERIOD = 100
+SMA200_PERIOD = 200
 
 # REFRESH TIME: 600 seconds = 10 minutes
 CACHE_TTL = 600 
@@ -2088,4 +2101,85 @@ def run_seasonality_scan(ticker_map, scan_date, scan_lookback, mc_thresh_val):
                     
     return pd.DataFrame(results) if results else pd.DataFrame(), all_csv_rows
 
+# --- EMA DISTANCE APP HELPERS ---
 
+def fmt_pct_display(val):
+    """Formats a float as a percentage string with parentheses for negatives."""
+    if pd.isna(val): return ""
+    if val < 0: return f"({abs(val):.1f}%)"
+    return f"{val:.1f}%"
+
+def calculate_ema_distance_data(ticker, years_back):
+    """
+    Fetches data and calculates Moving Average distances for the EMA App.
+    Returns the processed dataframe.
+    """
+    try:
+        t_obj = yf.Ticker(ticker)
+        df = t_obj.history(period=f"{years_back}y")
+        if df is None or df.empty: return None
+        
+        df = df.reset_index()
+        df.columns = [c.upper() for c in df.columns]
+        
+        # Standardize Columns
+        date_col = next((c for c in df.columns if 'DATE' in c), "DATE")
+        close_col = 'CLOSE' if 'CLOSE' in df.columns else 'Close'
+        
+        # Ensure Date is timezone-naive
+        df[date_col] = pd.to_datetime(df[date_col])
+        if df[date_col].dt.tz is not None:
+             df[date_col] = df[date_col].dt.tz_localize(None)
+
+        # Calculate MAs
+        df['EMA_8'] = df[close_col].ewm(span=EMA8_PERIOD, adjust=False).mean()
+        df['EMA_21'] = df[close_col].ewm(span=EMA21_PERIOD, adjust=False).mean()
+        df['SMA_50'] = df[close_col].rolling(window=SMA50_PERIOD).mean()
+        df['SMA_100'] = df[close_col].rolling(window=SMA100_PERIOD).mean()
+        df['SMA_200'] = df[close_col].rolling(window=SMA200_PERIOD).mean()
+        
+        # Calculate Distances
+        for ma, label in [('EMA_8', 'Dist_8'), ('EMA_21', 'Dist_21'), 
+                          ('SMA_50', 'Dist_50'), ('SMA_100', 'Dist_100'), ('SMA_200', 'Dist_200')]:
+            df[label] = ((df[close_col] - df[ma]) / df[ma]) * 100
+            
+        return df.dropna(subset=['EMA_8', 'EMA_21', 'SMA_50', 'SMA_100', 'SMA_200']).copy()
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        return None
+
+def run_ema_backtest(signal_series, price_data, low_data, lookforward=EMA_DIST_BACKTEST_DAYS, drawdown_thresh=EMA_DIST_BACKTEST_DD):
+    """
+    Backtests a specific signal series against future price action.
+    Checks if price drops by drawdown_thresh within lookforward days.
+    """
+    idxs = signal_series[signal_series].index
+    if len(idxs) == 0: return 0, 0, 0
+    
+    hits = 0
+    days_to_dd = []
+    closes = price_data.values
+    lows = low_data.values
+    is_signal = signal_series.values
+    n = len(closes)
+    
+    for i in range(n):
+        if not is_signal[i]: continue
+        if i + lookforward >= n: continue 
+        
+        entry_price = closes[i]
+        future_window = lows[i+1 : i+1+lookforward]
+        min_future = np.min(future_window)
+        
+        dd = (min_future - entry_price) / entry_price
+        
+        if dd <= drawdown_thresh:
+            hits += 1
+            target_price = entry_price * (1 + drawdown_thresh)
+            hit_indices = np.where(future_window <= target_price)[0]
+            if len(hit_indices) > 0:
+                days_to_dd.append(hit_indices[0] + 1)
+                
+    hit_rate = (hits / len(idxs)) * 100 if len(idxs) > 0 else 0
+    median_days = np.median(days_to_dd) if days_to_dd else 0
+    return len(idxs), hit_rate, median_days

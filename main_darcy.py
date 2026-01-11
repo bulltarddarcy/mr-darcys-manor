@@ -1403,88 +1403,32 @@ def run_seasonality_app(df_global):
                 )
 
 def run_ema_distance_app(df_global):
-    # Helper function defined inside scope to prevent "not defined" errors
-    def run_backtest(signal_series, price_data, low_data, lookforward=30, drawdown_thresh=-0.08):
-        idxs = signal_series[signal_series].index
-        if len(idxs) == 0: return 0, 0, 0
-        hits = 0
-        days_to_dd = []
-        closes = price_data.values
-        lows = low_data.values
-        is_signal = signal_series.values
-        n = len(closes)
-        for i in range(n):
-            if not is_signal[i]: continue
-            if i + lookforward >= n: continue 
-            entry_price = closes[i]
-            future_window = lows[i+1 : i+1+lookforward]
-            min_future = np.min(future_window)
-            dd = (min_future - entry_price) / entry_price
-            if dd <= drawdown_thresh:
-                hits += 1
-                target_price = entry_price * (1 + drawdown_thresh)
-                hit_indices = np.where(future_window <= target_price)[0]
-                if len(hit_indices) > 0:
-                    days_to_dd.append(hit_indices[0] + 1)
-        hit_rate = (hits / len(idxs)) * 100 if len(idxs) > 0 else 0
-        median_days = np.median(days_to_dd) if days_to_dd else 0
-        return len(idxs), hit_rate, median_days
-
     st.title("📏 EMA Distance Analysis")
 
     # 1. Input Section
     col_in1, col_in2, _ = st.columns([1, 1, 2])
     with col_in1:
-        ticker = st.text_input("Ticker", value="QQQ").upper().strip()
+        ticker = st.text_input("Ticker", value=ud.EMA_DIST_DEFAULT_TICKER).upper().strip()
     with col_in2:
-        years_back = st.number_input("Years to Analyze", min_value=1, max_value=20, value=10, step=1)
+        years_back = st.number_input("Years to Analyze", min_value=1, max_value=20, value=ud.EMA_DIST_DEFAULT_YEARS, step=1)
     
     if not ticker:
         st.warning("Please enter a ticker.")
         return
 
-    # Percentage formatting to 1 decimal place
-    def fmt_pct(val):
-        if pd.isna(val): return ""
-        if val < 0: return f"({abs(val):.1f}%)"
-        return f"{val:.1f}%"
-
-    # 2. Data Fetching
+    # 2. Data Fetching via Utils
     with st.spinner(f"Crunching data for {ticker}..."):
-        try:
-            t_obj = yf.Ticker(ticker)
-            df = t_obj.history(period=f"{years_back}y")
-            if df is None or df.empty:
-                st.error(f"Could not fetch data for {ticker}.")
-                return
-            df = df.reset_index()
-            df.columns = [c.upper() for c in df.columns]
-            
-            # Defining date_col to prevent "not defined" error
-            date_col = next((c for c in df.columns if 'DATE' in c), "DATE")
-            close_col = 'CLOSE' if 'CLOSE' in df.columns else 'Close'
-            low_col = 'LOW' if 'LOW' in df.columns else 'Low'
-            df[date_col] = pd.to_datetime(df[date_col])
-        except Exception as e:
-            st.error(f"Error fetching data: {e}")
-            return
+        df_clean = ud.calculate_ema_distance_data(ticker, years_back)
+        if df_clean is None: return
 
-    # Calculations strictly using Close prices
-    df['EMA_8'] = df[close_col].ewm(span=8, adjust=False).mean()
-    df['EMA_21'] = df[close_col].ewm(span=21, adjust=False).mean()
-    df['SMA_50'] = df[close_col].rolling(window=50).mean()
-    df['SMA_100'] = df[close_col].rolling(window=100).mean()
-    df['SMA_200'] = df[close_col].rolling(window=200).mean()
+    # Standardize column access
+    close_col = 'CLOSE' if 'CLOSE' in df_clean.columns else 'Close'
+    low_col = 'LOW' if 'LOW' in df_clean.columns else 'Low'
+    date_col = next((c for c in df_clean.columns if 'DATE' in c), "DATE")
     
-    # Distance Gaps
-    df['Dist_8'] = ((df[close_col] - df['EMA_8']) / df['EMA_8']) * 100
-    df['Dist_21'] = ((df[close_col] - df['EMA_21']) / df['EMA_21']) * 100
-    df['Dist_50'] = ((df[close_col] - df['SMA_50']) / df['SMA_50']) * 100
-    df['Dist_100'] = ((df[close_col] - df['SMA_100']) / df['SMA_100']) * 100
-    df['Dist_200'] = ((df[close_col] - df['SMA_200']) / df['SMA_200']) * 100
-    df_clean = df.dropna(subset=['EMA_8', 'EMA_21', 'SMA_50', 'SMA_100', 'SMA_200']).copy()
-    
-    # Current Distance for Reference Line
+    # Current Reference Data
+    current_price = df_clean[close_col].iloc[-1]
+    current_ema8 = df_clean['EMA_8'].iloc[-1]
     current_dist_50 = df_clean['Dist_50'].iloc[-1]
 
     # --- TABLE 1: Main Stats ---
@@ -1498,7 +1442,7 @@ def run_ema_distance_app(df_global):
             * 50-day, 100-day, and 200-day SMA: Medium to long-term trend baselines.
 
             **2. The "Rubber Band" Logic (Percentiles).**
-            Rather than just showing the current gap, the app looks at 10 years of history for that specific ticker to see how rare the current gap is. It calculates:
+            Rather than just showing the current gap, the app looks at {years_back} years of history for that specific ticker to see how rare the current gap is. It calculates:
             * **p50 (Median):** The typical distance from the average.
             * **p70/p80 (Uptrend):** These levels generally occur in strong uptrends.
             * **p90/p95 (Extremes):** The levels reached only 10% or 5% of the time historically.
@@ -1508,15 +1452,10 @@ def run_ema_distance_app(df_global):
             * 🟢 **Buy Zone (Green):** Triggered if the Gap is ≤ p50 (Median) AND price is > 8-EMA. Suggests a "pullback to the mean" in an uptrend.
             * 🟡 **Warning Zone (Yellow):** Triggered if the gap is between p50 and p90. Price is extending but not yet extreme.
             * 🔴 **Sell/Trim Zone (Red):** Triggered if the gap is $\ge$ p90. Price is statistically over-extended.
-
-            **4. Data Sources.**
-            All Close Prices are sourced directly from Yahoo Finance.
-                    """)
+        """)
 
     stats_data = []
     thresholds = {} 
-    current_price = df_clean[close_col].iloc[-1]
-    current_ema8 = df_clean['EMA_8'].iloc[-1]
     
     metrics = [
         ("Close vs 8-EMA", df_clean['EMA_8'], df_clean['Dist_8']),
@@ -1547,7 +1486,7 @@ def run_ema_distance_app(df_global):
         return styles
 
     st.dataframe(
-        df_stats.style.apply(color_combined, axis=1).format(fmt_pct, subset=["Gap", "Avg", "p50", "p70", "p80", "p90", "p95"]),
+        df_stats.style.apply(color_combined, axis=1).format(ud.fmt_pct_display, subset=["Gap", "Avg", "p50", "p70", "p80", "p90", "p95"]),
         use_container_width=True, hide_index=True,
         column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f"), "MA Level": st.column_config.NumberColumn("MA Level", format="$%.2f")}
     )
@@ -1563,16 +1502,15 @@ def run_ema_distance_app(df_global):
     m_fs = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_50'] >= t50_80)
     m_t = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_80) & (df_clean['Dist_50'] >= t50_80)
     
-    res_d = run_backtest(m_d, df_clean[close_col], df_clean[low_col])
-    res_fs = run_backtest(m_fs, df_clean[close_col], df_clean[low_col])
-    res_t = run_backtest(m_t, df_clean[close_col], df_clean[low_col])
+    res_d = ud.run_ema_backtest(m_d, df_clean[close_col], df_clean[low_col])
+    res_fs = ud.run_ema_backtest(m_fs, df_clean[close_col], df_clean[low_col])
+    res_t = ud.run_ema_backtest(m_t, df_clean[close_col], df_clean[low_col])
 
     # Status Emoji Logic
     d_active = "✅" if bool(m_d.iloc[-1]) else "❌"
     fs_active = "✅" if bool(m_fs.iloc[-1]) else "❌"
     t_active = "✅" if bool(m_t.iloc[-1]) else "❌"
 
-    # Updated column headers for Draw Down
     combo_rows = [
         {
             "Combo Rule": "Double EMA", 
@@ -1596,7 +1534,6 @@ def run_ema_distance_app(df_global):
     
     df_combo = pd.DataFrame(combo_rows)
 
-    # Style: Bold row only if raw_status is True
     def style_combo(row):
         return ['font-weight: bold; color: #c5221f;' if row['raw_status'] else ''] * len(row)
 
@@ -1618,8 +1555,8 @@ def run_ema_distance_app(df_global):
         'Distance (%)': df_clean['Dist_50']
     })
     
-    # --- MODIFIED: Show last 10 years (3650 days) instead of 2 years (730 days) ---
-    chart_data = chart_data[chart_data['Date'] >= (chart_data['Date'].max() - timedelta(days=3650))]
+    # Filter for lookback period
+    chart_data = chart_data[chart_data['Date'] >= (chart_data['Date'].max() - timedelta(days=ud.EMA_DIST_CHART_LOOKBACK))]
 
     # Base bar chart
     bars = alt.Chart(chart_data).mark_bar().encode(
@@ -1636,8 +1573,5 @@ def run_ema_distance_app(df_global):
         strokeWidth=2
     ).encode(y='y:Q')
 
-    # Combined Chart
-    final_chart = (bars + rule).properties(height=300).interactive()
-    st.altair_chart(final_chart, use_container_width=True)
-
+    st.altair_chart((bars + rule).properties(height=300).interactive(), use_container_width=True)
 
