@@ -1640,6 +1640,7 @@ def get_quadrant_name(ratio: float, momentum: float) -> str:
         logger.error(f"Error calculating theme score: {e}")
         return None
 
+
 # ==========================================
 # 5. ORCHESTRATOR (OPTIMIZED)
 # ==========================================
@@ -1649,19 +1650,7 @@ def fetch_and_process_universe(
     benchmark_ticker: str = "SPY"
 ) -> Tuple[Dict, List[str], Dict[str, str], pd.DataFrame, Dict[str, List[str]]]:
     """
-    OPTIMIZED data pipeline with multi-theme support.
-    
-    Key optimizations:
-    1. Single parquet download
-    2. Vectorized filtering with groupby
-    3. Multi-theme beta calculations
-    4. Efficient caching
-    
-    Args:
-        benchmark_ticker: SPY or QQQ
-        
-    Returns:
-        Tuple of (data_cache, missing_tickers, theme_map, universe_df, stock_themes_map)
+    OPTIMIZED data pipeline with multi-theme support AND PARALLEL PROCESSING.
     """
     dm = SectorDataManager()
     uni_df, tickers, theme_map = dm.load_universe(benchmark_ticker)
@@ -1720,7 +1709,8 @@ def fetch_and_process_universe(
     data_cache[benchmark_ticker] = bench_df
     logger.info(f"Processed benchmark {benchmark_ticker}")
 
-    # --- 4. PROCESS ETFS (OPTIMIZED WITH GROUPBY) ---
+    # --- 4. PROCESS ETFS (SEQ) ---
+    # ETFs are usually few (11-20), so sequential is fine/safe here
     etf_tickers = list(theme_map.values())
     
     if etf_tickers:
@@ -1732,7 +1722,6 @@ def fetch_and_process_universe(
                 df = etf_groups.get_group(etf).copy()
             except KeyError:
                 missing_tickers.append(etf)
-                logger.warning(f"ETF {etf} not found in parquet")
                 continue
                 
             df = calc.process_dataframe(df)
@@ -1741,43 +1730,60 @@ def fetch_and_process_universe(
         
         logger.info(f"Processed {len(etf_tickers)} ETFs")
 
-    # --- 5. PROCESS STOCKS (MULTI-THEME AWARE) ---
+    # --- 5. PROCESS STOCKS (PARALLELIZED) ---
     stocks = uni_df[uni_df['Role'] == 'Stock']
-    
-    # Build stock-to-themes mapping
     stock_themes_map = stocks.groupby('Ticker')['Theme'].apply(list).to_dict()
-    logger.info(f"Found {len(stock_themes_map)} unique stocks across themes")
-    
-    # Get all unique stock tickers
     stock_tickers = list(stock_themes_map.keys())
     
     if stock_tickers:
-        # OPTIMIZATION: Filter and group once
+        # Pre-filter master DF to only include stocks we need
         stock_mask = master_df['Ticker'].isin(stock_tickers)
         stock_groups = master_df[stock_mask].groupby('Ticker')
         
-        for ticker, themes_list in stock_themes_map.items():
+        # Helper function for parallel execution
+        def process_stock_worker(ticker, themes_list):
             try:
-                df = stock_groups.get_group(ticker).copy()
-            except KeyError:
-                missing_tickers.append(ticker)
-                logger.warning(f"Stock {ticker} not found in parquet")
-                continue
-            
-            # Process base dataframe once
-            df = calc.process_dataframe(df)
-            
-            # Calculate beta/alpha vs EACH theme
-            for theme in themes_list:
-                parent_etf = theme_map.get(theme)
-                parent_df = data_cache.get(parent_etf, bench_df)
+                # 1. Get Stock Data
+                try:
+                    df = stock_groups.get_group(ticker).copy()
+                except KeyError:
+                    return ticker, None, True # Missing
                 
-                if parent_df is not None:
-                    df = calc.calculate_stock_alpha_multi_theme(df, parent_df, theme)
-            
-            data_cache[ticker] = df
+                # 2. Basic Technicals
+                df = calc.process_dataframe(df)
+                
+                # 3. Calculate Alpha vs Each Theme
+                for theme in themes_list:
+                    parent_etf = theme_map.get(theme)
+                    # Note: data_cache is read-only here, which is thread-safe enough
+                    parent_df = data_cache.get(parent_etf, bench_df)
+                    
+                    if parent_df is not None:
+                        df = calc.calculate_stock_alpha_multi_theme(df, parent_df, theme)
+                
+                return ticker, df, False
+            except Exception as e:
+                logger.error(f"Error processing {ticker}: {e}")
+                return ticker, None, False
+
+        # Execute in parallel
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         
-        logger.info(f"Processed {len(stock_tickers)} stocks with multi-theme support")
+        # Max workers 10-20 is usually sweet spot for data manipulation overhead
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            future_to_stock = {
+                executor.submit(process_stock_worker, t, stock_themes_map[t]): t 
+                for t in stock_tickers
+            }
+            
+            for future in as_completed(future_to_stock):
+                ticker, df_result, is_missing = future.result()
+                if is_missing:
+                    missing_tickers.append(ticker)
+                elif df_result is not None:
+                    data_cache[ticker] = df_result
+
+        logger.info(f"Processed {len(stock_tickers)} stocks in parallel")
 
     return data_cache, missing_tickers, theme_map, uni_df, stock_themes_map
 
