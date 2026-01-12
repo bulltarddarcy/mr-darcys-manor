@@ -838,7 +838,7 @@ def generate_top_ideas(top_bulls_df, global_df):
 def initialize_pivot_state(start_default, max_date):
     defaults = {
         'saved_pv_start': max_date, 'saved_pv_end': max_date, 'saved_pv_ticker': "",
-        'saved_pv_notional': "0M", 'saved_pv_mkt_cap': "0B", 'saved_pv_ema': "All",
+        'saved_pv_notional': "10M", 'saved_pv_mkt_cap': "50B", 'saved_pv_ema': "All",
         'saved_calc_strike': 100.0, 'saved_calc_premium': 2.50, 'saved_calc_expiry': date.today() + timedelta(days=30)
     }
     for key, val in defaults.items():
