@@ -214,7 +214,7 @@ def run_pivot_tables_app(df):
         with cc2: c_premium = st.number_input("Premium", min_value=0.00, value=st.session_state.saved_calc_premium, step=0.05, format="%.2f", key="calc_premium", on_change=save_pv_state, args=("calc_premium", "saved_calc_premium"))
         with cc3: c_expiry = st.date_input("Expiration", value=st.session_state.saved_calc_expiry, key="calc_expiry", on_change=save_pv_state, args=("calc_expiry", "saved_calc_expiry"))
         
-        dte = (c_expiry - date.today()).days
+        dte = (c_expiry - date.today()).days + 1
         coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
         annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
 
@@ -1053,4 +1053,5 @@ def run_ema_distance_app(df_global):
     bars = alt.Chart(chart_data).mark_bar().encode(x=alt.X('Date:T', title=None), y=alt.Y('Distance (%)', title='% Dist from 50 SMA'), color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#71d28a"), alt.value("#f29ca0")), tooltip=['Date', 'Distance (%)'])
     rule = alt.Chart(pd.DataFrame({'y': [current_dist_50]})).mark_rule(color='#333', strokeDash=[5, 5], strokeWidth=2).encode(y='y:Q')
     st.altair_chart((bars + rule).properties(height=300).interactive(), use_container_width=True)
+
 
