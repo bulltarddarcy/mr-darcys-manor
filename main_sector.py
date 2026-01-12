@@ -643,6 +643,13 @@ def run_sector_rotation_app(df_global=None):
     if not stock_theme_pairs:
         st.info(f"No stocks found")
         return
+
+    # Fetch Market Caps in parallel for speed
+    with st.spinner("Fetching Market Caps..."):
+        # Extract just the ticker symbols from the pairs
+        all_tickers = [pair[0] for pair in stock_theme_pairs]
+        # Use existing batch utility from utils_darcy.py
+        mc_map = ud.fetch_market_caps_batch(all_tickers)
     
     # Build data for all stock-theme combinations
     stock_data = []
@@ -717,6 +724,7 @@ def run_sector_rotation_app(df_global=None):
                     "RVOL 5d": last.get('RVOL_Short', 0),
                     "RVOL 10d": last.get('RVOL_Med', 0),
                     "RVOL 20d": last.get('RVOL_Long', 0),
+                    "Market Cap (B)": mc_map.get(stock, 0) / 1e9,
                     "Div": div_str, # Added Column
                     "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
                     "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
@@ -772,7 +780,7 @@ def run_sector_rotation_app(df_global=None):
     st.caption("Build up to 6 filters. Filters apply automatically as you change them.")
     
     # Filterable columns (numeric and categorical)
-    numeric_columns = ["Price", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
+    numeric_columns = ["Price", "Market Cap (B)", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
     # Added "Div" and MA signals to categorical columns
     categorical_columns = ["Theme", "Theme Category", "Div", "8 EMA", "21 EMA", "50 MA", "200 MA"]
     all_filter_columns = numeric_columns + categorical_columns
@@ -1166,6 +1174,7 @@ def run_sector_rotation_app(df_global=None):
         "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
         "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
         "Div": st.column_config.TextColumn("Div", width="small"), # Added config for Div
+        "Market Cap (B)": st.column_config.NumberColumn("Mkt Cap", format="$%.1fB"),
         "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
         "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
         "50 MA": st.column_config.TextColumn("50 MA", width="small"),
