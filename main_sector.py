@@ -30,7 +30,7 @@ def get_ma_signal(price: float, ma_val: float) -> str:
 # ==========================================
 # MAIN PAGE FUNCTION
 # ==========================================
-def run_sector_rotation_app(df_global=None):
+def run_theme_rotation_app(df_global=None):
     """
     Main entry point for Sector Rotation application.
     
