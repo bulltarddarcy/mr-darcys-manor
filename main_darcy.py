@@ -210,8 +210,8 @@ def run_pivot_tables_app(df):
     with col_calculator:
         st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
         cc1, cc2, cc3 = st.columns(3)
-        with cc1: c_strike = st.number_input("Strike Price", min_value=0.01, value=st.session_state.saved_calc_strike, step=1.0, format="%.2f", key="calc_strike", on_change=save_pv_state, args=("calc_strike", "saved_calc_strike"))
-        with cc2: c_premium = st.number_input("Premium", min_value=0.00, value=st.session_state.saved_calc_premium, step=0.05, format="%.2f", key="calc_premium", on_change=save_pv_state, args=("calc_premium", "saved_calc_premium"))
+        with cc1: c_premium = st.number_input("Premium", min_value=0.00, value=st.session_state.saved_calc_premium, step=0.05, format="%.2f", key="calc_premium", on_change=save_pv_state, args=("calc_premium", "saved_calc_premium"))
+        with cc2: c_strike = st.number_input("Strike Price", min_value=0.01, value=st.session_state.saved_calc_strike, step=1.0, format="%.2f", key="calc_strike", on_change=save_pv_state, args=("calc_strike", "saved_calc_strike"))
         with cc3: c_expiry = st.date_input("Expiration", value=st.session_state.saved_calc_expiry, key="calc_expiry", on_change=save_pv_state, args=("calc_expiry", "saved_calc_expiry"))
         
         dte = (c_expiry - date.today()).days + 1
@@ -1053,5 +1053,6 @@ def run_ema_distance_app(df_global):
     bars = alt.Chart(chart_data).mark_bar().encode(x=alt.X('Date:T', title=None), y=alt.Y('Distance (%)', title='% Dist from 50 SMA'), color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#71d28a"), alt.value("#f29ca0")), tooltip=['Date', 'Distance (%)'])
     rule = alt.Chart(pd.DataFrame({'y': [current_dist_50]})).mark_rule(color='#333', strokeDash=[5, 5], strokeWidth=2).encode(y='y:Q')
     st.altair_chart((bars + rule).properties(height=300).interactive(), use_container_width=True)
+
 
 
