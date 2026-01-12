@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import utils_sector as us
 import utils_darcy as ud  # Ensure darcy utils are available for divergence logic
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
 # UI HELPERS
@@ -604,12 +605,20 @@ def run_sector_rotation_app(df_global=None):
     if 'sector_target' not in st.session_state:
         st.session_state.sector_target = "All"
     
-    selected_theme = st.selectbox(
-        "Select Theme",
-        all_themes,
-        index=all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0,
-        key="stock_theme_selector_unique"
-    )
+    col_sel, col_opt = st.columns([1, 1])
+    with col_sel:
+        selected_theme = st.selectbox(
+            "Select Theme",
+            all_themes,
+            index=all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0,
+            key="stock_theme_selector_unique"
+        )
+    with col_opt:
+        show_divergences = st.checkbox(
+            "Calculate Divergences (Slower)", 
+            value=False, 
+            help="Enabling this will scan for RSI divergences, which increases load time."
+        )
     
     # Update session state
     st.session_state.sector_target = selected_theme
@@ -643,97 +652,115 @@ def run_sector_rotation_app(df_global=None):
     if not stock_theme_pairs:
         st.info(f"No stocks found")
         return
-
-    # Fetch Market Caps in parallel for speed
-    with st.spinner("Fetching Market Caps..."):
-        # Extract just the ticker symbols from the pairs
-        all_tickers = [pair[0] for pair in stock_theme_pairs]
-        # Use existing batch utility from utils_darcy.py
-        mc_map = ud.fetch_market_caps_batch(all_tickers)
     
-    # Build data for all stock-theme combinations
+    # --- OPTIMIZATION START ---
+    
+    # 1. Fetch Market Caps in parallel for speed
+    with st.spinner("Fetching Market Caps..."):
+        all_tickers = [pair[0] for pair in stock_theme_pairs]
+        mc_map = ud.fetch_market_caps_batch(all_tickers)
+
+    # 2. Define Helper for Parallel Execution
+    def process_single_stock(stock, stock_theme):
+        sdf = etf_data_cache.get(stock)
+        
+        # Fast Fail: Check data existence and length
+        if sdf is None or sdf.empty or len(sdf) < 20:
+            return None
+
+        # Fast Fail: Volume Filter (Calculated on the fly to avoid heavy copies)
+        try:
+            # Check last 20 days volume directly
+            recent_vol = sdf['Volume'].values[-20:]
+            recent_close = sdf['Close'].values[-20:]
+            avg_vol = recent_vol.mean()
+            avg_price = recent_close.mean()
+            
+            if (avg_vol * avg_price) < us.MIN_DOLLAR_VOLUME:
+                return None
+        except:
+            return None
+
+        # If we pass filters, do calculations
+        try:
+            last = sdf.iloc[-1]
+            
+            # Divergence Logic (Heavy CPU - Optional)
+            div_str = "—"
+            if show_divergences:
+                d_d, _ = ud.prepare_data(sdf.copy())
+                if d_d is not None and not d_d.empty:
+                    # Convert strict setting to boolean
+                    strict_bool = (ud.DIV_STRICT_DEFAULT == "Yes")
+                    
+                    divs = ud.find_divergences(
+                        d_d, 
+                        stock, 
+                        'Daily',
+                        min_n=0,
+                        periods_input=ud.DIV_CSV_PERIODS_DAYS,
+                        optimize_for='PF',
+                        lookback_period=ud.DIV_LOOKBACK_DEFAULT,
+                        price_source=ud.DIV_SOURCE_DEFAULT,
+                        strict_validation=strict_bool,
+                        recent_days_filter=ud.DIV_DAYS_SINCE_DEFAULT,
+                        rsi_diff_threshold=ud.DIV_RSI_DIFF_DEFAULT
+                    )
+                    
+                    # Filter only for recent active divergences
+                    active_divs = [d for d in divs if d.get('Is_Recent', False)]
+                    
+                    if active_divs:
+                        # Take the most recent one
+                        last_div = active_divs[-1]
+                        d_type = last_div['Type']
+                        div_str = f"🟢 {d_type}" if d_type == 'Bullish' else f"🔴 {d_type}"
+
+            # Get alpha/beta metrics safely
+            alpha_5d = last.get(f"Alpha_Short_{stock_theme}", 0)
+            alpha_10d = last.get(f"Alpha_Med_{stock_theme}", 0)
+            alpha_20d = last.get(f"Alpha_Long_{stock_theme}", 0)
+            beta = last.get(f"Beta_{stock_theme}", 1.0)
+
+            return {
+                "Ticker": stock,
+                "Theme": stock_theme,
+                "Theme Category": theme_category_map.get(stock_theme, "Unknown"),
+                "Price": last['Close'],
+                "Market Cap (B)": mc_map.get(stock, 0) / 1e9,
+                "Beta": beta,
+                "Alpha 5d": alpha_5d,
+                "Alpha 10d": alpha_10d,
+                "Alpha 20d": alpha_20d,
+                "RVOL 5d": last.get('RVOL_Short', 0),
+                "RVOL 10d": last.get('RVOL_Med', 0),
+                "RVOL 20d": last.get('RVOL_Long', 0),
+                "Div": div_str,
+                "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
+                "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
+                "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
+                "200 MA": get_ma_signal(last['Close'], last.get('Sma200', 0)),
+            }
+        except Exception:
+            return None
+
+    # 3. Execute in Parallel
     stock_data = []
     
-    with st.spinner(f"Loading {len(stock_theme_pairs)} stock-theme combinations..."):
-        for stock, stock_theme in stock_theme_pairs:
-            sdf = etf_data_cache.get(stock)
+    # We use max_workers=20 to keep memory usage reasonable while gaining speed
+    with st.spinner(f"Processing {len(stock_theme_pairs)} stocks..."):
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            future_to_stock = {
+                executor.submit(process_single_stock, stock, theme): stock 
+                for stock, theme in stock_theme_pairs
+            }
             
-            if sdf is None or sdf.empty or len(sdf) < 20:
-                continue
-            
-            try:
-                # Volume filter
-                avg_vol = sdf['Volume'].tail(20).mean()
-                avg_price = sdf['Close'].tail(20).mean()
-                
-                if (avg_vol * avg_price) < us.MIN_DOLLAR_VOLUME:
-                    continue
-                
-                last = sdf.iloc[-1]
-                
-                # Get theme-specific metrics
-                alpha_5d = last.get(f"Alpha_Short_{stock_theme}", 0)
-                alpha_10d = last.get(f"Alpha_Med_{stock_theme}", 0)
-                alpha_20d = last.get(f"Alpha_Long_{stock_theme}", 0)
-                beta = last.get(f"Beta_{stock_theme}", 1.0)
-                
-                # --- ADDED: Divergence Calculation ---
-                div_str = "—"
-                try:
-                    # Prepare daily data
-                    d_d, _ = ud.prepare_data(sdf.copy())
-                    if d_d is not None and not d_d.empty:
-                        # Convert strict setting to boolean
-                        strict_bool = (ud.DIV_STRICT_DEFAULT == "Yes")
-                        
-                        divs = ud.find_divergences(
-                            d_d, 
-                            stock, 
-                            'Daily',
-                            min_n=0,
-                            periods_input=ud.DIV_CSV_PERIODS_DAYS,
-                            optimize_for='PF',
-                            lookback_period=ud.DIV_LOOKBACK_DEFAULT,
-                            price_source=ud.DIV_SOURCE_DEFAULT,
-                            strict_validation=strict_bool,
-                            recent_days_filter=ud.DIV_DAYS_SINCE_DEFAULT,
-                            rsi_diff_threshold=ud.DIV_RSI_DIFF_DEFAULT
-                        )
-                        
-                        # Filter only for recent active divergences
-                        active_divs = [d for d in divs if d.get('Is_Recent', False)]
-                        
-                        if active_divs:
-                            # Take the most recent one
-                            last_div = active_divs[-1]
-                            d_type = last_div['Type']
-                            div_str = f"🟢 {d_type}" if d_type == 'Bullish' else f"🔴 {d_type}"
-                except Exception:
-                    pass
-                # -------------------------------------
+            for future in as_completed(future_to_stock):
+                result = future.result()
+                if result is not None:
+                    stock_data.append(result)
 
-                stock_data.append({
-                    "Ticker": stock,
-                    "Theme": stock_theme,
-                    "Theme Category": theme_category_map.get(stock_theme, "Unknown"),
-                    "Price": last['Close'],
-                    "Beta": beta,
-                    "Alpha 5d": alpha_5d,
-                    "Alpha 10d": alpha_10d,
-                    "Alpha 20d": alpha_20d,
-                    "RVOL 5d": last.get('RVOL_Short', 0),
-                    "RVOL 10d": last.get('RVOL_Med', 0),
-                    "RVOL 20d": last.get('RVOL_Long', 0),
-                    "Market Cap (B)": mc_map.get(stock, 0) / 1e9,
-                    "Div": div_str, # Added Column
-                    "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
-                    "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
-                    "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
-                    "200 MA": get_ma_signal(last['Close'], last.get('Sma200', 0)),
-                })
-                
-            except Exception as e:
-                continue
+    # --- OPTIMIZATION END ---
 
     if not stock_data:
         st.info(f"No stocks found (or filtered by volume).")
@@ -1166,6 +1193,7 @@ def run_sector_rotation_app(df_global=None):
         "Theme": st.column_config.TextColumn("Theme", width="medium"),
         "Theme Category": st.column_config.TextColumn("Theme Category", width="medium"),
         "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+        "Market Cap (B)": st.column_config.NumberColumn("Mkt Cap", format="$%.1fB"),
         "Beta": st.column_config.NumberColumn("Beta", format="%.2f"),
         "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
         "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
@@ -1174,7 +1202,6 @@ def run_sector_rotation_app(df_global=None):
         "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
         "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
         "Div": st.column_config.TextColumn("Div", width="small"), # Added config for Div
-        "Market Cap (B)": st.column_config.NumberColumn("Mkt Cap", format="$%.1fB"),
         "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
         "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
         "50 MA": st.column_config.TextColumn("50 MA", width="small"),
