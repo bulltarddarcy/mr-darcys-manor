@@ -756,13 +756,13 @@ def run_sector_rotation_app(df_global=None):
     col_clear, col_space = st.columns([1, 5])
     with col_clear:
         if st.button("🗑️ Clear Filters", type="secondary", use_container_width=True):
-            # Delete all filter-related keys EXCEPT the cleared flag
-            keys_to_delete = [k for k in st.session_state.keys() if k.startswith('filter_')]
+            # Delete all filter-related keys INCLUDING filter_defaults
+            keys_to_delete = [k for k in st.session_state.keys() 
+                            if k.startswith('filter_') or k == 'filter_defaults' or k == 'default_filters_set']
             for key in keys_to_delete:
                 del st.session_state[key]
             # Set a flag that we've cleared (so defaults don't reload)
             st.session_state.filters_were_cleared = True
-            st.session_state.default_filters_set = False
             st.rerun()
     
     # Always ensure filter_defaults exists
