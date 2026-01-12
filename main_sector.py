@@ -1200,7 +1200,7 @@ def run_sector_rotation_app(df_global=None):
     st.markdown("---")
     
     # Create two columns: Left for the count, Right for the copy tool
-    col_text, col_copy = st.columns([0.85, 0.15])
+    col_text, col_copy = st.columns([0.15, 0.85])
     
     with col_text:
         # The standard count display
