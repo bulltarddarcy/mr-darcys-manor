@@ -735,38 +735,6 @@ def run_sector_rotation_app(df_global=None):
     
     # --- FILTER BUILDER ---
     st.markdown("### 🔍 Custom Filters")
-
-    with st.expander("ℹ️ How to interpret RVOL and Alpha (Calculations & Metrics)"):
-    st.markdown(r"""
-    ### **1. Relative Volume (RVOL)**
-    **What it is:** RVOL tells you if a stock is trading "hotter" or "colder" than usual. It compares the *current* cumulative volume to the stock's *average* cumulative volume for this specific time of day.
-    
-    **The Calculation:**
-    $$
-    \text{RVOL} = \frac{\text{Current Volume (Today)}}{\text{Average Volume (e.g., 5-Day) at this exact time}}
-    $$
-    
-    **What to look for (Metrics):**
-    * **$\text{RVOL} > 1.0$:** **Good.** The stock has higher volume than usual. In play.
-    * **$\text{RVOL} > 2.0$:** **Very Strong.** Volume is double the average. High conviction moves often happen here.
-    * **$\text{RVOL} < 1.0$:** **Weak/Bad.** The stock is quiet or "choppy." Generally avoid for momentum trading.
-    
-    ---
-    
-    ### **2. Alpha ($\alpha$)**
-    **What it is:** Alpha measures "true" performance by stripping out the market's influence. It answers the question: *"Is this stock going up because it's strong, or just because the whole market is going up?"*
-    
-    **The Calculation:**
-    $$
-    \alpha = \text{Stock \% Change} - \text{Benchmark \% Change (SPY)}
-    $$
-    
-    **What to look for (Metrics):**
-    * **$\alpha > 0$:** **Good (Outperforming).** The stock is stronger than the market.
-        * *Example:* Stock is up $+1.5\%$ while SPY is down $-0.5\%$. Alpha is $+2.0$.
-    * **$\alpha < 0$:** **Bad (Underperforming).** The stock is weaker than the market.
-        * *Example:* Stock is up $+0.5\%$ but SPY is up $+1.0\%$. Alpha is $-0.5$ (It's lagging).
-    """)
     
     st.caption("Build up to 6 filters. Filters apply automatically as you change them.")
     
