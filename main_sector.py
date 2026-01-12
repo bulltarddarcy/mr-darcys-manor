@@ -736,36 +736,37 @@ def run_sector_rotation_app(df_global=None):
     # --- FILTER BUILDER ---
     st.markdown("### 🔍 Custom Filters")
 
-    with st.expander("ℹ️ How to interpret RVOL and Alpha (Calculations & Metrics)"):
+    with st.expander("ℹ️ How are RVOL and Alpha calculated?"):
         st.markdown(r"""
-        ### **1. Relative Volume (RVOL)**
-        **What it is:** RVOL tells you if a stock is trading "hotter" or "colder" than usual. It compares the *current* cumulative volume to the stock's *average* cumulative volume for this specific time of day.
+        ### **1. RVOL (Relative Volume) - 5, 10, & 20 Days**
+        The calculation establishes a daily relative volume ratio and averages it over specific timeframes.
         
-        **The Calculation:**
+        **Daily Calculation:**
         $$
-        \text{RVOL} = \frac{\text{Current Volume (Today)}}{\text{Average Volume (e.g., 5-Day) at this exact time}}
+        \text{Daily RVOL} = \frac{\text{Volume}}{\text{Avg Volume (Last 20 Days)}}
         $$
         
-        **What to look for (Metrics):**
-        * **$\text{RVOL} > 1.0$:** **Good.** The stock has higher volume than usual. In play.
-        * **$\text{RVOL} > 2.0$:** **Very Strong.** Volume is double the average. High conviction moves often happen here.
-        * **$\text{RVOL} < 1.0$:** **Weak/Bad.** The stock is quiet or "choppy." Generally avoid for momentum trading.
+        **Timeframes:**
+        * **RVOL 5/10/20 Days:** The **average** of the *Daily RVOL* over the last 5, 10, or 20 trading days.
+        
+        **Interpretation:**
+        > An RVOL of **1.3** means the stock is trading at **130%** of its normal volume on average over that timeframe.
         
         ---
         
-        ### **2. Alpha ($\alpha$)**
-        **What it is:** Alpha measures "true" performance by stripping out the market's influence. It answers the question: *"Is this stock going up because it's strong, or just because the whole market is going up?"*
+        ### **2. Alpha - 5, 10, & 20 Days**
+        Measures excess return relative to the **Sector ETF** (not just the general market), adjusted for volatility (Beta).
         
-        **The Calculation:**
-        $$
-        \alpha = \text{Stock \% Change} - \text{Benchmark \% Change (SPY)}
-        $$
+        **Daily Calculation:**
+        1.  **Beta ($\beta$):** 60-day rolling window of Stock returns vs. Sector ETF returns.
+        2.  **Expected Return:** $\text{Sector \% Change} \times \beta$
+        3.  **1-Day Alpha:** $\text{Stock \% Change} - \text{Expected Return}$
         
-        **What to look for (Metrics):**
-        * **$\alpha > 0$:** **Good (Outperforming).** The stock is stronger than the market.
-            * *Example:* Stock is up $+1.5\%$ while SPY is down $-0.5\%$. Alpha is $+2.0$.
-        * **$\alpha < 0$:** **Bad (Underperforming).** The stock is weaker than the market.
-            * *Example:* Stock is up $+0.5\%$ but SPY is up $+1.0\%$. Alpha is $-0.5$ (It's lagging).
+        **Timeframes:**
+        * **Alpha 5/10/20 Days:** The **cumulative sum** of the *1-Day Alpha* over the last 5, 10, or 20 trading days.
+        
+        **Interpretation:**
+        > An Alpha 5d of **3.0** means the stock has outperformed its expected sector-adjusted return by **3%** over the last week.
         """)
     
     st.caption("Build up to 6 filters. Filters apply automatically as you change them.")
