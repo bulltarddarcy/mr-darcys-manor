@@ -458,6 +458,10 @@ def prepare_data(df):
     }
     d_cols = [c for c in daily_map.keys() if c in df.columns]
     df_d = df[d_cols].rename(columns=daily_map).copy()
+
+    # --- FIX: Remove duplicate columns immediately after renaming ---
+    df_d = df_d.loc[:, ~df_d.columns.duplicated()]
+    # -------------------------------------------------------------
     
     if 'Volume' in df_d.columns: df_d['VolSMA'] = df_d['Volume'].rolling(window=VOL_SMA_PERIOD).mean()
     df_d = add_technicals(df_d)
@@ -473,6 +477,11 @@ def prepare_data(df):
     if not available_w_cols: return df_d, None
 
     df_w = df[available_w_cols].rename(columns=weekly_cols_map).copy()
+
+    # --- FIX: Remove duplicate columns here as well ---
+    df_w = df_w.loc[:, ~df_w.columns.duplicated()]
+    # ------------------------------------------------
+    
     df_w['ChartDate'] = df_w.index - pd.to_timedelta(df_w.index.dayofweek, unit='D')
     df_w = df_w.groupby('ChartDate').last().sort_index()
     df_w['ChartDate'] = df_w.index
