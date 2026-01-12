@@ -41,7 +41,7 @@ def run_theme_rotation_app(df_global=None):
     - Smart pattern filters
     - Comprehensive scoring
     """
-    st.title("🔄 Sector Rotation")
+    st.title("🔄 Theme Rotation")
     
     # --- 0. BENCHMARK CONTROL ---
     if "sector_benchmark" not in st.session_state:
