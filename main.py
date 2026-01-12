@@ -108,7 +108,7 @@ try:
     st.sidebar.caption(f"📈 **Price/RSIs:** {price_date}")
     
     # --- 5. DATA HEALTH CHECK ---
-    with st.sidebar.expander("🏥 Data Health Check", expanded=False):
+    with st.sidebar.expander("🏥 Data Health", expanded=False):
         # A. Check Ticker Map
         tm_key = "URL_TICKER_MAP"
         tm_url = st.secrets.get(tm_key, "")
