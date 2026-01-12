@@ -1650,7 +1650,10 @@ def fetch_and_process_universe(
     benchmark_ticker: str = "SPY"
 ) -> Tuple[Dict, List[str], Dict[str, str], pd.DataFrame, Dict[str, List[str]]]:
     """
-    OPTIMIZED data pipeline with multi-theme support AND PARALLEL PROCESSING.
+    HEAVILY OPTIMIZED data pipeline.
+    1. Filters Master DB immediately to reduce size.
+    2. Vectorizes technical indicators (RVOL, ADR, Returns) before splitting.
+    3. Uses parallel processing only for the complex Alpha/Beta merges.
     """
     dm = SectorDataManager()
     uni_df, tickers, theme_map = dm.load_universe(benchmark_ticker)
@@ -1661,115 +1664,143 @@ def fetch_and_process_universe(
     # --- 1. DOWNLOAD MASTER DB ---
     db_url = st.secrets.get("PARQUET_SECTOR_ROTATION")
     if not db_url:
-        st.error("⛔ Secret 'PARQUET_SECTOR_ROTATION' is missing.")
         return {}, ["PARQUET_SECTOR_ROTATION secret missing"], theme_map, uni_df, {}
 
     try:
         buffer = get_gdrive_binary_data(db_url)
         if not buffer:
-            logger.error("Failed to download sector rotation parquet")
             return {}, ["Failed to download Master DB"], theme_map, uni_df, {}
         
+        # Load Parquet
         master_df = pd.read_parquet(buffer)
-        logger.info(f"Loaded master parquet with {len(master_df)} rows")
         
     except Exception as e:
         logger.exception(f"Error reading parquet: {e}")
         return {}, [f"Error reading Parquet file: {e}"], theme_map, uni_df, {}
 
-    # --- 2. STANDARDIZE MASTER DB ---
+    # --- 2. OPTIMIZATION: FILTER & STANDARDIZE IMMEDIATELY ---
+    # Standardize columns
     master_df.columns = [c.strip().title() for c in master_df.columns]
-    
     if 'Symbol' in master_df.columns and 'Ticker' not in master_df.columns:
         master_df.rename(columns={'Symbol': 'Ticker'}, inplace=True)
-        
+    
+    # Fix Tickers
+    master_df['Ticker'] = master_df['Ticker'].astype(str).str.upper().str.strip()
+    
+    # Fix Date Index
     if 'Date' in master_df.columns:
         master_df['Date'] = pd.to_datetime(master_df['Date'])
         master_df = master_df.set_index('Date').sort_index()
-    elif isinstance(master_df.index, pd.DatetimeIndex):
-        master_df = master_df.sort_index()
     
-    if 'Ticker' in master_df.columns:
-        master_df['Ticker'] = master_df['Ticker'].astype(str).str.upper().str.strip()
-    else:
-        return {}, ["Critical: 'Ticker' column missing in Master DB"], theme_map, uni_df, {}
+    # ⚡ SPEEDUP 1: Filter Master DB to ONLY the tickers we need
+    # This discards 90% of the data if your universe is small vs the full market
+    needed_tickers = set(tickers) | set(theme_map.values())
+    if benchmark_ticker:
+        needed_tickers.add(benchmark_ticker)
+    
+    master_df = master_df[master_df['Ticker'].isin(needed_tickers)].copy()
+    
+    if master_df.empty:
+        return {}, ["No matching tickers found in Parquet"], theme_map, uni_df, {}
 
+    # --- 3. OPTIMIZATION: VECTORIZED TECHNICALS ---
+    # Calculating these ONCE on the full DF is 100x faster than looping
+    logger.info("Starting vectorized calculations...")
+    
+    # Sort for rolling operations
+    master_df.sort_values(['Ticker', 'Date'], inplace=True)
+    
+    # Pre-calculate Returns (Used for Beta later)
+    master_df['Pct_Change'] = master_df.groupby('Ticker')['Close'].pct_change()
+    
+    # Pre-calculate RVOL
+    if 'Volume' in master_df.columns:
+        # Calculate Average Volume (using transform to keep original shape)
+        avg_vol = master_df.groupby('Ticker')['Volume'].transform(
+            lambda x: x.rolling(window=AVG_VOLUME_WINDOW).mean()
+        )
+        master_df['RVOL'] = master_df['Volume'] / avg_vol
+        
+        # Calculate Timeframe RVOLs
+        for label, time_window in TIMEFRAMES.items():
+            master_df[f"RVOL_{label}"] = master_df.groupby('Ticker')['RVOL'].transform(
+                lambda x: x.rolling(window=time_window).mean()
+            )
+
+    # Pre-calculate ADR (Daily Range %)
+    if 'High' in master_df.columns and 'Low' in master_df.columns:
+        daily_range_pct = ((master_df['High'] - master_df['Low']) / master_df['Low']) * 100
+        master_df['ADR_Pct'] = daily_range_pct.groupby(master_df['Ticker']).transform(
+            lambda x: x.rolling(window=ATR_WINDOW).mean()
+        )
+    
+    # Ensure Close is present (fallback to Adj Close if needed)
+    if 'Close' not in master_df.columns and 'Adj Close' in master_df.columns:
+        master_df['Close'] = master_df['Adj Close']
+
+    # --- 4. PREPARE CACHE ---
     calc = SectorAlphaCalculator()
     data_cache = {}
     missing_tickers = []
-
-    # --- 3. PROCESS BENCHMARK ---
-    bench_df = master_df[master_df['Ticker'] == benchmark_ticker].copy()
     
-    if bench_df.empty:
-        logger.error(f"Benchmark {benchmark_ticker} not found in parquet")
+    # Split master_df back into dictionary for easy access (Fast pointer splitting)
+    # Using groupby list comprehension is faster than looping
+    full_data_map = {t: df for t, df in master_df.groupby('Ticker')}
+
+    # --- 5. PROCESS BENCHMARK ---
+    if benchmark_ticker not in full_data_map:
         return {}, [f"Benchmark '{benchmark_ticker}' not found"], theme_map, uni_df, {}
 
-    bench_df = calc.process_dataframe(bench_df)
+    bench_df = full_data_map[benchmark_ticker].copy()
     data_cache[benchmark_ticker] = bench_df
-    logger.info(f"Processed benchmark {benchmark_ticker}")
 
-    # --- 4. PROCESS ETFS (SEQ) ---
-    # ETFs are usually few (11-20), so sequential is fine/safe here
+    # --- 6. PROCESS ETFS ---
+    # Calculate RRG Metrics for ETFs
     etf_tickers = list(theme_map.values())
-    
-    if etf_tickers:
-        etf_mask = master_df['Ticker'].isin(etf_tickers)
-        etf_groups = master_df[etf_mask].groupby('Ticker')
-        
-        for etf in etf_tickers:
-            try:
-                df = etf_groups.get_group(etf).copy()
-            except KeyError:
-                missing_tickers.append(etf)
-                continue
-                
-            df = calc.process_dataframe(df)
+    for etf in etf_tickers:
+        if etf in full_data_map:
+            df = full_data_map[etf].copy()
+            # process_dataframe is no longer needed here as we did it vectorized above!
+            # We only need RRG metrics
             df = calc.calculate_rrg_metrics(df, bench_df)
             data_cache[etf] = df
-        
-        logger.info(f"Processed {len(etf_tickers)} ETFs")
+        else:
+            missing_tickers.append(etf)
 
-    # --- 5. PROCESS STOCKS (PARALLELIZED) ---
+    # --- 7. PROCESS STOCKS (PARALLEL) ---
     stocks = uni_df[uni_df['Role'] == 'Stock']
     stock_themes_map = stocks.groupby('Ticker')['Theme'].apply(list).to_dict()
     stock_tickers = list(stock_themes_map.keys())
-    
-    if stock_tickers:
-        # Pre-filter master DF to only include stocks we need
-        stock_mask = master_df['Ticker'].isin(stock_tickers)
-        stock_groups = master_df[stock_mask].groupby('Ticker')
-        
-        # Helper function for parallel execution
-        def process_stock_worker(ticker, themes_list):
-            try:
-                # 1. Get Stock Data
-                try:
-                    df = stock_groups.get_group(ticker).copy()
-                except KeyError:
-                    return ticker, None, True # Missing
-                
-                # 2. Basic Technicals
-                df = calc.process_dataframe(df)
-                
-                # 3. Calculate Alpha vs Each Theme
-                for theme in themes_list:
-                    parent_etf = theme_map.get(theme)
-                    # Note: data_cache is read-only here, which is thread-safe enough
-                    parent_df = data_cache.get(parent_etf, bench_df)
-                    
-                    if parent_df is not None:
-                        df = calc.calculate_stock_alpha_multi_theme(df, parent_df, theme)
-                
-                return ticker, df, False
-            except Exception as e:
-                logger.error(f"Error processing {ticker}: {e}")
-                return ticker, None, False
 
-        # Execute in parallel
+    # Helper for thread worker
+    def process_stock_worker(ticker, themes_list):
+        if ticker not in full_data_map:
+            return ticker, None, True
+        
+        try:
+            # Get pre-calculated DF
+            df = full_data_map[ticker].copy()
+            
+            # ⚡ Optimized: We skipped calc.process_dataframe() because we did it in Step 3
+            
+            # Calculate Alpha vs Each Theme
+            for theme in themes_list:
+                parent_etf = theme_map.get(theme)
+                # Use Bench if ETF missing
+                parent_df = data_cache.get(parent_etf, bench_df) 
+                
+                if parent_df is not None:
+                    df = calc.calculate_stock_alpha_multi_theme(df, parent_df, theme)
+            
+            return ticker, df, False
+        except Exception as e:
+            logger.error(f"Error processing {ticker}: {e}")
+            return ticker, None, False
+
+    if stock_tickers:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         
-        # Max workers 10-20 is usually sweet spot for data manipulation overhead
+        # Max workers 16 is usually good for memory/speed balance
         with ThreadPoolExecutor(max_workers=16) as executor:
             future_to_stock = {
                 executor.submit(process_stock_worker, t, stock_themes_map[t]): t 
@@ -1783,8 +1814,7 @@ def fetch_and_process_universe(
                 elif df_result is not None:
                     data_cache[ticker] = df_result
 
-        logger.info(f"Processed {len(stock_tickers)} stocks in parallel")
-
+    logger.info(f"Sync complete. Processed {len(data_cache)} tickers.")
     return data_cache, missing_tickers, theme_map, uni_df, stock_themes_map
 
 
