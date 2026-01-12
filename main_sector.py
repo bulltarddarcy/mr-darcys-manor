@@ -761,6 +761,8 @@ def run_sector_rotation_app(df_global=None):
                             if k.startswith('filter_') or k == 'filter_defaults' or k == 'default_filters_set']
             for key in keys_to_delete:
                 del st.session_state[key]
+            # Increment generation counter to change all widget keys (forces Streamlit to treat them as new)
+            st.session_state.filter_generation = st.session_state.get('filter_generation', 0) + 1
             # Set a flag that we've cleared (so defaults don't reload)
             st.session_state.filters_were_cleared = True
             st.rerun()
@@ -796,6 +798,9 @@ def run_sector_rotation_app(df_global=None):
     # Create 6 filter rows (always visible)
     filters = []
     
+    # Get generation counter for widget keys (changes on clear to force recreation)
+    gen = st.session_state.get('filter_generation', 0)
+    
     for i in range(6):
         cols = st.columns([0.20, 0.08, 0.22, 0.35, 0.15])
         
@@ -820,7 +825,7 @@ def run_sector_rotation_app(df_global=None):
                 f"Filter {i+1} Column",
                 [None] + all_filter_columns,
                 index=default_index,
-                key=f"filter_{i}_column",
+                key=f"filter_{i}_column_{gen}",
                 label_visibility="collapsed",
                 placeholder="Select column..."
             )
@@ -835,7 +840,7 @@ def run_sector_rotation_app(df_global=None):
                     "Operator",
                     [">=", "<="],
                     index=0 if default_operator == '>=' else 1,
-                    key=f"filter_{i}_operator",
+                    key=f"filter_{i}_operator_{gen}",
                     label_visibility="collapsed",
                     disabled=column is None
                 )
@@ -845,7 +850,7 @@ def run_sector_rotation_app(df_global=None):
                     "Type",
                     ["Number", "Column"],
                     index=0 if default_type == 'Number' else 1,
-                    key=f"filter_{i}_type",
+                    key=f"filter_{i}_type_{gen}",
                     horizontal=True,
                     label_visibility="collapsed",
                     disabled=column is None
@@ -858,7 +863,7 @@ def run_sector_rotation_app(df_global=None):
                         value=default_value,
                         step=0.1,
                         format="%.2f",
-                        key=f"filter_{i}_value",
+                        key=f"filter_{i}_value_{gen}",
                         label_visibility="collapsed",
                         disabled=column is None
                     )
@@ -875,7 +880,7 @@ def run_sector_rotation_app(df_global=None):
                         "Compare to",
                         numeric_columns,
                         index=col_index,
-                        key=f"filter_{i}_value_column",
+                        key=f"filter_{i}_value_column_{gen}",
                         label_visibility="collapsed",
                         disabled=column is None
                     )
@@ -888,7 +893,7 @@ def run_sector_rotation_app(df_global=None):
                 operator = st.selectbox(
                     "Operator",
                     ["="],
-                    key=f"filter_{i}_operator_cat",
+                    key=f"filter_{i}_operator_cat_{gen}",
                     label_visibility="collapsed",
                     disabled=column is None
                 )
@@ -908,7 +913,7 @@ def run_sector_rotation_app(df_global=None):
                         "Select Theme",
                         unique_themes,
                         index=cat_index,
-                        key=f"filter_{i}_value_theme",
+                        key=f"filter_{i}_value_theme_{gen}",
                         label_visibility="collapsed"
                     )
                 elif column == "Theme Category":
@@ -922,7 +927,7 @@ def run_sector_rotation_app(df_global=None):
                         "Select Category",
                         unique_categories,
                         index=cat_index,
-                        key=f"filter_{i}_value_category",
+                        key=f"filter_{i}_value_category_{gen}",
                         label_visibility="collapsed"
                     )
                 elif column == "Div":
@@ -936,7 +941,7 @@ def run_sector_rotation_app(df_global=None):
                         "Select Div",
                         unique_divs,
                         index=cat_index,
-                        key=f"filter_{i}_value_div",
+                        key=f"filter_{i}_value_div_{gen}",
                         label_visibility="collapsed"
                     )
                 elif column == "8 EMA":
@@ -948,7 +953,7 @@ def run_sector_rotation_app(df_global=None):
                         "Select 8 EMA",
                         unique_8ema,
                         index=cat_index,
-                        key=f"filter_{i}_value_8ema",
+                        key=f"filter_{i}_value_8ema_{gen}",
                         label_visibility="collapsed"
                     )
                 elif column == "21 EMA":
@@ -960,7 +965,7 @@ def run_sector_rotation_app(df_global=None):
                         "Select 21 EMA",
                         unique_21ema,
                         index=cat_index,
-                        key=f"filter_{i}_value_21ema",
+                        key=f"filter_{i}_value_21ema_{gen}",
                         label_visibility="collapsed"
                     )
                 elif column == "50 MA":
@@ -972,7 +977,7 @@ def run_sector_rotation_app(df_global=None):
                         "Select 50 MA",
                         unique_50ma,
                         index=cat_index,
-                        key=f"filter_{i}_value_50ma",
+                        key=f"filter_{i}_value_50ma_{gen}",
                         label_visibility="collapsed"
                     )
                 elif column == "200 MA":
@@ -984,7 +989,7 @@ def run_sector_rotation_app(df_global=None):
                         "Select 200 MA",
                         unique_200ma,
                         index=cat_index,
-                        key=f"filter_{i}_value_200ma",
+                        key=f"filter_{i}_value_200ma_{gen}",
                         label_visibility="collapsed"
                     )
                 else:
@@ -1015,7 +1020,7 @@ def run_sector_rotation_app(df_global=None):
                     "Logic",
                     ["AND", "OR"],
                     index=0 if default_logic == 'AND' else 1,
-                    key=f"filter_{i}_logic",
+                    key=f"filter_{i}_logic_{gen}",
                     horizontal=True,
                     label_visibility="collapsed"
                 )
