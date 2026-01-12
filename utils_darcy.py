@@ -307,7 +307,6 @@ EMA_DIST_BACKTEST_DAYS = 30
 EMA_DIST_BACKTEST_DD = -0.08  # -8% Drawdown
 EMA_DIST_CHART_LOOKBACK = 3650  # 10 Years
 
-
 # ==========================================
 # 3. OPTIONS DATABASE SHARED FUNCTIONS
 # (Shared ONLY between Database, Rankings, Pivot, Strike Zones)
@@ -834,7 +833,7 @@ def generate_top_ideas(top_bulls_df, global_df):
     return sorted(candidates, key=lambda x: x['Score'], reverse=True)[:RANK_TOP_IDEAS_COUNT]
 
 
-# --- PIVOT APP ---
+# --- PIVOT TABLES APP ---
 
 def initialize_pivot_state(start_default, max_date):
     defaults = {
