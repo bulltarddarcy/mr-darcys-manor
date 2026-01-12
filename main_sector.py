@@ -1199,6 +1199,25 @@ def run_sector_rotation_app(df_global=None):
     # Display results
     st.markdown("---")
     st.caption(f"**Showing {len(df_filtered)} of {len(df_stocks)} stocks**")
+
+    # ==========================================
+    # COPY TO CLIPBOARD SECTION
+    # ==========================================
+    st.divider()
+    
+    if not df_filtered.empty:
+        # 1. Get the list of tickers from the filtered dataframe
+        tickers_list = df_filtered['Ticker'].unique().tolist()
+        
+        # 2. Join them with commas (standard format for TradingView/Brokerages)
+        ticker_str = ", ".join(tickers_list)
+        
+        st.subheader("📋 Copy Tickers")
+        st.caption(f"Found **{len(tickers_list)}** tickers matching your filters.")
+        st.caption("Click the **Copy icon** (📄) in the top-right corner of the box below:")
+        
+        # 3. Render the copyable code block
+        st.code(ticker_str, language="text")
     
     # Column configuration
     column_config = {
@@ -1227,3 +1246,5 @@ def run_sector_rotation_app(df_global=None):
         hide_index=True,
         column_config=column_config
     )
+    
+    
