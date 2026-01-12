@@ -99,9 +99,7 @@ try:
         st.Page(lambda: main_darcy.run_rsi_scanner_app(df_global), title="RSI Scanner", icon="🤖", url_path="rsi_scanner"),
         st.Page(lambda: main_darcy.run_seasonality_app(df_global), title="Seasonality", icon="📅", url_path="seasonality"),
         st.Page(lambda: main_darcy.run_ema_distance_app(df_global), title="EMA Distance", icon="📏", url_path="ema_distance"),
-        
-        # SECTOR APP
-        st.Page(lambda: main_sector.run_sector_rotation_app(df_global), title="Sector Rotation", icon="🔄", url_path="sector_rotation"),
+        st.Page(lambda: main_sector.run_theme_rotation_app(df_global), title="Theme Rotation", icon="🔄", url_path="theme_rotation"),
     ])
 
     # --- 4. SIDEBAR INFO ---
