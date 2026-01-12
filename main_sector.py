@@ -1198,22 +1198,7 @@ def run_sector_rotation_app(df_global=None):
     
     # Display results
     st.markdown("---")
-    
-    # Create two columns: Left for the count, Right for the copy tool
-    col_text, col_copy = st.columns([0.15, 0.85])
-    
-    with col_text:
-        # The standard count display
-        st.caption(f"**Showing {len(df_filtered)} of {len(df_stocks)} stocks**")
-        
-    with col_copy:
-        if not df_filtered.empty:
-            tickers_list = df_filtered['Ticker'].unique().tolist()
-            ticker_str = ", ".join(tickers_list)
-            
-            # A small expander that acts like a dropdown button
-            with st.expander("📋", expanded=False):
-                st.code(ticker_str, language="text")
+    st.caption(f"**Showing {len(df_filtered)} of {len(df_stocks)} stocks**")
     
     # Column configuration
     column_config = {
@@ -1243,4 +1228,11 @@ def run_sector_rotation_app(df_global=None):
         column_config=column_config
     )
     
-    
+    # Tickers to copy to clipboard
+    if not df_filtered.empty:
+        tickers_list = df_filtered['Ticker'].unique().tolist()
+        ticker_str = ", ".join(tickers_list)
+        
+        # Just the box, no headers
+        st.caption("Copy tickers:")
+        st.code(ticker_str, language="text")
