@@ -765,6 +765,12 @@ def run_sector_rotation_app(df_global=None):
             st.session_state.default_filters_set = False
             st.rerun()
     
+    # Always ensure filter_defaults exists
+    if 'filter_defaults' not in st.session_state:
+        st.session_state.filter_defaults = {
+            0: {}, 1: {}, 2: {}, 3: {}, 4: {}, 5: {}
+        }
+    
     # Initialize default filters on first load ONLY (not after clearing)
     if 'default_filters_set' not in st.session_state:
         # Only set defaults if we haven't just cleared
