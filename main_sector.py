@@ -30,7 +30,7 @@ def get_ma_signal(price: float, ma_val: float) -> str:
 # ==========================================
 # MAIN PAGE FUNCTION
 # ==========================================
-def run_theme_rotation_app(df_global=None):
+def run_theme_momentum_app(df_global=None):
     """
     Main entry point for Sector Rotation application.
     
@@ -41,7 +41,7 @@ def run_theme_rotation_app(df_global=None):
     - Smart pattern filters
     - Comprehensive scoring
     """
-    st.title("🔄 Theme Rotation")
+    st.title("🔄 Theme Momentum")
     
     # --- 0. BENCHMARK CONTROL ---
     if "sector_benchmark" not in st.session_state:
