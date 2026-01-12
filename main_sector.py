@@ -794,7 +794,7 @@ def run_sector_rotation_app(df_global=None):
         cols = st.columns([0.20, 0.08, 0.22, 0.35, 0.15])
         
         # Get default for this filter if exists
-        default = st.session_state.filter_defaults.get(i, {})
+        default = st.session_state.get('filter_defaults', {}).get(i, {})
         default_column = default.get('column')
         default_operator = default.get('operator', '>=')
         default_type = default.get('type', 'Number')
