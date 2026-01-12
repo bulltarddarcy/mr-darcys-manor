@@ -605,6 +605,7 @@ def run_sector_rotation_app(df_global=None):
     if 'sector_target' not in st.session_state:
         st.session_state.sector_target = "All"
     
+    # --- UI CONTROLS & OPTIONAL SETTINGS ---
     col_sel, col_opt = st.columns([1, 1])
     with col_sel:
         selected_theme = st.selectbox(
@@ -613,12 +614,22 @@ def run_sector_rotation_app(df_global=None):
             index=all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0,
             key="stock_theme_selector_unique"
         )
+        
     with col_opt:
-        show_divergences = st.checkbox(
-            "Calculate Divergences (Slower)", 
-            value=False, 
-            help="Enabling this will scan for RSI divergences, which increases load time."
-        )
+        st.caption("Performance Settings")
+        c_opt1, c_opt2 = st.columns(2)
+        with c_opt1:
+            show_divergences = st.checkbox(
+                "Show Divergences", 
+                value=False, 
+                help="Slower: Scans RSI history for divergences."
+            )
+        with c_opt2:
+            show_mkt_caps = st.checkbox(
+                "Show Market Caps", 
+                value=False, 
+                help="Slower: Fetches live Market Cap data from Yahoo Finance."
+            )
     
     # Update session state
     st.session_state.sector_target = selected_theme
@@ -655,10 +666,12 @@ def run_sector_rotation_app(df_global=None):
     
     # --- OPTIMIZATION START ---
     
-    # 1. Fetch Market Caps in parallel for speed
-    with st.spinner("Fetching Market Caps..."):
-        all_tickers = [pair[0] for pair in stock_theme_pairs]
-        mc_map = ud.fetch_market_caps_batch(all_tickers)
+    # 1. Fetch Market Caps (Conditional)
+    mc_map = {}
+    if show_mkt_caps:
+        with st.spinner("Fetching Market Caps..."):
+            all_tickers = [pair[0] for pair in stock_theme_pairs]
+            mc_map = ud.fetch_market_caps_batch(all_tickers)
 
     # 2. Define Helper for Parallel Execution
     def process_single_stock(stock, stock_theme):
@@ -727,7 +740,7 @@ def run_sector_rotation_app(df_global=None):
                 "Theme": stock_theme,
                 "Theme Category": theme_category_map.get(stock_theme, "Unknown"),
                 "Price": last['Close'],
-                "Market Cap (B)": mc_map.get(stock, 0) / 1e9,
+                "Market Cap (B)": mc_map.get(stock, 0) / 1e9, # Will be 0 if not fetched
                 "Beta": beta,
                 "Alpha 5d": alpha_5d,
                 "Alpha 10d": alpha_10d,
