@@ -229,6 +229,7 @@ def is_above_ema21(symbol: str) -> bool:
 # ==========================================
 
 # --- CONSTANTS: DATABASE APP ---
+DB_DEFAULT_START_OFFSET = 60
 DB_DEFAULT_EXPIRY_OFFSET = 365
 DB_TABLE_MAX_ROWS = 30
 DB_DATE_FMT = "%d %b %y"
@@ -548,7 +549,7 @@ def calculate_optimal_signal_stats(history_indices, price_array, current_idx, si
 
 def initialize_database_state(max_date):
     defaults = {
-        'saved_db_ticker': "", 'saved_db_start': max_date, 'saved_db_end': max_date,
+        'saved_db_ticker': "", 'saved_db_start': max_date - timedelta(days=DB_DEFAULT_START_OFFSET), 'saved_db_end': max_date,
         'saved_db_exp': (date.today() + timedelta(days=DB_DEFAULT_EXPIRY_OFFSET)),
         'saved_db_inc_cb': True, 'saved_db_inc_ps': True, 'saved_db_inc_pb': True
     }
