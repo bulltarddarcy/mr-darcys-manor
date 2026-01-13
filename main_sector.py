@@ -169,7 +169,7 @@ def run_theme_momentum_app(df_global=None):
             with btn_col2:
                 if st.button("⭐ Big 11", use_container_width=True):
                     big_11 = [
-                        "Communications", "Consumer Discretionary", "Consumer Staples",
+                        "Comms", "Cons Discr", "Cons Staples",
                         "Energy", "Financials", "Healthcare", "Industrials",
                         "Materials", "Real Estate", "Technology", "Utilities"
                     ]
@@ -879,75 +879,77 @@ def run_theme_momentum_app(df_global=None):
     unique_50ma = sorted(df_stocks['50 MA'].unique().tolist())
     unique_200ma = sorted(df_stocks['200 MA'].unique().tolist())
     
+    # ==========================================
+    # BUTTON CALLBACKS (Fixes session_state error)
+    # ==========================================
+    def cb_set_defaults():
+        """Resets filters to original safe defaults."""
+        st.session_state.opt_show_divergences = False
+        st.session_state.opt_show_mkt_caps = False
+        st.session_state.opt_show_biotech = False
+        st.session_state.filters_were_cleared = False
+        st.session_state.default_filters_set = True
+        
+        st.session_state.filter_defaults = {
+            0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0},
+            1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
+            2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+            3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
+            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf'},
+            5: {}, 6: {}, 7: {}
+        }
+        # Clear custom user selections
+        keys_to_delete = [k for k in st.session_state.keys() if k.startswith('filter_') and k != 'filter_defaults']
+        for key in keys_to_delete:
+            del st.session_state[key]
+
+    def cb_darcy_special():
+        """Applies the Darcy Special presets."""
+        # 1. Enable Additional Settings
+        st.session_state.opt_show_divergences = True
+        st.session_state.opt_show_mkt_caps = True
+        
+        # 2. Reset Clear Flag
+        st.session_state.filters_were_cleared = False
+        st.session_state.default_filters_set = True
+        
+        # 3. Define Presets
+        new_defaults = {
+            0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
+            1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
+            2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+            3: {'column': 'Market Cap (B)', 'operator': '>=', 'type': 'Number', 'value': 5.0},
+            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
+            5: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf', 'logic': 'OR'},
+            6: {'column': 'Div', 'operator': '=', 'type': 'Categorical', 'value_cat': '🟢 Bullish'},
+            7: {}
+        }
+        # Fill remaining empty slots up to 8
+        for i in range(8):
+            if i not in new_defaults:
+                new_defaults[i] = {}
+        
+        st.session_state.filter_defaults = new_defaults
+
+    def cb_clear_filters():
+        """Removes all filters."""
+        keys_to_delete = [k for k in st.session_state.keys() 
+                        if k.startswith('filter_') or k == 'filter_defaults' or k == 'default_filters_set']
+        for key in keys_to_delete:
+            del st.session_state[key]
+        st.session_state.filters_were_cleared = True
+
     # (6) Filter Buttons: Set to Defaults, Darcy Special, Clear
     col_defaults, col_special, col_clear = st.columns(3)
     
     with col_defaults:
-        if st.button("↺ Set to Defaults", type="secondary", use_container_width=True):
-             # Reset all settings
-            st.session_state.opt_show_divergences = False
-            st.session_state.opt_show_mkt_caps = False
-            st.session_state.opt_show_biotech = False
-            st.session_state.filters_were_cleared = False
-            st.session_state.default_filters_set = True
-            
-            # Default Filters
-            st.session_state.filter_defaults = {
-                0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0},
-                1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
-                2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
-                3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
-                4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf'},
-                5: {}, 6: {}, 7: {}
-            }
-            # Also clear any custom user inputs for filters
-            keys_to_delete = [k for k in st.session_state.keys() if k.startswith('filter_') and k != 'filter_defaults']
-            for key in keys_to_delete:
-                del st.session_state[key]
-            
-            st.rerun()
+        st.button("↺ Set to Defaults", type="secondary", use_container_width=True, on_click=cb_set_defaults)
 
     with col_special:
-        if st.button("✨ Darcy Special", type="primary", use_container_width=True):
-            # 1. Enable Additional Settings
-            st.session_state.opt_show_divergences = True
-            st.session_state.opt_show_mkt_caps = True
-            
-            # 2. Reset Clear Flag
-            st.session_state.filters_were_cleared = False
-            st.session_state.default_filters_set = True
-            
-            # 3. Define Presets (Alpha, RVOL, MktCap, Themes, Div)
-            # Logic: (Num AND Num AND ...) AND (Theme OR Theme OR Div)
-            new_defaults = {
-                0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
-                1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
-                2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
-                3: {'column': 'Market Cap (B)', 'operator': '>=', 'type': 'Number', 'value': 5.0},
-                # Chain OR logic for categories/div
-                4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
-                5: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf', 'logic': 'OR'},
-                6: {'column': 'Div', 'operator': '=', 'type': 'Categorical', 'value_cat': '🟢 Bullish'},
-                7: {}
-            }
-            # Fill remaining empty slots up to 8
-            for i in range(8):
-                if i not in new_defaults:
-                    new_defaults[i] = {}
-            
-            st.session_state.filter_defaults = new_defaults
-            st.rerun()
+        st.button("✨ Darcy Special", type="primary", use_container_width=True, on_click=cb_darcy_special)
             
     with col_clear:
-        if st.button("🗑️ Clear Filters", type="secondary", use_container_width=True):
-            # Delete all filter-related keys INCLUDING filter_defaults
-            keys_to_delete = [k for k in st.session_state.keys() 
-                            if k.startswith('filter_') or k == 'filter_defaults' or k == 'default_filters_set']
-            for key in keys_to_delete:
-                del st.session_state[key]
-            # Set a flag that we've cleared (so defaults don't reload)
-            st.session_state.filters_were_cleared = True
-            st.rerun()
+        st.button("🗑️ Clear Filters", type="secondary", use_container_width=True, on_click=cb_clear_filters)
     
     # Always ensure filter_defaults exists
     if 'filter_defaults' not in st.session_state:
