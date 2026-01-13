@@ -203,30 +203,26 @@ def run_theme_momentum_app(df_global=None):
     # Category filter buttons
     st.markdown("**Filter Chart by Category:**")
     
-    # Row 1: All Themes button
-    if st.button("🎯 All Themes", use_container_width=False, key="filter_all"):
-        st.session_state.chart_filter = "all"
-        st.rerun()
-    
-    # Row 2: Category buttons (Shortened names)
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("⬈ Gain Mom & Outperf", use_container_width=True, key="filter_gain_out"):
+    # (1) Updated Filter Buttons Layout: 1 Row, Side-by-Side
+    btn_cols = st.columns(5)
+    with btn_cols[0]:
+        if st.button("🎯 All", use_container_width=True, key="filter_all"):
+            st.session_state.chart_filter = "all"
+            st.rerun()
+    with btn_cols[1]:
+        if st.button("⬈ Gain/Out", use_container_width=True, key="filter_gain_out"):
             st.session_state.chart_filter = "gaining_mom_outperforming"
             st.rerun()
-    with col2:
-        if st.button("⬉ Gain Mom & Underperf", use_container_width=True, key="filter_gain_under"):
+    with btn_cols[2]:
+        if st.button("⬉ Gain/Under", use_container_width=True, key="filter_gain_under"):
             st.session_state.chart_filter = "gaining_mom_underperforming"
             st.rerun()
-    
-    # Row 3: Category buttons (Shortened names)
-    col3, col4 = st.columns(2)
-    with col3:
-        if st.button("⬊ Lose Mom & Outperf", use_container_width=True, key="filter_lose_out"):
+    with btn_cols[3]:
+        if st.button("⬊ Lose/Out", use_container_width=True, key="filter_lose_out"):
             st.session_state.chart_filter = "losing_mom_outperforming"
             st.rerun()
-    with col4:
-        if st.button("⬋ Lose Mom & Underperf", use_container_width=True, key="filter_lose_under"):
+    with btn_cols[4]:
+        if st.button("⬋ Lose/Under", use_container_width=True, key="filter_lose_under"):
             st.session_state.chart_filter = "losing_mom_underperforming"
             st.rerun()
     
@@ -280,7 +276,8 @@ def run_theme_momentum_app(df_global=None):
     col_guide1, col_guide2 = st.columns([1, 1], gap="small")
     
     with col_guide1:
-        with st.popover("📖 How Categories Work", use_container_width=True):
+        # (2) Changed Popover to Expander
+        with st.expander("📖 How Categories Work", expanded=False):
             st.markdown("""
             ### Understanding Momentum & Performance Categories
             
@@ -626,7 +623,9 @@ def run_theme_momentum_app(df_global=None):
         st.session_state.sector_target = "All"
     
     # --- UI CONTROLS & OPTIONAL SETTINGS (REFACTORED) ---
-    col_sel, col_space = st.columns([1, 2])
+    # (4) Additional Settings moved to the right of Select Theme
+    col_sel, col_opt = st.columns([1, 1])
+    
     with col_sel:
         st.session_state.sector_target = st.selectbox(
             "Select Theme",
@@ -635,7 +634,7 @@ def run_theme_momentum_app(df_global=None):
             key="stock_theme_selector_unique"
         )
         
-        st.markdown('<div style="margin-top: 10px;"></div>', unsafe_allow_html=True)
+    with col_opt:
         st.caption("Additional Settings")
         
         c_opt1, c_opt2, c_opt3 = st.columns(3)
@@ -693,16 +692,57 @@ def run_theme_momentum_app(df_global=None):
         st.info(f"No stocks found")
         return
     
-    # --- OPTIMIZATION START ---
+    # --- OPTIMIZATION START (3) ---
     
-    # 1. Fetch Market Caps (Conditional)
+    # Get unique tickers to avoid redundant calculations
+    unique_tickers = list(set([pair[0] for pair in stock_theme_pairs]))
+    
+    # 1. Fetch Market Caps (Conditional, Batch Unique)
     mc_map = {}
     if show_mkt_caps:
         with st.spinner("Fetching Market Caps..."):
-            all_tickers = [pair[0] for pair in stock_theme_pairs]
-            mc_map = ud.fetch_market_caps_batch(all_tickers)
+            mc_map = ud.fetch_market_caps_batch(unique_tickers)
 
-    # 2. Define Helper for Parallel Execution
+    # 2. Pre-calculate Divergences (Conditional, Batch Unique)
+    div_map = {}
+    if show_divergences:
+        with st.spinner("Scanning Divergences..."):
+            
+            def process_div_single(stock):
+                sdf = etf_data_cache.get(stock)
+                if sdf is None or sdf.empty or len(sdf) < 20:
+                    return stock, "—"
+                
+                try:
+                    d_d, _ = ud.prepare_data(sdf.copy())
+                    if d_d is not None and not d_d.empty:
+                        strict_bool = (ud.DIV_STRICT_DEFAULT == "Yes")
+                        divs = ud.find_divergences(
+                            d_d, stock, 'Daily', min_n=0,
+                            periods_input=ud.DIV_CSV_PERIODS_DAYS,
+                            optimize_for='PF',
+                            lookback_period=ud.DIV_LOOKBACK_DEFAULT,
+                            price_source=ud.DIV_SOURCE_DEFAULT,
+                            strict_validation=strict_bool,
+                            recent_days_filter=ud.DIV_DAYS_SINCE_DEFAULT,
+                            rsi_diff_threshold=ud.DIV_RSI_DIFF_DEFAULT
+                        )
+                        active_divs = [d for d in divs if d.get('Is_Recent', False)]
+                        if active_divs:
+                            last_div = active_divs[-1]
+                            d_type = last_div['Type']
+                            return stock, (f"🟢 {d_type}" if d_type == 'Bullish' else f"🔴 {d_type}")
+                except:
+                    pass
+                return stock, "—"
+
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                future_to_div = {executor.submit(process_div_single, t): t for t in unique_tickers}
+                for future in as_completed(future_to_div):
+                    t, d_str = future.result()
+                    div_map[t] = d_str
+
+    # 3. Define Helper for Parallel Processing (Now uses pre-calculated maps)
     def process_single_stock(stock, stock_theme):
         # BIOTECH FILTER: Strict exclusion if box is unchecked
         if stock_theme == "Biotech" and not show_biotech:
@@ -714,7 +754,7 @@ def run_theme_momentum_app(df_global=None):
         if sdf is None or sdf.empty or len(sdf) < 20:
             return None
 
-        # Fast Fail: Volume Filter (Calculated on the fly to avoid heavy copies)
+        # Fast Fail: Volume Filter
         try:
             # Check last 20 days volume directly
             recent_vol = sdf['Volume'].values[-20:]
@@ -731,36 +771,8 @@ def run_theme_momentum_app(df_global=None):
         try:
             last = sdf.iloc[-1]
             
-            # Divergence Logic (Heavy CPU - Optional)
-            div_str = "—"
-            if show_divergences:
-                d_d, _ = ud.prepare_data(sdf.copy())
-                if d_d is not None and not d_d.empty:
-                    # Convert strict setting to boolean
-                    strict_bool = (ud.DIV_STRICT_DEFAULT == "Yes")
-                    
-                    divs = ud.find_divergences(
-                        d_d, 
-                        stock, 
-                        'Daily',
-                        min_n=0,
-                        periods_input=ud.DIV_CSV_PERIODS_DAYS,
-                        optimize_for='PF',
-                        lookback_period=ud.DIV_LOOKBACK_DEFAULT,
-                        price_source=ud.DIV_SOURCE_DEFAULT,
-                        strict_validation=strict_bool,
-                        recent_days_filter=ud.DIV_DAYS_SINCE_DEFAULT,
-                        rsi_diff_threshold=ud.DIV_RSI_DIFF_DEFAULT
-                    )
-                    
-                    # Filter only for recent active divergences
-                    active_divs = [d for d in divs if d.get('Is_Recent', False)]
-                    
-                    if active_divs:
-                        # Take the most recent one
-                        last_div = active_divs[-1]
-                        d_type = last_div['Type']
-                        div_str = f"🟢 {d_type}" if d_type == 'Bullish' else f"🔴 {d_type}"
+            # Lookup Divergence from pre-calculated map
+            div_str = div_map.get(stock, "—")
 
             # Get alpha/beta metrics safely
             alpha_5d = last.get(f"Alpha_Short_{stock_theme}", 0)
@@ -790,7 +802,7 @@ def run_theme_momentum_app(df_global=None):
         except Exception:
             return None
 
-    # 3. Execute in Parallel
+    # 4. Execute in Parallel
     stock_data = []
     
     # We use max_workers=20 to keep memory usage reasonable while gaining speed
@@ -867,19 +879,34 @@ def run_theme_momentum_app(df_global=None):
     unique_50ma = sorted(df_stocks['50 MA'].unique().tolist())
     unique_200ma = sorted(df_stocks['200 MA'].unique().tolist())
     
-    # Filter Buttons: Clear & Darcy Special
-    col_clear, col_special, col_space = st.columns([1, 1, 3])
-    with col_clear:
-        if st.button("🗑️ Clear Filters", type="secondary", use_container_width=True):
-            # Delete all filter-related keys INCLUDING filter_defaults
-            keys_to_delete = [k for k in st.session_state.keys() 
-                            if k.startswith('filter_') or k == 'filter_defaults' or k == 'default_filters_set']
+    # (6) Filter Buttons: Set to Defaults, Darcy Special, Clear
+    col_defaults, col_special, col_clear = st.columns(3)
+    
+    with col_defaults:
+        if st.button("↺ Set to Defaults", type="secondary", use_container_width=True):
+             # Reset all settings
+            st.session_state.opt_show_divergences = False
+            st.session_state.opt_show_mkt_caps = False
+            st.session_state.opt_show_biotech = False
+            st.session_state.filters_were_cleared = False
+            st.session_state.default_filters_set = True
+            
+            # Default Filters
+            st.session_state.filter_defaults = {
+                0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0},
+                1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
+                2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+                3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
+                4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf'},
+                5: {}, 6: {}, 7: {}
+            }
+            # Also clear any custom user inputs for filters
+            keys_to_delete = [k for k in st.session_state.keys() if k.startswith('filter_') and k != 'filter_defaults']
             for key in keys_to_delete:
                 del st.session_state[key]
-            # Set a flag that we've cleared (so defaults don't reload)
-            st.session_state.filters_were_cleared = True
-            st.rerun()
             
+            st.rerun()
+
     with col_special:
         if st.button("✨ Darcy Special", type="primary", use_container_width=True):
             # 1. Enable Additional Settings
@@ -909,6 +936,17 @@ def run_theme_momentum_app(df_global=None):
                     new_defaults[i] = {}
             
             st.session_state.filter_defaults = new_defaults
+            st.rerun()
+            
+    with col_clear:
+        if st.button("🗑️ Clear Filters", type="secondary", use_container_width=True):
+            # Delete all filter-related keys INCLUDING filter_defaults
+            keys_to_delete = [k for k in st.session_state.keys() 
+                            if k.startswith('filter_') or k == 'filter_defaults' or k == 'default_filters_set']
+            for key in keys_to_delete:
+                del st.session_state[key]
+            # Set a flag that we've cleared (so defaults don't reload)
+            st.session_state.filters_were_cleared = True
             st.rerun()
     
     # Always ensure filter_defaults exists
@@ -941,7 +979,8 @@ def run_theme_momentum_app(df_global=None):
     filters = []
     
     for i in range(8):
-        cols = st.columns([0.20, 0.08, 0.22, 0.35, 0.15])
+        # (5) Equal Width Columns
+        cols = st.columns(5)
         
         # Get default for this filter if exists
         default = st.session_state.get('filter_defaults', {}).get(i, {})

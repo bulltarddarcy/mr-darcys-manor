@@ -36,7 +36,7 @@ TIMEFRAMES = {
 }
 
 # Filters
-MIN_DOLLAR_VOLUME = 2_000_000
+MIN_DOLLAR_VOLUME = 10_000_000
 
 # Regression Weights
 WEIGHT_MIN = 1.0
