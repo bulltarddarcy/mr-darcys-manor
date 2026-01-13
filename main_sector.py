@@ -337,7 +337,7 @@ def run_theme_momentum_app(df_global=None):
         return
     
     # --- 4. FILTER BUILDER UI (ROBUST VERSION) ---
-    st.markdown("### 🔍 Custom Filters")
+    # st.markdown("### 🔍 Custom Filters")
     with st.expander("ℹ️ How are RVOL and Alpha calculated?"):
         st.markdown(r"""
         ### **1. RVOL (Relative Volume) - 5, 10, & 20 Days**
