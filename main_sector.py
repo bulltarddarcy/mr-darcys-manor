@@ -283,9 +283,7 @@ def run_theme_momentum_app(df_global=None):
     # ==========================================
     st.subheader(f"📊 Stock Analysis")
 
-    # --- 1. INITIALIZE SETTINGS STATE (Before Analysis) ---
-    # We must init these here so `analyze_stocks_batch` has values to use,
-    # even though the checkbox widgets are drawn later in the UI.
+    # --- 1. INITIALIZE SETTINGS STATE ---
     if "opt_show_divergences" not in st.session_state:
         st.session_state.opt_show_divergences = False
     if "opt_show_mkt_caps" not in st.session_state:
@@ -305,14 +303,11 @@ def run_theme_momentum_app(df_global=None):
         }
     
     # --- 3. PROCESS DATA (Using Global Filters) ---
-    # Create theme category map for the table
     theme_cat_map = {}
     for cat_list in categories.values():
         for t in cat_list:
             theme_cat_map[t['theme']] = t['display_category']
 
-    # Generate Stock List based on Global Filter (Top of page)
-    # We always load ALL stocks matching the global filter
     stock_theme_pairs = []
     for _, row in uni_df[uni_df['Role'] == 'Stock'].iterrows():
         if row['Theme'] in filtered_map:
@@ -322,7 +317,7 @@ def run_theme_momentum_app(df_global=None):
         st.info(f"No stocks found for selected themes.")
         return
 
-    # Run Analysis (using session state values for options)
+    # Run Analysis
     df_stocks = us.analyze_stocks_batch(
         etf_data_cache, 
         stock_theme_pairs, 
@@ -336,22 +331,16 @@ def run_theme_momentum_app(df_global=None):
         st.info(f"No stocks found (or filtered by volume/Biotech setting).")
         return
     
-    # --- 4. FILTER BUILDER UI (ROBUST VERSION) ---
-    # st.markdown("### 🔍 Custom Filters")
+    # --- 4. FILTER BUILDER UI ---
     with st.expander("ℹ️ How are RVOL and Alpha calculated?"):
         st.markdown(r"""
-        ### **1. RVOL (Relative Volume) - 5, 10, & 20 Days**
-        The calculation establishes a daily relative volume ratio and averages it over specific timeframes.
-        **Daily Calculation:** $\text{Daily RVOL} = \frac{\text{Volume}}{\text{Avg Volume (Last 20 Days)}}$
-        **Timeframes:** Average of Daily RVOL over 5/10/20 days.
-        > An RVOL of **1.3** means 130% of normal volume.
+        ### **1. RVOL (Relative Volume)**
+        Daily RVOL averaged over 5/10/20 days.
+        > **1.3** = 130% of normal volume.
         
-        ### **2. Alpha - 5, 10, & 20 Days**
+        ### **2. Alpha**
         Excess return relative to Sector ETF, adjusted for Beta.
-        1. **Beta ($\beta$):** 60-day rolling correlation.
-        2. **Expected Return:** $\text{Sector \%} \times \beta$
-        3. **Alpha:** $\text{Stock \%} - \text{Expected Return}$
-        > Alpha 5d of **3.0** means outperformance by 3% over the week.
+        > **3.0** = Outperformed risk-adjusted expectation by 3%.
         """)
     
     # Define Columns
@@ -359,9 +348,8 @@ def run_theme_momentum_app(df_global=None):
     categorical_columns = ["Theme", "Theme Category", "Div", "8 EMA", "21 EMA", "50 MA", "200 MA"]
     all_filter_columns = numeric_columns + categorical_columns
 
-    # --- HELPER: ROBUST OPTION LISTS ---
+    # Helpers
     def get_safe_options(df, col_name):
-        """Returns sorted string options, ensures list is never empty."""
         if col_name not in df.columns: return ["-"]
         opts = sorted([str(x) for x in df[col_name].unique() if pd.notna(x) and str(x).strip() != ""])
         return opts if opts else ["-"]
@@ -370,16 +358,14 @@ def run_theme_momentum_app(df_global=None):
     unique_categories = get_safe_options(df_stocks, 'Theme Category')
     unique_divs = get_safe_options(df_stocks, 'Div')
     
-    # --- HELPER: SAFE INDEXING ---
     def safe_index(options, value, default=0):
-        """Safely finds index of value in options, returning default if not found."""
         try:
             return options.index(value)
         except ValueError:
             return default if 0 <= default < len(options) else 0
             
-    # --- FILTER LOOP ---
-    filters = []
+    # --- FILTER LOOP (Builds UI List Only) ---
+    current_ui_filters = [] # Store current widget states here
     
     for i in range(8):
         cols = st.columns(5)
@@ -396,7 +382,6 @@ def run_theme_momentum_app(df_global=None):
         
         if column:
             is_numeric = column in numeric_columns
-            is_categorical = column in categorical_columns
             
             # 2. Operator Selector
             ops = [">=", "<="] if is_numeric else ["="]
@@ -424,7 +409,7 @@ def run_theme_momentum_app(df_global=None):
                 if column == "Theme": cat_opts = unique_themes
                 elif column == "Theme Category": cat_opts = unique_categories
                 elif column == "Div": cat_opts = unique_divs
-                else: cat_opts = get_safe_options(df_stocks, column) # Fallback
+                else: cat_opts = get_safe_options(df_stocks, column)
                 
                 cat_idx = safe_index(cat_opts, default.get('value_cat'), 0)
                 val_cat = cols[3].selectbox("V", cat_opts, index=cat_idx, key=f"filter_{i}_val_cat", label_visibility="collapsed")
@@ -436,25 +421,40 @@ def run_theme_momentum_app(df_global=None):
                 log_idx = safe_index(logic_opts, default.get('logic', 'AND'), 0)
                 logic = cols[4].radio("L", logic_opts, index=log_idx, key=f"filter_{i}_logic", horizontal=True, label_visibility="collapsed")
             
-            filters.append({
+            current_ui_filters.append({
                 'column': column, 'operator': operator, 'value_type': val_type,
                 'value': val, 'value_column': val_col, 'value_categorical': val_cat,
                 'logic': logic
             })
-            
-    # Apply Filters via Utils
-    df_filtered = us.apply_stock_filters(df_stocks, filters)
-    
-    # Display Results
-    st.caption(f"**Showing {len(df_filtered)} of {len(df_stocks)} stock-theme combinations**")
 
-    # --- SETTINGS CHECKBOXES (Horizontal Compact) ---
-    # The [2, 2, 2, 6] ratio keeps them close on the left and leaves empty space on the right
+    # --- APPLY BUTTON LOGIC ---
+    st.markdown('<div style="margin-top: 10px;"></div>', unsafe_allow_html=True)
+    
+    # 1. Initialize active filters on first load
+    if "active_stock_filters" not in st.session_state:
+        st.session_state.active_stock_filters = current_ui_filters
+
+    # 2. Button to update active filters
+    if st.button("Apply Filters", type="primary", use_container_width=True):
+        st.session_state.active_stock_filters = current_ui_filters
+        st.rerun()
+
+    # 3. Apply the ACTIVE filters (not the UI filters)
+    df_filtered = us.apply_stock_filters(df_stocks, st.session_state.active_stock_filters)
+    
+    # Check if UI differs from Active (Visual Cue)
+    if current_ui_filters != st.session_state.active_stock_filters:
+        st.caption("⚠️ *Filters have changed. Click 'Apply Filters' to update the table.*")
+
+    # Display Results
+    st.markdown(f"**Showing {len(df_filtered)} of {len(df_stocks)} stock-theme combinations**")
+
+    # --- SETTINGS CHECKBOXES ---
     c1, c2, c3, _ = st.columns([2, 2, 2, 6]) 
     with c1:
-        st.checkbox("Show Divergences", key="opt_show_divergences", help="Slower: Scans RSI history for divergences.")
+        st.checkbox("Show Divergences", key="opt_show_divergences", help="Slower: Scans RSI history.")
     with c2:
-        st.checkbox("Show Market Caps", key="opt_show_mkt_caps", help="Slower: Fetches live Market Cap data from Yahoo Finance.")
+        st.checkbox("Show Market Caps", key="opt_show_mkt_caps", help="Slower: Fetches live data.")
     with c3:
         st.checkbox("Show Biotech", key="opt_show_biotech", value=False, help="Include Biotech theme.")
 
