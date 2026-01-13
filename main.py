@@ -105,7 +105,7 @@ try:
     # --- 4. SIDEBAR INFO ---
     st.sidebar.caption("🖥️ Wide monitor & light mode.")
     st.sidebar.caption(f"💾 **JB Database:** {db_date}")
-    st.sidebar.caption(f"📈 **Price/RSIs:** {price_date}")
+    st.sidebar.caption(f"📈 **Price History:** {price_date}")
     
     # --- 5. DATA HEALTH CHECK ---
     with st.sidebar.expander("🏥 Data Health", expanded=False):
