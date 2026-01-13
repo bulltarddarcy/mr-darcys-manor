@@ -453,87 +453,256 @@ def run_theme_momentum_app(df_global=None):
     # 4. FILTER BUILDER UI
     # ==========================================
     st.markdown("### 🔍 Custom Filters")
+
     with st.expander("ℹ️ How are RVOL and Alpha calculated?"):
         st.markdown(r"""
         ### **1. RVOL (Relative Volume) - 5, 10, & 20 Days**
         The calculation establishes a daily relative volume ratio and averages it over specific timeframes.
-        **Daily Calculation:** $\text{Daily RVOL} = \frac{\text{Volume}}{\text{Avg Volume (Last 20 Days)}}$
-        **Timeframes:** Average of Daily RVOL over 5/10/20 days.
-        > An RVOL of **1.3** means 130% of normal volume.
+        
+        **Daily Calculation:**
+        $$
+        \text{Daily RVOL} = \frac{\text{Volume}}{\text{Avg Volume (Last 20 Days)}}
+        $$
+        
+        **Timeframes:**
+        * **RVOL 5/10/20 Days:** The **average** of the *Daily RVOL* over the last 5, 10, or 20 trading days.
+        
+        **Interpretation:**
+        > An RVOL of **1.3** means the stock is trading at **130%** of its normal volume on average over that timeframe.
+        
+        ---
         
         ### **2. Alpha - 5, 10, & 20 Days**
-        Excess return relative to Sector ETF, adjusted for Beta.
-        1. **Beta ($\beta$):** 60-day rolling correlation.
-        2. **Expected Return:** $\text{Sector \%} \times \beta$
-        3. **Alpha:** $\text{Stock \%} - \text{Expected Return}$
-        > Alpha 5d of **3.0** means outperformance by 3% over the week.
+        Measures excess return relative to the **Sector ETF** (not just the general market), adjusted for volatility (Beta).
+        
+        **Daily Calculation:**
+        1.  **Beta ($\beta$):** 60-day rolling window of Stock returns vs. Sector ETF returns.
+        2.  **Expected Return:** $\text{Sector \% Change} \times \beta$
+        3.  **1-Day Alpha:** $\text{Stock \% Change} - \text{Expected Return}$
+        
+        **Timeframes:**
+        * **Alpha 5/10/20 Days:** The **cumulative sum** of the *1-Day Alpha* over the last 5, 10, or 20 trading days.
+        
+        **Interpretation:**
+        > An Alpha 5d of **3.0** means the stock has outperformed its expected sector-adjusted return by **3%** over the last week.
         """)
     
     st.caption("Build up to 8 filters. Filters apply automatically as you change them.")
     
-    # Filter Buttons
-    col_d, col_s, col_c = st.columns(3)
-    # Note: We don't need to define callbacks here anymore, they are defined at the top
-    col_d.button("↺ Set to Defaults", type="secondary", use_container_width=True, on_click=cb_set_defaults)
-    col_s.button("✨ Darcy Special", type="primary", use_container_width=True, on_click=cb_darcy_special)
-    col_c.button("🗑️ Clear Filters", type="secondary", use_container_width=True, on_click=cb_clear_filters)
-    
-    # Columns for filtering
+    # Filterable columns (numeric and categorical)
     numeric_columns = ["Price", "Market Cap (B)", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
+    # Added "Div" and MA signals to categorical columns
     categorical_columns = ["Theme", "Theme Category", "Div", "8 EMA", "21 EMA", "50 MA", "200 MA"]
     all_filter_columns = numeric_columns + categorical_columns
     
-    # Filter Construction Loop
+    # --- HELPER: ROBUST OPTION LISTS ---
+    def get_safe_options(df, col_name):
+        """Returns sorted string options, ensures list is never empty."""
+        if col_name not in df.columns:
+            return ["-"]
+        # Convert to string, drop NaNs, unique, sort
+        opts = sorted([str(x) for x in df[col_name].unique() if pd.notna(x) and str(x).strip() != ""])
+        return opts if opts else ["-"]
+
+    # Pre-calculate unique lists for known columns
+    unique_themes = get_safe_options(df_stocks, 'Theme')
+    unique_categories = get_safe_options(df_stocks, 'Theme Category')
+    unique_divs = get_safe_options(df_stocks, 'Div')
+    
+    # --- HELPER: SAFE INDEXING ---
+    def safe_index(options, value, default=0):
+        """Safely finds index of value in options, returning default if not found."""
+        try:
+            return options.index(value)
+        except ValueError:
+            return default if 0 <= default < len(options) else 0
+
+    # ==========================================
+    # BUTTON CALLBACKS
+    # ==========================================
+    def cb_set_defaults():
+        """Resets filters to original safe defaults."""
+        st.session_state.opt_show_divergences = False
+        st.session_state.opt_show_mkt_caps = False
+        st.session_state.opt_show_biotech = False
+        st.session_state.filters_were_cleared = False
+        st.session_state.default_filters_set = True
+        
+        st.session_state.filter_defaults = {
+            0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0},
+            1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
+            2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+            3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
+            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf'},
+            5: {}, 6: {}, 7: {}
+        }
+        # Clear custom user selections
+        keys_to_delete = [k for k in st.session_state.keys() if k.startswith('filter_') and k != 'filter_defaults']
+        for key in keys_to_delete:
+            del st.session_state[key]
+
+    def cb_darcy_special():
+        """Applies the Darcy Special presets."""
+        st.session_state.opt_show_divergences = True
+        st.session_state.opt_show_mkt_caps = True
+        st.session_state.filters_were_cleared = False
+        st.session_state.default_filters_set = True
+        
+        new_defaults = {
+            0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
+            1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
+            2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+            3: {'column': 'Market Cap (B)', 'operator': '>=', 'type': 'Number', 'value': 5.0},
+            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
+            5: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf', 'logic': 'OR'},
+            6: {'column': 'Div', 'operator': '=', 'type': 'Categorical', 'value_cat': '🟢 Bullish'},
+            7: {}
+        }
+        for i in range(8):
+            if i not in new_defaults: new_defaults[i] = {}
+        st.session_state.filter_defaults = new_defaults
+
+    def cb_clear_filters():
+        """Removes all filters."""
+        keys_to_delete = [k for k in st.session_state.keys() 
+                        if k.startswith('filter_') or k == 'filter_defaults' or k == 'default_filters_set']
+        for key in keys_to_delete:
+            del st.session_state[key]
+        st.session_state.filters_were_cleared = True
+
+    # Filter Buttons
+    col_defaults, col_special, col_clear = st.columns(3)
+    with col_defaults:
+        st.button("↺ Set to Defaults", type="secondary", use_container_width=True, on_click=cb_set_defaults)
+    with col_special:
+        st.button("✨ Darcy Special", type="primary", use_container_width=True, on_click=cb_darcy_special)    
+    with col_clear:
+        st.button("🗑️ Clear Filters", type="secondary", use_container_width=True, on_click=cb_clear_filters)
+    
+    # Ensure initialization
+    if 'filter_defaults' not in st.session_state:
+        st.session_state.filter_defaults = {i: {} for i in range(8)}
+    
+    if 'default_filters_set' not in st.session_state and not st.session_state.get('filters_were_cleared', False):
+        cb_set_defaults() # Set initial defaults
+    
+    # --- FILTER UI LOOP ---
     filters = []
+    
     for i in range(8):
         cols = st.columns(5)
         default = st.session_state.filter_defaults.get(i, {})
         
-        # Column Select
-        idx = all_filter_columns.index(default.get('column')) + 1 if default.get('column') in all_filter_columns else 0
-        column = cols[0].selectbox(f"F{i+1}", [None] + all_filter_columns, index=idx, key=f"filter_{i}_column", label_visibility="collapsed", placeholder="Column...")
+        # 1. Column Selector
+        col_opts = [None] + all_filter_columns
+        col_idx = safe_index(col_opts, default.get('column'), 0)
+        
+        column = cols[0].selectbox(
+            f"F{i+1}", 
+            col_opts, 
+            index=col_idx, 
+            key=f"filter_{i}_column", 
+            label_visibility="collapsed", 
+            placeholder="Column..."
+        )
         
         if column:
             is_numeric = column in numeric_columns
+            is_categorical = column in categorical_columns
             
-            # Operator
+            # 2. Operator Selector
             ops = [">=", "<="] if is_numeric else ["="]
-            def_op_idx = 0 if default.get('operator', '>=') == '>=' else 1
-            operator = cols[1].selectbox("Op", ops, index=def_op_idx, key=f"filter_{i}_operator", label_visibility="collapsed")
+            op_idx = safe_index(ops, default.get('operator', '>='), 0)
+            
+            operator = cols[1].selectbox(
+                "Op", 
+                ops, 
+                index=op_idx, 
+                key=f"filter_{i}_operator", 
+                label_visibility="collapsed"
+            )
             
             val_type, val, val_col, val_cat = "Number", None, None, None
             
             if is_numeric:
-                # Type (Number/Column)
-                t_idx = 0 if default.get('type', 'Number') == 'Number' else 1
-                val_type = cols[2].radio("T", ["Number", "Column"], index=t_idx, key=f"filter_{i}_type", horizontal=True, label_visibility="collapsed")
+                # 3. Type Selector
+                type_opts = ["Number", "Column"]
+                type_idx = safe_index(type_opts, default.get('type', 'Number'), 0)
+                
+                val_type = cols[2].radio(
+                    "T", 
+                    type_opts, 
+                    index=type_idx, 
+                    key=f"filter_{i}_type", 
+                    horizontal=True, 
+                    label_visibility="collapsed"
+                )
                 
                 if val_type == "Number":
-                    val = cols[3].number_input("V", value=default.get('value', 0.0), step=0.1, format="%.2f", key=f"filter_{i}_value", label_visibility="collapsed")
+                    # 4. Value Input
+                    val = cols[3].number_input(
+                        "V", 
+                        value=float(default.get('value', 0.0)), 
+                        step=0.1, 
+                        format="%.2f", 
+                        key=f"filter_{i}_value", 
+                        label_visibility="collapsed"
+                    )
                 else:
-                    def_vc = default.get('value_column')
-                    vc_idx = numeric_columns.index(def_vc) if def_vc in numeric_columns else 0
-                    val_col = cols[3].selectbox("C", numeric_columns, index=vc_idx, key=f"filter_{i}_val_col", label_visibility="collapsed")
+                    # 4. Column Comparison
+                    vc_idx = safe_index(numeric_columns, default.get('value_column'), 0)
+                    val_col = cols[3].selectbox(
+                        "C", 
+                        numeric_columns, 
+                        index=vc_idx, 
+                        key=f"filter_{i}_val_col", 
+                        label_visibility="collapsed"
+                    )
             else:
                 # Categorical Value
                 val_type = "Categorical"
-                uniques = sorted(df_stocks[column].astype(str).unique())
-                def_cat = default.get('value_cat')
-                cat_idx = uniques.index(def_cat) if def_cat in uniques else 0
-                val_cat = cols[3].selectbox("V", uniques, index=cat_idx, key=f"filter_{i}_val_cat", label_visibility="collapsed")
+                
+                # Determine correct list of options based on column
+                if column == "Theme":
+                    cat_opts = unique_themes
+                elif column == "Theme Category":
+                    cat_opts = unique_categories
+                elif column == "Div":
+                    cat_opts = unique_divs
+                else:
+                    # Fallback for MA/EMA which are usually just strings
+                    cat_opts = get_safe_options(df_stocks, column)
+                
+                cat_idx = safe_index(cat_opts, default.get('value_cat'), 0)
+                
+                val_cat = cols[3].selectbox(
+                    "V", 
+                    cat_opts, 
+                    index=cat_idx, 
+                    key=f"filter_{i}_val_cat", 
+                    label_visibility="collapsed"
+                )
 
-            # Logic (AND/OR)
+            # 5. Logic Selector
             logic = None
             if i < 7:
-                l_idx = 0 if default.get('logic', 'AND') == 'AND' else 1
-                logic = cols[4].radio("L", ["AND", "OR"], index=l_idx, key=f"filter_{i}_logic", horizontal=True, label_visibility="collapsed")
+                logic_opts = ["AND", "OR"]
+                log_idx = safe_index(logic_opts, default.get('logic', 'AND'), 0)
+                logic = cols[4].radio(
+                    "L", 
+                    logic_opts, 
+                    index=log_idx, 
+                    key=f"filter_{i}_logic", 
+                    horizontal=True, 
+                    label_visibility="collapsed"
+                )
             
             filters.append({
                 'column': column, 'operator': operator, 'value_type': val_type,
                 'value': val, 'value_column': val_col, 'value_categorical': val_cat,
                 'logic': logic
             })
-
+            
     # Apply Filters via Utils
     df_filtered = us.apply_stock_filters(df_stocks, filters)
     
