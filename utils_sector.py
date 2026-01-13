@@ -906,7 +906,11 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
     master_df.columns = [c.strip().title() for c in master_df.columns]
     if 'Symbol' in master_df.columns: master_df.rename(columns={'Symbol': 'Ticker'}, inplace=True)
     master_df['Ticker'] = master_df['Ticker'].str.upper().str.strip()
-    if 'Date' in master_df.columns: master_df = master_df.set_index(pd.to_datetime(master_df['Date'])).sort_index()
+    if 'Date' in master_df.columns:
+        # Convert column to datetime first
+        master_df['Date'] = pd.to_datetime(master_df['Date'])
+        # Set index using the column name (this moves it to index and removes it from columns)
+        master_df = master_df.set_index('Date').sort_index()
 
     needed = set(tickers) | set(theme_map.values()) | {benchmark_ticker}
     master_df = master_df[master_df['Ticker'].isin(needed)].copy()
