@@ -354,17 +354,6 @@ def run_theme_momentum_app(df_global=None):
         > Alpha 5d of **3.0** means outperformance by 3% over the week.
         """)
     
-    # --- MOVED SETTINGS CHECKBOXES HERE ---
-    c_opt1, c_opt2, c_opt3 = st.columns(3)
-    with c_opt1:
-        st.checkbox("Show Divergences", key="opt_show_divergences", help="Slower: Scans RSI history for divergences.")
-    with c_opt2:
-        st.checkbox("Show Market Caps", key="opt_show_mkt_caps", help="Slower: Fetches live Market Cap data from Yahoo Finance.")
-    with c_opt3:
-        st.checkbox("Show Biotech", key="opt_show_biotech", value=False, help="Include Biotech theme.")
-    
-    # st.divider() # Separation
-    
     # Define Columns
     numeric_columns = ["Price", "Market Cap (B)", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
     categorical_columns = ["Theme", "Theme Category", "Div", "8 EMA", "21 EMA", "50 MA", "200 MA"]
@@ -457,9 +446,17 @@ def run_theme_momentum_app(df_global=None):
     df_filtered = us.apply_stock_filters(df_stocks, filters)
     
     # Display Results
-    # st.markdown("---")
     st.caption(f"**Showing {len(df_filtered)} of {len(df_stocks)} stocks**")
-    
+
+    # --- MOVED SETTINGS CHECKBOXES HERE ---
+    c_opt1, c_opt2, c_opt3 = st.columns(3)
+    with c_opt1:
+        st.checkbox("Show Divergences", key="opt_show_divergences", help="Slower: Scans RSI history for divergences.")
+    with c_opt2:
+        st.checkbox("Show Market Caps", key="opt_show_mkt_caps", help="Slower: Fetches live Market Cap data from Yahoo Finance.")
+    with c_opt3:
+        st.checkbox("Show Biotech", key="opt_show_biotech", value=False, help="Include Biotech theme.")
+
     column_config = {
         "Ticker": st.column_config.TextColumn("Ticker", width="small"),
         "Theme": st.column_config.TextColumn("Theme", width="medium"),
