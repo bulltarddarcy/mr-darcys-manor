@@ -1,6 +1,6 @@
 """
 Sector rotation utilities - REFACTORED VERSION
-Performance optimizations, multi-theme support, and centralized logic.
+Performance optimizations and multi-theme support added.
 """
 
 import streamlit as st
@@ -11,13 +11,12 @@ import logging
 from io import StringIO
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, List, Dict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # --- IMPORT SHARED UTILS ---
-import utils_darcy as ud
+from utils_darcy import get_gdrive_binary_data
 
 # ==========================================
 # 1. CONFIGURATION & CONSTANTS
@@ -37,7 +36,7 @@ TIMEFRAMES = {
 }
 
 # Filters
-MIN_DOLLAR_VOLUME = 10_000_000
+MIN_DOLLAR_VOLUME = 2_000_000
 
 # Regression Weights
 WEIGHT_MIN = 1.0
@@ -69,7 +68,15 @@ class SectorDataManager:
         self.ticker_map = {}
 
     def load_universe(self, benchmark_ticker: str = "SPY") -> Tuple[pd.DataFrame, List[str], Dict[str, str]]:
-        """Load sector universe from secrets."""
+        """
+        Load sector universe from secrets.
+        
+        Args:
+            benchmark_ticker: Benchmark to include (SPY or QQQ)
+            
+        Returns:
+            Tuple of (universe_df, all_tickers, theme_to_etf_map)
+        """
         secret_val = st.secrets.get("SECTOR_UNIVERSE", "")
         if not secret_val:
             st.error("❌ Secret 'SECTOR_UNIVERSE' is missing or empty.")
@@ -116,30 +123,25 @@ class SectorDataManager:
             return pd.DataFrame(), [], {}
 
 # ==========================================
-# 3. HELPERS (NEWLY ADDED)
-# ==========================================
-def get_ma_signal(price: float, ma_val: float) -> str:
-    """Return emoji based on price vs moving average."""
-    if pd.isna(ma_val) or ma_val == 0:
-        return "⚠️"
-    return "✅" if price > ma_val else "❌"
-
-def _shorten_category_name(name: str) -> str:
-    """Helper to shorten category names for UI display."""
-    return name.replace("Gaining Momentum", "Gain Mom") \
-               .replace("Losing Momentum", "Lose Mom") \
-               .replace("Outperforming", "Outperf") \
-               .replace("Underperforming", "Underperf")
-
-# ==========================================
-# 4. CALCULATOR & PIPELINE
+# 3. CALCULATOR & PIPELINE
 # ==========================================
 class SectorAlphaCalculator:
     """Calculates relative performance metrics for sectors and stocks."""
     
     def process_dataframe(self, df: pd.DataFrame) -> Optional[pd.DataFrame]:
-        if df is None or df.empty: return None
+        """
+        Prepare raw dataframe with technical indicators.
+        
+        Args:
+            df: Raw price dataframe
+            
+        Returns:
+            Processed dataframe with technicals, or None on error
+        """
+        if df is None or df.empty:
+            return None
 
+        # Ensure 'Close' exists
         if 'Close' not in df.columns and 'CLOSE' in df.columns:
             df['Close'] = df['CLOSE']
         
@@ -147,6 +149,7 @@ class SectorAlphaCalculator:
             logger.error("No 'Close' column found in dataframe")
             return None
         
+        # Calculate RVOL
         if 'Volume' in df.columns:
             avg_vol = df["Volume"].rolling(window=AVG_VOLUME_WINDOW).mean()
             df["RVOL"] = df["Volume"] / avg_vol
@@ -154,6 +157,7 @@ class SectorAlphaCalculator:
             for label, time_window in TIMEFRAMES.items():
                 df[f"RVOL_{label}"] = df["RVOL"].rolling(window=time_window).mean()
         
+        # Daily Range % (ADR)
         if 'High' in df.columns and 'Low' in df.columns:
             daily_range_pct = ((df['High'] - df['Low']) / df['Low']) * 100
             df['ADR_Pct'] = daily_range_pct.rolling(window=ATR_WINDOW).mean()
@@ -161,6 +165,16 @@ class SectorAlphaCalculator:
         return df
 
     def _calc_slope(self, series: pd.Series, window: int) -> pd.Series:
+        """
+        Calculate weighted linear regression slope.
+        
+        Args:
+            series: Time series data
+            window: Rolling window size
+            
+        Returns:
+            Series of slopes
+        """
         x = np.arange(window)
         weights = np.ones(window) if window < 10 else np.linspace(WEIGHT_MIN, WEIGHT_MAX, window)
         
@@ -172,73 +186,150 @@ class SectorAlphaCalculator:
                 
         return series.rolling(window=window).apply(slope_func, raw=True)
 
-    def calculate_rrg_metrics(self, df: pd.DataFrame, bench_df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    def calculate_rrg_metrics(
+        self, 
+        df: pd.DataFrame, 
+        bench_df: pd.DataFrame
+    ) -> Optional[pd.DataFrame]:
+        """
+        Calculate Relative Rotation Graph metrics vs benchmark.
+        
+        Args:
+            df: Asset dataframe with DatetimeIndex and Close column
+            bench_df: Benchmark dataframe with same structure
+            
+        Returns:
+            DataFrame with RRG columns added, or None on error
+        """
         if df is None or df.empty or bench_df is None or bench_df.empty:
             logger.warning("Empty dataframe passed to calculate_rrg_metrics")
             return None
         
+        # Align dates
         common_index = df.index.intersection(bench_df.index)
         
         if common_index.empty:
+            logger.error(
+                f"No date overlap. Asset: {df.index.min()} to {df.index.max()}, "
+                f"Bench: {bench_df.index.min()} to {bench_df.index.max()}"
+            )
             return None
+        
+        if len(common_index) < 50:
+            logger.warning(f"Only {len(common_index)} overlapping dates - results may be unreliable")
         
         df_aligned = df.loc[common_index].copy()
         bench_aligned = bench_df.loc[common_index].copy()
         
+        # Determine Close columns
         asset_col = 'Adj Close' if 'Adj Close' in df_aligned.columns else 'Close'
         bench_col = 'Adj Close' if 'Adj Close' in bench_df.columns else 'Close'
         
+        # Relative Ratio
         raw_ratio = df_aligned[asset_col] / bench_aligned[bench_col]
         
+        # RRG Logic for each timeframe
         for label, time_window in TIMEFRAMES.items():
             ratio_mean = raw_ratio.rolling(window=time_window).mean()
+            
+            # Trend (Ratio) - Normalized around 100
             col_ratio = f"RRG_Ratio_{label}"
             df_aligned[col_ratio] = ((raw_ratio - ratio_mean) / ratio_mean) * 100 + 100
             
+            # Momentum (Velocity of the Ratio)
             raw_slope = self._calc_slope(raw_ratio, time_window)
             velocity = (raw_slope / ratio_mean) * time_window * 100
             
             col_mom = f"RRG_Mom_{label}"
             df_aligned[col_mom] = 100 + velocity
         
+        # Merge back to original df
         for col in df_aligned.columns:
             if col.startswith('RRG_'):
                 df[col] = df_aligned[col]
                 
         return df
 
-    def calculate_stock_alpha_multi_theme(self, df: pd.DataFrame, parent_df: pd.DataFrame, theme_suffix: str) -> pd.DataFrame:
+    def calculate_stock_alpha_multi_theme(
+        self, 
+        df: pd.DataFrame, 
+        parent_df: pd.DataFrame, 
+        theme_suffix: str
+    ) -> pd.DataFrame:
+        """
+        Calculate beta and alpha with theme-specific column names.
+        
+        This allows a stock to have multiple betas (one per theme).
+        
+        Args:
+            df: Stock dataframe
+            parent_df: Theme/sector ETF dataframe
+            theme_suffix: Theme name for column naming (e.g., "Technology")
+            
+        Returns:
+            DataFrame with added columns:
+            - Beta_{theme}
+            - Alpha_Short_{theme}
+            - Alpha_Med_{theme}
+            - Alpha_Long_{theme}
+        """
         if df is None or df.empty or parent_df is None or parent_df.empty:
+            logger.warning(f"Empty dataframe in alpha calculation for theme {theme_suffix}")
             return df
         
         common_index = df.index.intersection(parent_df.index)
+        
         if common_index.empty:
+            logger.error(f"No date overlap for theme {theme_suffix}")
             return df
+        
+        if len(common_index) < BETA_WINDOW:
+            logger.warning(
+                f"Only {len(common_index)} overlapping dates for {theme_suffix} "
+                f"(need {BETA_WINDOW} for beta calculation)"
+            )
         
         df_aligned = df.loc[common_index].copy()
         parent_aligned = parent_df.loc[common_index].copy()
         
+        # Calculate returns if not already present
         if 'Pct_Change' not in df_aligned.columns:
             df_aligned['Pct_Change'] = df_aligned['Close'].pct_change()
         if 'Pct_Change' not in parent_aligned.columns:
             parent_aligned['Pct_Change'] = parent_aligned['Close'].pct_change()
         
-        rolling_cov = df_aligned['Pct_Change'].rolling(window=BETA_WINDOW).cov(parent_aligned['Pct_Change'])
+        # Beta calculation with theme-specific name
+        rolling_cov = df_aligned['Pct_Change'].rolling(window=BETA_WINDOW).cov(
+            parent_aligned['Pct_Change']
+        )
         rolling_var = parent_aligned['Pct_Change'].rolling(window=BETA_WINDOW).var()
         
         beta_col = f"Beta_{theme_suffix}"
-        df_aligned[beta_col] = np.where(rolling_var > 1e-8, rolling_cov / rolling_var, 1.0)
+        df_aligned[beta_col] = np.where(
+            rolling_var > 1e-8,  # Avoid division by zero
+            rolling_cov / rolling_var,
+            1.0  # Default to market beta
+        )
         
+        # Expected return (CAPM)
         expected_return_col = f"Expected_Return_{theme_suffix}"
         df_aligned[expected_return_col] = parent_aligned['Pct_Change'] * df_aligned[beta_col]
         
+        # Alpha (actual - expected)
         alpha_1d_col = f"Alpha_1D_{theme_suffix}"
         df_aligned[alpha_1d_col] = df_aligned['Pct_Change'] - df_aligned[expected_return_col]
         
+        # Multi-timeframe cumulative alpha
         for label, time_window in TIMEFRAMES.items():
             alpha_col = f"Alpha_{label}_{theme_suffix}"
-            df_aligned[alpha_col] = df_aligned[alpha_1d_col].fillna(0).rolling(window=time_window).sum() * 100
+            df_aligned[alpha_col] = (
+                df_aligned[alpha_1d_col]
+                .fillna(0)
+                .rolling(window=time_window)
+                .sum() * 100
+            )
         
+        # Merge back to original df (preserving all dates)
         for col in df_aligned.columns:
             if col.endswith(f"_{theme_suffix}") or col == beta_col:
                 df[col] = df_aligned[col]
@@ -246,34 +337,82 @@ class SectorAlphaCalculator:
         return df
 
 # ==========================================
-# 5. PATTERN DETECTION (PRESERVED)
+# 4. PATTERN DETECTION
 # ==========================================
 
 def detect_dip_buy_candidates(df: pd.DataFrame, theme_suffix: str) -> bool:
-    if df is None or df.empty: return False
+    """
+    Detect stocks that were outperforming but pulled back to average.
+    
+    Criteria:
+    - 20-day alpha was significantly positive
+    - 5-day alpha is near zero
+    - Stock above 21-EMA (trend intact)
+    
+    Args:
+        df: Stock dataframe with alpha columns
+        theme_suffix: Theme name for column lookup
+        
+    Returns:
+        True if stock matches dip buy pattern
+    """
+    if df is None or df.empty:
+        return False
+    
     try:
         last = df.iloc[-1]
+        
         alpha_20d = last.get(f"Alpha_Long_{theme_suffix}", 0)
         alpha_5d = last.get(f"Alpha_Short_{theme_suffix}", 0)
+        
+        # Historical outperformance
         was_strong = alpha_20d > ALPHA_DIP_BUY_THRESHOLD
+        
+        # Recent pullback to average
         now_neutral = -ALPHA_NEUTRAL_RANGE <= alpha_5d <= ALPHA_NEUTRAL_RANGE
+        
+        # Trend still intact
         price = last.get('Close', 0)
         ema21 = last.get('Ema21', 0)
         trend_intact = price > ema21 if ema21 > 0 else False
+        
         return was_strong and now_neutral and trend_intact
     except Exception as e:
         logger.error(f"Error in dip_buy detection: {e}")
         return False
 
-def detect_breakout_candidates(df: pd.DataFrame, theme_suffix: str) -> Optional[Dict]:
-    if df is None or df.empty: return None
+def detect_breakout_candidates(
+    df: pd.DataFrame, 
+    theme_suffix: str
+) -> Optional[Dict]:
+    """
+    Detect stocks transitioning from underperformance to outperformance.
+    
+    Criteria:
+    - 20-day alpha was negative
+    - 10-day alpha neutral
+    - 5-day alpha positive
+    - Volume increasing
+    
+    Args:
+        df: Stock dataframe
+        theme_suffix: Theme name
+        
+    Returns:
+        Dict with pattern details or None
+    """
+    if df is None or df.empty:
+        return None
+    
     try:
         last = df.iloc[-1]
+        
         alpha_20d = last.get(f"Alpha_Long_{theme_suffix}", 0)
         alpha_10d = last.get(f"Alpha_Med_{theme_suffix}", 0)
         alpha_5d = last.get(f"Alpha_Short_{theme_suffix}", 0)
         rvol = last.get('RVOL_Short', 0)
         
+        # Classic acceleration pattern
         was_lagging = alpha_20d < -ALPHA_BREAKOUT_THRESHOLD
         now_neutral = -ALPHA_NEUTRAL_RANGE <= alpha_10d <= ALPHA_NEUTRAL_RANGE
         now_leading = alpha_5d > ALPHA_BREAKOUT_THRESHOLD
@@ -282,73 +421,168 @@ def detect_breakout_candidates(df: pd.DataFrame, theme_suffix: str) -> Optional[
         if was_lagging and now_neutral and now_leading and volume_confirms:
             alpha_delta = alpha_5d - alpha_20d
             strength = min(100, (alpha_delta / 5.0) * 100)
-            return {'pattern': 'breakout', 'strength': strength, 'alpha_change': alpha_delta}
+            
+            return {
+                'pattern': 'breakout',
+                'strength': strength,
+                'alpha_change': alpha_delta
+            }
     except Exception as e:
         logger.error(f"Error in breakout detection: {e}")
+        
     return None
 
 def detect_fading_candidates(df: pd.DataFrame, theme_suffix: str) -> bool:
-    if df is None or df.empty or len(df) < 10: return False
+    """
+    Detect stocks losing their alpha advantage.
+    
+    Criteria:
+    - 20-day alpha very positive
+    - 5-day alpha declining but still positive
+    - Alpha slope negative
+    
+    Args:
+        df: Stock dataframe
+        theme_suffix: Theme name
+        
+    Returns:
+        True if stock is fading
+    """
+    if df is None or df.empty or len(df) < 10:
+        return False
+    
     try:
         last = df.iloc[-1]
         prev_5 = df.iloc[-6]
+        
         alpha_20d = last.get(f"Alpha_Long_{theme_suffix}", 0)
         alpha_5d_now = last.get(f"Alpha_Short_{theme_suffix}", 0)
         alpha_5d_prev = prev_5.get(f"Alpha_Short_{theme_suffix}", 0)
+        
         price = last.get('Close', 0)
         sma50 = last.get('Sma50', 0)
         
+        # Was very strong
         was_very_strong = alpha_20d > ALPHA_FADING_THRESHOLD
+        
+        # Still positive but declining
         still_positive = 0 < alpha_5d_now < ALPHA_DIP_BUY_THRESHOLD
         declining = alpha_5d_now < alpha_5d_prev
+        
+        # Hasn't broken down yet
         not_broken = price > sma50 if sma50 > 0 else True
+        
         return was_very_strong and still_positive and declining and not_broken
     except Exception as e:
         logger.error(f"Error in fader detection: {e}")
         return False
 
-def detect_relative_strength_divergence(df: pd.DataFrame, theme_suffix: str, lookback: int = 20) -> Optional[str]:
-    if df is None or df.empty or len(df) < lookback: return None
+def detect_relative_strength_divergence(
+    df: pd.DataFrame, 
+    theme_suffix: str, 
+    lookback: int = 20
+) -> Optional[str]:
+    """
+    Detect divergence between price and alpha.
+    
+    Args:
+        df: Stock dataframe
+        theme_suffix: Theme name
+        lookback: Days to look back
+        
+    Returns:
+        'bullish_divergence', 'bearish_divergence', or None
+    """
+    if df is None or df.empty or len(df) < lookback:
+        return None
+    
     try:
         recent = df.tail(lookback)
         alpha_col = f"Alpha_Short_{theme_suffix}"
-        if alpha_col not in recent.columns: return None
         
+        if alpha_col not in recent.columns:
+            return None
+        
+        # Find extremes
         price_high = recent['Close'].max()
         price_low = recent['Close'].min()
         alpha_high = recent[alpha_col].max()
         alpha_low = recent[alpha_col].min()
         
+        # Current values
         current_price = recent['Close'].iloc[-1]
         current_alpha = recent[alpha_col].iloc[-1]
         
-        if current_price >= price_high * 0.98 and current_alpha < alpha_high * 0.7:
-            return 'bearish_divergence'
-        if current_price <= price_low * 1.05 and current_alpha > alpha_low * 1.3:
-            return 'bullish_divergence'
+        # Bearish Divergence: Price high, alpha declining
+        if current_price >= price_high * 0.98:  # Near high
+            if current_alpha < alpha_high * 0.7:  # Alpha well off highs
+                return 'bearish_divergence'
+        
+        # Bullish Divergence: Price low, alpha improving
+        if current_price <= price_low * 1.05:  # Near lows
+            if current_alpha > alpha_low * 1.3:  # Alpha recovering
+                return 'bullish_divergence'
     except Exception as e:
         logger.error(f"Error in divergence detection: {e}")
+    
     return None
 
 def _score_to_grade(score: float) -> str:
+    """Convert numeric score to letter grade."""
     if score >= 80: return 'A'
     if score >= 70: return 'B'
     if score >= 60: return 'C'
     if score >= 50: return 'D'
     return 'F'
 
-def calculate_comprehensive_stock_score(df: pd.DataFrame, theme_suffix: str, theme_quadrant: str, sector_score: float = 70, sector_stage: str = "Established") -> Optional[Dict]:
-    """Calculates comprehensive stock score based on setup, timing, and risk/reward."""
-    if df is None or df.empty or len(df) < 20: return None
+def calculate_comprehensive_stock_score(
+    df: pd.DataFrame, 
+    theme_suffix: str, 
+    theme_quadrant: str,
+    sector_score: float = 70,
+    sector_stage: str = "Established"
+) -> Optional[Dict]:
+    """
+    EARLY ENTRY FOCUSED scoring system for stock selection.
+    
+    GOAL: Catch rotation INTO stocks, not highlight leaders already extended.
+    
+    Factors:
+    1. Setup Quality (40%) - Is this at an inflection point?
+    2. Entry Timing (30%) - Is NOW the right time to enter?
+    3. Risk/Reward (20%) - How much upside potential?
+    4. Sector Context (10%) - Is sector at right stage?
+    
+    PHILOSOPHY:
+    - High scores = Early inflection points (0-3% alpha, just turning)
+    - Low scores = Already extended (5%+ alpha, too late)
+    - Base scoring + bonuses (not all-or-nothing)
+    
+    Args:
+        df: Stock dataframe
+        theme_suffix: Theme name
+        theme_quadrant: Current quadrant of theme
+        sector_score: Theme consensus score
+        sector_stage: Lifecycle stage (Early/Established/Topping/Weak)
+        
+    Returns:
+        Dict with score, breakdown, grade, and category label
+    """
+    if df is None or df.empty or len(df) < 20:
+        return None
+    
     try:
         last = df.iloc[-1]
         score_breakdown = {}
         
+        # Get alpha values
         alpha_5d = last.get(f"Alpha_Short_{theme_suffix}", 0)
         alpha_10d = last.get(f"Alpha_Med_{theme_suffix}", 0)
         alpha_20d = last.get(f"Alpha_Long_{theme_suffix}", 0)
         
+        # Get price and volume data
         price = last.get('Close', 0)
+        ema8 = last.get('Ema8', 0)
         ema21 = last.get('Ema21', 0)
         sma50 = last.get('Sma50', 0)
         sma200 = last.get('Sma200', 0)
@@ -356,615 +590,1500 @@ def calculate_comprehensive_stock_score(df: pd.DataFrame, theme_suffix: str, the
         rvol_10d = last.get('RVOL_Med', 0)
         rvol_20d = last.get('RVOL_Long', 0)
         
+        # Calculate days positive (cumulative in last 20)
         days_positive = 0
         for i in range(min(20, len(df))):
             row_alpha = df.iloc[-(i+1)].get(f"Alpha_Short_{theme_suffix}", 0)
-            if row_alpha > 0: days_positive += 1
+            if row_alpha > 0:
+                days_positive += 1
         
-        # Setup Quality
+        # --- FACTOR 1: Setup Quality (40 points) ---
         setup_score = 0
         setup_reason = ""
-        if alpha_5d > 0 and sector_score >= 60:
-            setup_score += 12; setup_reason = "Positive in decent sector"
-        elif alpha_5d > 0:
-            setup_score += 8; setup_reason = "Positive alpha"
-        if 0 <= alpha_5d <= 3.0:
-            setup_score += 15; setup_reason = "Fresh entry range (0-3% alpha)"
-            if days_positive <= 7: setup_score += 5; setup_reason += ", very fresh"
-        if alpha_5d > alpha_10d and alpha_10d > alpha_20d:
-            setup_score += 10; setup_reason += ", accelerating"
-        elif alpha_5d > alpha_20d:
-            setup_score += 6; setup_reason += ", improving"
-        if alpha_5d > 5.0:
-            setup_score -= 15; setup_reason = "Extended (>5% alpha)"
-        elif alpha_5d > 3.5 and days_positive >= 15:
-            setup_score -= 10; setup_reason = "Extended (mature + high alpha)"
-        score_breakdown['setup_quality'] = max(0, min(40, setup_score))
         
-        # Timing
+        # BASE SCORING: Give points for being positive in decent sector
+        if alpha_5d > 0 and sector_score >= 60:
+            setup_score += 12
+            setup_reason = "Positive in decent sector"
+        elif alpha_5d > 0:
+            setup_score += 8
+            setup_reason = "Positive alpha"
+        
+        # BONUS 1: Fresh Entry Range (0-3% alpha) = +15 points
+        if 0 <= alpha_5d <= 3.0:
+            setup_score += 15
+            setup_reason = "Fresh entry range (0-3% alpha)"
+            
+            # Extra bonus if also fresh on days
+            if days_positive <= 7:
+                setup_score += 5
+                setup_reason += ", very fresh (≤7 days)"
+        
+        # BONUS 2: Improving Trend (alpha accelerating) = +10 points
+        if alpha_5d > alpha_10d and alpha_10d > alpha_20d:
+            setup_score += 10
+            setup_reason += ", accelerating"
+        elif alpha_5d > alpha_20d:
+            setup_score += 6
+            setup_reason += ", improving"
+        
+        # PENALTY: Extended (>5% alpha OR high alpha + mature) = -15 points
+        if alpha_5d > 5.0:
+            setup_score -= 15
+            setup_reason = "Extended (>5% alpha)"
+        elif alpha_5d > 3.5 and days_positive >= 15:
+            setup_score -= 10
+            setup_reason = "Extended (mature + high alpha)"
+        
+        score_breakdown['setup_quality'] = max(0, min(40, setup_score))
+        score_breakdown['setup_reason'] = setup_reason
+        
+        # --- FACTOR 2: Entry Timing (30 points) ---
         timing_score = 0
-        dist_from_ema21 = (price - ema21) / ema21 if ema21 > 0 else 999
-        dist_from_sma50 = (price - sma50) / sma50 if sma50 > 0 else 999
-        if price > sma200 and sma200 > 0: timing_score += 5
-        if abs(dist_from_ema21) <= 0.03 and price > sma200 and sma200 > 0: timing_score += 10
-        elif 0 < dist_from_sma50 <= 0.08 and rvol_5d >= 1.2: timing_score += 10
-        elif -0.05 <= dist_from_ema21 <= 0.08: timing_score += 5
-        elif dist_from_ema21 > 0.12 or dist_from_sma50 > 0.18: timing_score -= 10
+        timing_reason = ""
+        
+        # Part A: Price Position (15 points)
+        if ema21 > 0:
+            dist_from_ema21 = (price - ema21) / ema21
+        else:
+            dist_from_ema21 = 999
+        
+        if sma50 > 0:
+            dist_from_sma50 = (price - sma50) / sma50
+        else:
+            dist_from_sma50 = 999
+        
+        # BASE: Give some points for reasonable position
+        if price > sma200 and sma200 > 0:
+            timing_score += 5
+            timing_reason = "Above 200 MA"
+        
+        # BONUS: Near support = +10 points
+        if abs(dist_from_ema21) <= 0.03 and price > sma200 and sma200 > 0:
+            timing_score += 10
+            timing_reason = "At support (21 EMA)"
+        # BONUS: Fresh breakout = +10 points
+        elif 0 < dist_from_sma50 <= 0.08 and rvol_5d >= 1.2:
+            timing_score += 10
+            timing_reason = "Fresh breakout"
+        # OK: Neutral zone = +5 points
+        elif -0.05 <= dist_from_ema21 <= 0.08:
+            timing_score += 5
+            timing_reason = "Neutral zone"
+        # PENALTY: Extended from entry = -10 points
+        elif dist_from_ema21 > 0.12 or dist_from_sma50 > 0.18:
+            timing_score -= 10
+            timing_reason = "Extended from entry"
+        
         score_breakdown['timing_price'] = timing_score
         
-        # Volume
+        # Part B: Volume Pattern (15 points) - LOWERED THRESHOLDS
         volume_score = 0
-        if rvol_5d >= 1.3: volume_score += 15
-        elif rvol_5d >= 1.0: volume_score += 12
-        elif rvol_5d >= 0.85: volume_score += 8
-        else: volume_score += 3
-        if rvol_5d > rvol_10d > rvol_20d: volume_score += 3
-        score_breakdown['timing_volume'] = min(15, volume_score)
+        volume_reason = ""
         
-        # Risk/Reward
+        # BASE: Give points for any reasonable volume
+        if rvol_5d >= 1.3:
+            volume_score += 15
+            volume_reason = "Strong volume (1.3x+)"
+        elif rvol_5d >= 1.0:
+            volume_score += 12
+            volume_reason = "Steady volume (1.0-1.3x)"
+        elif rvol_5d >= 0.85:
+            volume_score += 8
+            volume_reason = "Acceptable volume (0.85x+)"
+        else:
+            volume_score += 3
+            volume_reason = "Weak volume (<0.85x)"
+        
+        # BONUS: Volume building (accelerating) = +3 points
+        if rvol_5d > rvol_10d > rvol_20d:
+            volume_score += 3
+            volume_reason += ", building"
+        
+        score_breakdown['timing_volume'] = min(15, volume_score)
+        score_breakdown['timing_reason'] = timing_reason + "; " + volume_reason
+        
+        # --- FACTOR 3: Risk/Reward (20 points) ---
         rr_score = 0
+        rr_reason = ""
+        
+        # Part A: Upside Potential (15 points)
         sector_implied_alpha = 3.5 if sector_score >= 80 else (2.5 if sector_score >= 70 else 1.5)
         upside_gap = sector_implied_alpha - alpha_5d
-        if sector_score >= 70: rr_score += 5
-        if upside_gap >= 2.5 and sector_score >= 70: rr_score += 10
-        elif upside_gap >= 0.5: rr_score += 7
-        elif upside_gap >= -1.0: rr_score += 4
-        if price > sma50 > sma200: rr_score += 5
-        elif price > sma200: rr_score += 3
+        
+        # BASE: Give points for being in strong sector
+        if sector_score >= 70:
+            rr_score += 5
+        
+        # BONUS: High catch-up potential
+        if upside_gap >= 2.5 and sector_score >= 70:
+            rr_score += 10
+            rr_reason = f"High upside ({upside_gap:.1f}% room)"
+        elif upside_gap >= 0.5:
+            rr_score += 7
+            rr_reason = "Moderate upside"
+        elif upside_gap >= -1.0:
+            rr_score += 4
+            rr_reason = "Limited upside"
+        else:
+            rr_reason = "Already ahead of sector"
+        
+        # Part B: Downside Protection (5 points)
+        if price > sma50 > sma200 and sma50 > 0 and sma200 > 0:
+            rr_score += 5
+        elif price > sma200 and sma200 > 0:
+            rr_score += 3
+        
         score_breakdown['risk_reward'] = min(20, rr_score)
+        score_breakdown['rr_reason'] = rr_reason
         
-        # Sector Context
+        # --- FACTOR 4: Sector Context (10 points) ---
         context_score = 0
-        if sector_stage == "Early" and sector_score >= 70: context_score += 10
-        elif sector_stage == "Established" and sector_score >= 65: context_score += 7
-        elif sector_stage == "Established" and sector_score >= 55: context_score += 4
-        elif sector_stage == "Topping" or sector_score < 50: context_score -= 10
+        context_reason = ""
+        
+        if sector_stage == "Early" and sector_score >= 70:
+            context_score += 10
+            context_reason = "Perfect: Early stage sector"
+        elif sector_stage == "Established" and sector_score >= 65:
+            context_score += 7
+            context_reason = "Good: Established sector"
+        elif sector_stage == "Established" and sector_score >= 55:
+            context_score += 4
+            context_reason = "OK: Mature sector"
+        elif sector_stage == "Topping" or sector_score < 50:
+            context_score -= 10
+            context_reason = "Wrong sector: Topping/weak"
+        
         score_breakdown['sector_context'] = context_score
+        score_breakdown['context_reason'] = context_reason
         
-        total_score = sum(score_breakdown.values())
+        # --- CALCULATE BASE TOTAL ---
+        total_score = (score_breakdown['setup_quality'] + 
+                      score_breakdown['timing_price'] + 
+                      score_breakdown['timing_volume'] +
+                      score_breakdown['risk_reward'] + 
+                      score_breakdown['sector_context'])
         
-        # Pattern Bonuses
+        # --- PATTERN BONUSES/PENALTIES (Partial Credit) ---
         pattern_label = ""
         pattern_score = 0
-        fb_matches = sum([1 for c in [-2.5<=alpha_20d<=0.5, 0<=alpha_5d<=3.0, rvol_5d>=1.2, days_positive<=8] if c])
+        
+        # FRESH BREAKOUT PATTERN: Check 4 criteria, give partial credit
+        fb_matches = 0
+        if -2.5 <= alpha_20d <= 0.5: fb_matches += 1
+        if 0 <= alpha_5d <= 3.0: fb_matches += 1
+        if rvol_5d >= 1.2: fb_matches += 1
+        if days_positive <= 8: fb_matches += 1
+        
         if fb_matches >= 3:
             pattern_score = 10 if fb_matches == 4 else 7
             pattern_label = "🚀 Fresh Breakout"
+            score_breakdown['pattern_bonus'] = pattern_score
+        
+        # DIP BUY PATTERN: Check 3 criteria, partial credit
         elif alpha_20d >= 2.5 and -0.5 <= alpha_5d <= 2.0:
-            db_matches = 1 + (1 if price>ema21 else 0) + (1 if abs(dist_from_ema21)<=0.05 else 0)
+            db_matches = 1  # Already know alpha criteria match
+            if price > ema21 and ema21 > 0: db_matches += 1
+            if abs(dist_from_ema21) <= 0.05: db_matches += 1
+            
             if db_matches >= 2:
                 pattern_score = 8 if db_matches == 3 else 5
                 pattern_label = "💎 Dip Buy"
-        elif sector_stage == "Early" and -1.5<=alpha_20d<=2.0 and 0.5<=alpha_5d<=4.0:
+                score_breakdown['pattern_bonus'] = pattern_score
+        
+        # SECTOR ROTATION: Early sector + turning positive
+        elif (sector_stage == "Early" and 
+              -1.5 <= alpha_20d <= 2.0 and 
+              0.5 <= alpha_5d <= 4.0):
             pattern_score = 12
             pattern_label = "🎯 Sector Rotation"
+            score_breakdown['pattern_bonus'] = pattern_score
         
-        # Penalties
-        extended_count = sum([1 for c in [alpha_5d>5.0, alpha_5d>3.5 and days_positive>=13, dist_from_ema21>0.12] if c])
+        # EXTENDED WARNING: -12 PENALTY (less harsh than -15)
+        extended_count = 0
+        if alpha_5d > 5.0: extended_count += 1
+        if alpha_5d > 3.5 and days_positive >= 13: extended_count += 1
+        if dist_from_ema21 > 0.12: extended_count += 1
+        
         if extended_count >= 2:
             pattern_score = -12
             pattern_label = "⚡ Extended"
-            
+            score_breakdown['extended_penalty'] = pattern_score
+        
+        # BEARISH DIVERGENCE: -8 PENALTY
         divergence = detect_relative_strength_divergence(df, theme_suffix)
         if divergence == 'bearish_divergence':
             pattern_score -= 8
             pattern_label = pattern_label + " + 📉" if pattern_label else "📉 Bear Div"
-            
-        total_score = min(100, max(0, total_score + pattern_score))
+            score_breakdown['divergence_penalty'] = -8
         
-        category = "⚠️ Caution"
-        if total_score >= 75 and alpha_5d <= 3.5 and days_positive <= 12: category = "🎯 Optimal Entry"
-        elif total_score >= 70 and alpha_20d >= 3.0 and alpha_5d <= 2.0: category = "💎 Pullback Buy"
-        elif total_score >= 75 and alpha_5d > 4.0: category = "⚖️ Established Winner"
-        elif total_score >= 60: category = "⚖️ Selective"
+        total_score += pattern_score
+        
+        # Cap score at 0-100
+        total_score = min(100, max(0, total_score))
+        
+        # Determine category label
+        if total_score >= 75 and alpha_5d <= 3.5 and days_positive <= 12:
+            category = "🎯 Optimal Entry"
+        elif total_score >= 70 and alpha_20d >= 3.0 and alpha_5d <= 2.0:
+            category = "💎 Pullback Buy"
+        elif total_score >= 75 and alpha_5d > 4.0:
+            category = "⚖️ Established Winner"
+        elif total_score >= 60:
+            category = "⚖️ Selective"
+        else:
+            category = "⚠️ Caution"
         
         return {
-            'total_score': total_score, 'breakdown': score_breakdown, 'grade': _score_to_grade(total_score),
-            'category': category, 'pattern_label': pattern_label, 'days_positive': days_positive
+            'total_score': total_score,
+            'breakdown': score_breakdown,
+            'grade': _score_to_grade(total_score),
+            'category': category,
+            'pattern_label': pattern_label,
+            'days_positive': days_positive
         }
     except Exception as e:
         logger.error(f"Error calculating stock score: {e}")
         return None
-
 def calculate_theme_score(df: pd.DataFrame, view_key: str = 'Short') -> Optional[Dict]:
-    if df is None or df.empty or len(df) < 4: return None
+    """
+    Calculate comprehensive score for a theme/sector (0-100 with grade).
+    
+    Scoring Breakdown:
+    - Current Position (40 pts): Quadrant strength
+    - Momentum Quality (30 pts): Consistency + acceleration
+    - Trajectory (20 pts): 3-day path analysis
+    - Stability (10 pts): Smoothness of movement
+    
+    Args:
+        df: Theme dataframe with RRG metrics
+        view_key: Timeframe to analyze ('Short', 'Med', 'Long')
+        
+    Returns:
+        Dict with score, grade, components, and actionability
+    """
+    if df is None or df.empty or len(df) < 4:
+        return None
+    
     try:
         col_ratio = f"RRG_Ratio_{view_key}"
         col_mom = f"RRG_Mom_{view_key}"
-        if col_ratio not in df.columns or col_mom not in df.columns: return None
         
+        if col_ratio not in df.columns or col_mom not in df.columns:
+            return None
+        
+        # Get last 4 days (today + 3-day trail)
         recent = df.tail(4)
+        if len(recent) < 4:
+            return None
+        
         last = recent.iloc[-1]
-        ratio, mom = last[col_ratio], last[col_mom]
+        ratio = last[col_ratio]
+        mom = last[col_mom]
+        
         score_breakdown = {}
         
-        # Position
-        quadrant_base = 30 if ratio>=100 and mom>=100 else 20 if ratio<100 and mom>=100 else 15 if ratio>=100 and mom<100 else 5
-        distance = abs(ratio-100) + abs(mom-100)
-        magnitude_bonus = 10 if distance>10 else 5 if distance>5 else 0
+        # --- FACTOR 1: Current Position (40 points) ---
+        # Based on which quadrant and how deep into it
+        
+        # Quadrant base score
+        if ratio >= 100 and mom >= 100:  # Leading
+            quadrant_base = 30
+            quadrant_name = "🟢 Leading"
+        elif ratio < 100 and mom >= 100:  # Improving
+            quadrant_base = 20
+            quadrant_name = "🔵 Improving"
+        elif ratio >= 100 and mom < 100:  # Weakening
+            quadrant_base = 15
+            quadrant_name = "🟡 Weakening"
+        else:  # Lagging
+            quadrant_base = 5
+            quadrant_name = "🔴 Lagging"
+        
+        # Distance from center (magnitude bonus)
+        distance = abs(ratio - 100) + abs(mom - 100)
+        if distance > 10:
+            magnitude_bonus = 10
+        elif distance > 5:
+            magnitude_bonus = 5
+        else:
+            magnitude_bonus = 0
+        
         score_breakdown['position'] = min(40, quadrant_base + magnitude_bonus)
         
-        # Momentum Quality
-        mom_short, mom_med, mom_long = last.get('RRG_Mom_Short',0), last.get('RRG_Mom_Med',0), last.get('RRG_Mom_Long',0)
-        pos_count = sum([mom_short>100, mom_med>100, mom_long>100])
-        consistency = 15 if pos_count==3 else 10 if pos_count==2 else 5 if pos_count==1 else 0
-        acceleration = 15 if mom_short>mom_med>mom_long else 8 if mom_short>mom_med or mom_short>mom_long else 0
-        score_breakdown['momentum_quality'] = consistency + acceleration
+        # --- FACTOR 2: Momentum Quality (30 points) ---
         
-        # Trajectory
-        traj_data = [{'r': recent.iloc[i][col_ratio], 'm': recent.iloc[i][col_mom]} for i in range(4)]
-        quad_rank = lambda r,m: 3 if r>=100 and m>=100 else 2 if r<100 and m>=100 else 1 if r>=100 and m<100 else 0
-        path = [quad_rank(t['r'], t['m']) for t in traj_data]
+        # Check all three timeframes
+        mom_short = last.get('RRG_Mom_Short', 0)
+        mom_med = last.get('RRG_Mom_Med', 0)
+        mom_long = last.get('RRG_Mom_Long', 0)
         
-        if path[-1] > path[0]: imp = 10 if all(path[i]<=path[i+1] for i in range(3)) else 5
-        elif path[-1] == path[0]: imp = 3
-        else: imp = 0
+        # Consistency (15 points)
+        positive_count = sum([mom_short > 100, mom_med > 100, mom_long > 100])
+        if positive_count == 3:
+            consistency_score = 15
+        elif positive_count == 2:
+            consistency_score = 10
+        elif positive_count == 1:
+            consistency_score = 5
+        else:
+            consistency_score = 0
         
-        mom_change = traj_data[-1]['m'] - traj_data[0]['m']
-        mom_acc = 10 if mom_change>5 else 5 if mom_change>2 else 3 if mom_change>0 else 0
-        score_breakdown['trajectory'] = imp + mom_acc
+        # Acceleration (15 points)
+        if mom_short > mom_med > mom_long:
+            acceleration_score = 15
+        elif mom_short > mom_med or mom_short > mom_long:
+            acceleration_score = 8
+        else:
+            acceleration_score = 0
         
-        # Stability
-        unique_quads = len(set([quad_rank(t['r'], t['m']) for t in traj_data]))
-        stability = 10 if unique_quads==1 else 7 if (path==sorted(path) or path==sorted(path, reverse=True)) else 3 if unique_quads==2 else 0
-        score_breakdown['stability'] = stability
+        score_breakdown['momentum_quality'] = consistency_score + acceleration_score
         
-        total_score = min(100, max(0, sum(score_breakdown.values())))
+        # --- FACTOR 3: Trajectory (20 points) ---
+        # Analyze the 3-day path
         
-        # Freshness
-        current_quad = quad_rank(ratio, mom)
-        days = 1
-        for i in range(len(traj_data)-2, -1, -1):
-            if quad_rank(traj_data[i]['r'], traj_data[i]['m']) == current_quad: days+=1
-            else: break
+        trajectory_data = []
+        for i in range(4):
+            row = recent.iloc[i]
+            r = row[col_ratio]
+            m = row[col_mom]
             
-        freshness = "🆕 Fresh" if days<=2 else "⭐ Early" if days==3 else "🕐 Established"
-        quad_name = "🟢 Leading" if ratio>=100 and mom>=100 else "🔵 Improving" if ratio<100 and mom>=100 else "🟡 Weakening" if ratio>=100 and mom<100 else "🔴 Lagging"
-        traj_label = "🚀 Rising" if path[-1]>path[0] else "➡️ Stable" if path[-1]==path[0] and stability>=7 else "⚡ Choppy" if path[-1]==path[0] else "📉 Falling"
+            if r >= 100 and m >= 100:
+                quad = "Leading"
+            elif r < 100 and m >= 100:
+                quad = "Improving"
+            elif r >= 100 and m < 100:
+                quad = "Weakening"
+            else:
+                quad = "Lagging"
+            
+            trajectory_data.append({
+                'quadrant': quad,
+                'ratio': r,
+                'mom': m
+            })
+        
+        # Improvement trajectory (10 points)
+        quadrant_rank = {"Lagging": 0, "Weakening": 1, "Improving": 2, "Leading": 3}
+        
+        trajectory_path = [quadrant_rank[t['quadrant']] for t in trajectory_data]
+        
+        if trajectory_path[-1] > trajectory_path[0]:  # Improved over 3 days
+            if all(trajectory_path[i] <= trajectory_path[i+1] for i in range(3)):
+                trajectory_improvement = 10  # Consistent improvement each day
+            else:
+                trajectory_improvement = 5  # Improved but not smoothly
+        elif trajectory_path[-1] == trajectory_path[0]:
+            trajectory_improvement = 3  # Stayed same
+        else:
+            trajectory_improvement = 0  # Deteriorated
+        
+        # Momentum acceleration in trail (10 points)
+        mom_values = [t['mom'] for t in trajectory_data]
+        mom_change = mom_values[-1] - mom_values[0]
+        
+        if mom_change > 5:
+            momentum_acceleration = 10
+        elif mom_change > 2:
+            momentum_acceleration = 5
+        elif mom_change > 0:
+            momentum_acceleration = 3
+        else:
+            momentum_acceleration = 0
+        
+        score_breakdown['trajectory'] = trajectory_improvement + momentum_acceleration
+        
+        # --- FACTOR 4: Stability (10 points) ---
+        # Reward smooth movement, penalize whipsaws
+        
+        # Check if bouncing between quadrants
+        unique_quadrants = len(set([t['quadrant'] for t in trajectory_data]))
+        
+        if unique_quadrants == 1:
+            stability_score = 10  # Rock solid
+        elif unique_quadrants == 2:
+            # Check if it's a smooth progression vs whipsaw
+            if trajectory_path == sorted(trajectory_path) or trajectory_path == sorted(trajectory_path, reverse=True):
+                stability_score = 7  # Smooth transition
+            else:
+                stability_score = 3  # Some chop
+        else:
+            stability_score = 0  # Very choppy
+        
+        score_breakdown['stability'] = stability_score
+        
+        # --- CALCULATE TOTAL ---
+        total_score = sum(score_breakdown.values())
+        total_score = min(100, max(0, total_score))
+        
+        # --- FRESHNESS INDICATOR ---
+        # Count how many days it's been in current quadrant
+        current_quad = trajectory_data[-1]['quadrant']
+        days_in_quadrant = 1
+        for i in range(len(trajectory_data) - 2, -1, -1):
+            if trajectory_data[i]['quadrant'] == current_quad:
+                days_in_quadrant += 1
+            else:
+                break
+        
+        if days_in_quadrant <= 2:
+            freshness = "🆕 Fresh"
+            freshness_detail = f"Day {days_in_quadrant}"
+        elif days_in_quadrant == 3:
+            freshness = "⭐ Early"
+            freshness_detail = f"Day {days_in_quadrant}"
+        else:
+            freshness = "🕐 Established"
+            freshness_detail = f"Day {days_in_quadrant}+"
+        
+        # --- TRAJECTORY DESCRIPTION ---
+        if trajectory_path[-1] > trajectory_path[0]:
+            trajectory_label = "🚀 Rising"
+        elif trajectory_path[-1] == trajectory_path[0]:
+            if stability_score >= 7:
+                trajectory_label = "➡️ Stable"
+            else:
+                trajectory_label = "⚡ Choppy"
+        else:
+            trajectory_label = "📉 Falling"
         
         return {
-            'total_score': total_score, 'grade': _score_to_grade(total_score), 'quadrant': quad_name,
-            'freshness': freshness, 'freshness_detail': f"Day {days}", 'trajectory_label': traj_label,
-            'breakdown': score_breakdown, 'days_in_quadrant': days, 'stability': "Smooth" if stability>=7 else "Choppy"
+            'total_score': total_score,
+            'grade': _score_to_grade(total_score),
+            'quadrant': quadrant_name,
+            'freshness': freshness,
+            'freshness_detail': freshness_detail,
+            'trajectory_label': trajectory_label,
+            'breakdown': score_breakdown,
+            'days_in_quadrant': days_in_quadrant,
+            'stability': "Smooth" if stability_score >= 7 else "Choppy"
         }
+        
     except Exception as e:
         logger.error(f"Error calculating theme score: {e}")
         return None
 
-def calculate_consensus_theme_score(df: pd.DataFrame) -> Optional[Dict]:
-    if df is None or df.empty: return None
+def calculate_consensus_theme_score(
+    df: pd.DataFrame
+) -> Optional[Dict]:
+    """
+    Calculate multi-timeframe consensus score for swing trading.
+    
+    Combines 5-day, 10-day, and 20-day scores with emphasis on longer timeframes.
+    Only recommends themes where multiple timeframes align.
+    
+    Args:
+        df: Theme dataframe with RRG metrics
+        
+    Returns:
+        Dict with consensus score, conviction level, and all timeframe data
+    """
+    if df is None or df.empty:
+        return None
+    
     try:
-        s5 = calculate_theme_score(df, 'Short')
-        s10 = calculate_theme_score(df, 'Med')
-        s20 = calculate_theme_score(df, 'Long')
-        if not all([s5, s10, s20]): return None
+        # Calculate scores for all timeframes
+        score_5d = calculate_theme_score(df, 'Short')
+        score_10d = calculate_theme_score(df, 'Med')
+        score_20d = calculate_theme_score(df, 'Long')
         
-        consensus = (s5['total_score']*0.2 + s10['total_score']*0.3 + s20['total_score']*0.5)
-        bullish_q = ['🟢 Leading', '🔵 Improving']
-        bullish_count = sum([1 for s in [s5, s10, s20] if s['quadrant'] in bullish_q])
+        if not all([score_5d, score_10d, score_20d]):
+            return None
         
-        align_bonus = 10 if bullish_count==3 else 0 if bullish_count==2 else -10 if bullish_count==1 else -15
-        consensus = min(100, max(0, consensus + align_bonus))
+        # Weighted consensus (favoring longer timeframes for swing trading)
+        consensus_score = (
+            score_5d['total_score'] * 0.20 +  # 20% weight
+            score_10d['total_score'] * 0.30 +  # 30% weight  
+            score_20d['total_score'] * 0.50    # 50% weight (most important)
+        )
         
-        conviction = "High" if bullish_count==3 else "Medium" if bullish_count==2 else "Low" if bullish_count==1 else "None"
-        emoji = "✅" if bullish_count==3 else "🎯" if bullish_count==2 else "⚠️" if bullish_count==1 else "🚫"
+        # Check alignment across timeframes
+        bullish_quadrants = ['🟢 Leading', '🔵 Improving']
+        
+        bullish_5d = score_5d['quadrant'] in bullish_quadrants
+        bullish_10d = score_10d['quadrant'] in bullish_quadrants
+        bullish_20d = score_20d['quadrant'] in bullish_quadrants
+        
+        bullish_count = sum([bullish_5d, bullish_10d, bullish_20d])
+        
+        # Conviction level
+        if bullish_count == 3:
+            conviction = "High"
+            conviction_emoji = "✅"
+            alignment_bonus = 10
+        elif bullish_count == 2:
+            conviction = "Medium"
+            conviction_emoji = "🎯"
+            alignment_bonus = 0
+        elif bullish_count == 1:
+            conviction = "Low"
+            conviction_emoji = "⚠️"
+            alignment_bonus = -10
+        else:
+            conviction = "None"
+            conviction_emoji = "🚫"
+            alignment_bonus = -15
+        
+        # Apply alignment bonus
+        consensus_score = min(100, max(0, consensus_score + alignment_bonus))
         
         return {
-            'consensus_score': round(consensus, 1), 'grade': _score_to_grade(consensus),
-            'conviction': conviction, 'conviction_emoji': emoji,
-            'timeframes': {'5d': s5, '10d': s10, '20d': s20},
-            'freshness': s20['freshness'], 'freshness_detail': s20['freshness_detail']
+            'consensus_score': round(consensus_score, 1),
+            'grade': _score_to_grade(consensus_score),
+            'conviction': conviction,
+            'conviction_emoji': conviction_emoji,
+            'timeframes': {
+                '5d': {
+                    'score': score_5d['total_score'],
+                    'quadrant': score_5d['quadrant'],
+                    'trajectory': score_5d['trajectory_label']
+                },
+                '10d': {
+                    'score': score_10d['total_score'],
+                    'quadrant': score_10d['quadrant'],
+                    'trajectory': score_10d['trajectory_label']
+                },
+                '20d': {
+                    'score': score_20d['total_score'],
+                    'quadrant': score_20d['quadrant'],
+                    'trajectory': score_20d['trajectory_label']
+                }
+            },
+            'freshness': score_20d['freshness'],  # Use 20d for freshness
+            'freshness_detail': score_20d['freshness_detail']
         }
-    except Exception: return None
-
-# ==========================================
-# 6. ANALYSIS FUNCTIONS (NEWLY ADDED)
-# ==========================================
-def analyze_stocks_batch(
-    etf_data_cache: Dict,
-    stock_theme_pairs: List[Tuple[str, str]],
-    show_divergences: bool,
-    show_mkt_caps: bool,
-    show_biotech: bool,
-    theme_category_map: Dict[str, str]
-) -> pd.DataFrame:
-    """
-    Perform heavy lifting for stock analysis: MC fetching, Divergence scanning, and Data extraction.
-    MOVED FROM MAIN to keep main clean.
-    """
-    if not stock_theme_pairs:
-        return pd.DataFrame()
-    
-    unique_tickers = list(set([pair[0] for pair in stock_theme_pairs]))
-    
-    # 1. Fetch Market Caps
-    mc_map = {}
-    if show_mkt_caps:
-        with st.spinner("Fetching Market Caps..."):
-            mc_map = ud.fetch_market_caps_batch(unique_tickers)
-
-    # 2. Scan Divergences
-    div_map = {}
-    if show_divergences:
-        with st.spinner("Scanning Divergences..."):
-            def process_div_single(stock):
-                sdf = etf_data_cache.get(stock)
-                if sdf is None or sdf.empty or len(sdf) < 20: return stock, "—"
-                try:
-                    d_d, _ = ud.prepare_data(sdf.copy())
-                    if d_d is not None and not d_d.empty:
-                        divs = ud.find_divergences(
-                            d_d, stock, 'Daily', min_n=0,
-                            periods_input=ud.DIV_CSV_PERIODS_DAYS,
-                            optimize_for='PF',
-                            lookback_period=ud.DIV_LOOKBACK_DEFAULT,
-                            price_source=ud.DIV_SOURCE_DEFAULT,
-                            strict_validation=(ud.DIV_STRICT_DEFAULT == "Yes"),
-                            recent_days_filter=ud.DIV_DAYS_SINCE_DEFAULT,
-                            rsi_diff_threshold=ud.DIV_RSI_DIFF_DEFAULT
-                        )
-                        active_divs = [d for d in divs if d.get('Is_Recent', False)]
-                        if active_divs:
-                            d_type = active_divs[-1]['Type']
-                            return stock, (f"🟢 {d_type}" if d_type == 'Bullish' else f"🔴 {d_type}")
-                except: pass
-                return stock, "—"
-
-            with ThreadPoolExecutor(max_workers=20) as executor:
-                future_to_div = {executor.submit(process_div_single, t): t for t in unique_tickers}
-                for future in as_completed(future_to_div):
-                    t, d_str = future.result()
-                    div_map[t] = d_str
-
-    # 3. Process Single Stock Helper
-    def process_single_stock(stock, stock_theme):
-        if stock_theme == "Biotech" and not show_biotech: return None
-        sdf = etf_data_cache.get(stock)
-        if sdf is None or sdf.empty or len(sdf) < 20: return None
-
-        # Volume Filter
-        try:
-            recent_vol = sdf['Volume'].values[-20:]
-            recent_close = sdf['Close'].values[-20:]
-            if (recent_vol.mean() * recent_close.mean()) < MIN_DOLLAR_VOLUME: return None
-        except: return None
-
-        try:
-            last = sdf.iloc[-1]
-            return {
-                "Ticker": stock,
-                "Theme": stock_theme,
-                "Theme Category": theme_category_map.get(stock_theme, "Unknown"),
-                "Price": last['Close'],
-                "Market Cap (B)": mc_map.get(stock, 0) / 1e9,
-                "Beta": last.get(f"Beta_{stock_theme}", 1.0),
-                "Alpha 5d": last.get(f"Alpha_Short_{stock_theme}", 0),
-                "Alpha 10d": last.get(f"Alpha_Med_{stock_theme}", 0),
-                "Alpha 20d": last.get(f"Alpha_Long_{stock_theme}", 0),
-                "RVOL 5d": last.get('RVOL_Short', 0),
-                "RVOL 10d": last.get('RVOL_Med', 0),
-                "RVOL 20d": last.get('RVOL_Long', 0),
-                "Div": div_map.get(stock, "—"),
-                "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
-                "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
-                "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
-                "200 MA": get_ma_signal(last['Close'], last.get('Sma200', 0)),
-            }
-        except Exception: return None
-
-    # 4. Execute Extraction
-    stock_data = []
-    with st.spinner(f"Processing {len(stock_theme_pairs)} stocks..."):
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            future_to_stock = {executor.submit(process_single_stock, s, t): s for s, t in stock_theme_pairs}
-            for future in as_completed(future_to_stock):
-                result = future.result()
-                if result: stock_data.append(result)
-                
-    return pd.DataFrame(stock_data)
-
-def apply_stock_filters(df_stocks: pd.DataFrame, filters: List[Dict]) -> pd.DataFrame:
-    """
-    Applies the list of dictionary filters (created by the UI) to the stocks dataframe.
-    MOVED FROM MAIN to keep main clean.
-    """
-    if df_stocks.empty or not filters:
-        return df_stocks
-
-    df_filtered = df_stocks.copy()
-    
-    # Separate numeric and categorical
-    numeric_filters = [f for f in filters if f['value_type'] in ['Number', 'Column']]
-    categorical_filters = [f for f in filters if f['value_type'] == 'Categorical']
-    
-    # Build Numeric (AND logic)
-    numeric_conditions = []
-    for f in numeric_filters:
-        col, op = f['column'], f['operator']
-        if f['value_type'] == 'Number':
-            val = f['value']
-            cond = (df_filtered[col] >= val) if op == '>=' else (df_filtered[col] <= val)
-        else:
-            val_col = f['value_column']
-            cond = (df_filtered[col] >= df_filtered[val_col]) if op == '>=' else (df_filtered[col] <= df_filtered[val_col])
-        numeric_conditions.append(cond)
         
-    # Build Categorical (Mixed Logic)
-    categorical_conditions = []
-    for i, f in enumerate(categorical_filters):
-        col, val = f['column'], f['value_categorical']
-        cond = (df_filtered[col] == val)
-        logic = f.get('logic', 'AND') if i > 0 else None
-        categorical_conditions.append((cond, logic))
-        
-    # Combine conditions
-    final_condition = None
-    
-    # Merge numeric
-    if numeric_conditions:
-        final_condition = numeric_conditions[0]
-        for c in numeric_conditions[1:]: final_condition = final_condition & c
-        
-    # Merge categorical
-    if categorical_conditions:
-        cat_combined = categorical_conditions[0][0]
-        for i in range(1, len(categorical_conditions)):
-            cond, logic = categorical_conditions[i]
-            if logic == 'OR': cat_combined = cat_combined | cond
-            else: cat_combined = cat_combined & cond
-        
-        final_condition = (final_condition & cat_combined) if final_condition is not None else cat_combined
-        
-    if final_condition is not None:
-        df_filtered = df_filtered[final_condition]
-        
-    return df_filtered
-
-# ==========================================
-# 7. CORE LOGIC (CATEGORIES & DAYS)
-# ==========================================
-def calculate_days_in_category(df: pd.DataFrame) -> Dict[str, int]:
-    if df is None or df.empty or len(df) < 4: return {'days': 0, 'category': 'Unknown'}
-    try:
-        recent_days = df.tail(20)
-        daily_categories = []
-        for i in range(len(recent_days)):
-            if i < 3: continue
-            window = recent_days.iloc[max(0, i-3):i+1]
-            if len(window) < 4: continue
-            
-            positions_10d = [{'ratio': window.iloc[j].get('RRG_Ratio_Med', 100), 'momentum': window.iloc[j].get('RRG_Mom_Med', 100)} for j in range(4)]
-            avg_r = sum(p['ratio'] for p in positions_10d[:3]) / 3
-            avg_m = sum(p['momentum'] for p in positions_10d[:3]) / 3
-            
-            perf = "outperforming" if positions_10d[3]['ratio'] > avg_r else "underperforming"
-            mom = "gaining" if positions_10d[3]['momentum'] > avg_m else "losing"
-            daily_categories.append(f"{mom}_{perf}")
-            
-        if not daily_categories: return {'days': 0, 'category': 'Unknown'}
-        
-        current_cat = daily_categories[-1]
-        days = 1
-        for i in range(len(daily_categories) - 2, -1, -1):
-            if daily_categories[i] == current_cat: days += 1
-            else: break
-            
-        return {'days': days, 'category': current_cat}
     except Exception as e:
-        logger.error(f"Error calculating days: {e}")
+        logger.error(f"Error calculating consensus score: {e}")
+        return None
+
+def calculate_days_in_category(df: pd.DataFrame) -> Dict[str, int]:
+    """
+    Calculate how many consecutive days a theme has been in its current category.
+    
+    Args:
+        df: Theme dataframe with RRG data
+        
+    Returns:
+        Dict with days_in_category and category_name
+    """
+    if df is None or df.empty or len(df) < 4:
+        return {'days': 0, 'category': 'Unknown'}
+    
+    try:
+        # Get last 20 days to look back
+        recent_days = df.tail(20)
+        
+        # Calculate category for each day
+        daily_categories = []
+        
+        for i in range(len(recent_days)):
+            if i < 3:
+                # Need at least 4 days to calculate trend
+                continue
+            
+            # Get last 4 days up to this point
+            window = recent_days.iloc[max(0, i-3):i+1]
+            
+            if len(window) < 4:
+                continue
+            
+            # Extract 10-day positions for last 4 days in window
+            positions_10d = []
+            for j in range(4):
+                row = window.iloc[j]
+                positions_10d.append({
+                    'ratio': row.get('RRG_Ratio_Med', 100),
+                    'momentum': row.get('RRG_Mom_Med', 100)
+                })
+            
+            # Calculate average of older 3 days
+            avg_ratio_old = (positions_10d[0]['ratio'] + positions_10d[1]['ratio'] + positions_10d[2]['ratio']) / 3
+            avg_momentum_old = (positions_10d[0]['momentum'] + positions_10d[1]['momentum'] + positions_10d[2]['momentum']) / 3
+            
+            # Compare today to average
+            today_ratio = positions_10d[3]['ratio']
+            today_momentum = positions_10d[3]['momentum']
+            
+            # Determine category
+            if today_ratio > avg_ratio_old:
+                perf = "outperforming"
+            else:
+                perf = "underperforming"
+            
+            if today_momentum > avg_momentum_old:
+                mom = "gaining"
+            else:
+                mom = "losing"
+            
+            category = f"{mom}_{perf}"
+            daily_categories.append(category)
+        
+        if not daily_categories:
+            return {'days': 0, 'category': 'Unknown'}
+        
+        # Count consecutive days in current category (starting from end)
+        current_category = daily_categories[-1]
+        consecutive_days = 1
+        
+        for i in range(len(daily_categories) - 2, -1, -1):
+            if daily_categories[i] == current_category:
+                consecutive_days += 1
+            else:
+                break
+        
+        # Convert to readable name
+        category_names = {
+            'gaining_outperforming': 'Gaining Momentum & Outperforming',
+            'gaining_underperforming': 'Gaining Momentum & Underperforming',
+            'losing_outperforming': 'Losing Momentum & Outperforming',
+            'losing_underperforming': 'Losing Momentum & Underperforming'
+        }
+        
+        return {
+            'days': consecutive_days,
+            'category': category_names.get(current_category, 'Unknown')
+        }
+        
+    except Exception as e:
+        logger.error(f"Error calculating days in category: {e}")
         return {'days': 0, 'category': 'Unknown'}
 
-def get_momentum_performance_categories(etf_data_cache: Dict, theme_map: Dict) -> Dict[str, List[Dict]]:
-    """Categorize themes. Includes shortened display names."""
+
+def get_momentum_performance_categories(
+    etf_data_cache: Dict,
+    theme_map: Dict
+) -> Dict[str, List[Dict]]:
+    """
+    Categorize themes by momentum and performance direction.
+    
+    Categories based on 10-day trend direction:
+    1. Gaining Momentum & Outperforming (⬈) - Best
+    2. Gaining Momentum & Underperforming (⬉) - Bottoming
+    3. Losing Momentum & Outperforming (⬊) - Topping
+    4. Losing Momentum & Underperforming (⬋) - Worst
+    
+    Uses 5-day as confirmation indicator.
+    
+    Args:
+        etf_data_cache: Cache of theme dataframes
+        theme_map: Dict mapping theme names to tickers
+        
+    Returns:
+        Dict with themes grouped by direction category
+    """
     categories = {
-        'gaining_mom_outperforming': [],
-        'gaining_mom_underperforming': [],
-        'losing_mom_outperforming': [],
-        'losing_mom_underperforming': []
+        'gaining_mom_outperforming': [],    # ⬈ Best
+        'gaining_mom_underperforming': [],  # ⬉ Bottoming
+        'losing_mom_outperforming': [],     # ⬊ Topping
+        'losing_mom_underperforming': []    # ⬋ Worst
     }
     
     for theme, ticker in theme_map.items():
         df = etf_data_cache.get(ticker)
-        if df is None or df.empty or len(df) < 4: continue
+        if df is None or df.empty or len(df) < 4:
+            continue
         
         try:
-            recent_4 = df.tail(4)
-            pos_10d = [{'r': recent_4.iloc[i].get('RRG_Ratio_Med', 100), 'm': recent_4.iloc[i].get('RRG_Mom_Med', 100)} for i in range(4)]
+            # Get last 4 days of 10-day window positions
+            if len(df) < 4:
+                continue
+                
+            recent_4_days = df.tail(4)
             
-            avg_r = sum(p['r'] for p in pos_10d[:3]) / 3
-            avg_m = sum(p['m'] for p in pos_10d[:3]) / 3
-            today_r, today_m = pos_10d[3]['r'], pos_10d[3]['m']
+            # Extract 10-day positions for last 4 days
+            positions_10d = []
+            for i in range(4):
+                row = recent_4_days.iloc[i]
+                positions_10d.append({
+                    'ratio': row.get('RRG_Ratio_Med', 100),
+                    'momentum': row.get('RRG_Mom_Med', 100)
+                })
             
-            perf_dir = "Outperforming" if today_r > avg_r else "Underperforming"
-            mom_dir = "Gaining Momentum" if today_m > avg_m else "Losing Momentum"
+            # Calculate average of older 3 days
+            avg_ratio_old = (positions_10d[0]['ratio'] + positions_10d[1]['ratio'] + positions_10d[2]['ratio']) / 3
+            avg_momentum_old = (positions_10d[0]['momentum'] + positions_10d[1]['momentum'] + positions_10d[2]['momentum']) / 3
             
-            bucket_key = f"{'gaining_mom' if today_m > avg_m else 'losing_mom'}_{'outperforming' if today_r > avg_r else 'underperforming'}"
-            arrow = "⬈" if bucket_key == 'gaining_mom_outperforming' else "⬉" if bucket_key == 'gaining_mom_underperforming' else "⬊" if bucket_key == 'losing_mom_outperforming' else "⬋"
+            # Compare today to average
+            today_ratio = positions_10d[3]['ratio']
+            today_momentum = positions_10d[3]['momentum']
             
-            full_cat_name = f"{mom_dir} & {perf_dir}"
-            short_cat_name = _shorten_category_name(full_cat_name)
+            # Determine direction
+            if today_ratio > avg_ratio_old:
+                performance_direction = "Outperforming"
+                perf_dir_short = "outperforming"
+            else:
+                performance_direction = "Underperforming"
+                perf_dir_short = "underperforming"
             
-            r_5d, m_5d = recent_4.iloc[-1].get('RRG_Ratio_Short', 100), recent_4.iloc[-1].get('RRG_Mom_Short', 100)
-            if r_5d > today_r and m_5d > today_m: confirmation = "5d accelerating ahead"
-            elif r_5d > today_r or m_5d > today_m: confirmation = "5d confirming trend"
-            else: confirmation = "5d lagging behind"
+            if today_momentum > avg_momentum_old:
+                momentum_direction = "Gaining Momentum"
+                mom_dir_short = "gaining_mom"
+            else:
+                momentum_direction = "Losing Momentum"
+                mom_dir_short = "losing_mom"
+            
+            # Get current quadrants for all timeframes
+            quad_5d = get_quadrant_name(
+                recent_4_days.iloc[-1].get('RRG_Ratio_Short', 100),
+                recent_4_days.iloc[-1].get('RRG_Mom_Short', 100)
+            )
+            quad_10d = get_quadrant_name(today_ratio, today_momentum)
+            quad_20d = get_quadrant_name(
+                recent_4_days.iloc[-1].get('RRG_Ratio_Long', 100),
+                recent_4_days.iloc[-1].get('RRG_Mom_Long', 100)
+            )
+            
+            # Get 5-day confirmation
+            ratio_5d = recent_4_days.iloc[-1].get('RRG_Ratio_Short', 100)
+            momentum_5d = recent_4_days.iloc[-1].get('RRG_Mom_Short', 100)
+            
+            # Check if 5d is ahead of 10d
+            if ratio_5d > today_ratio and momentum_5d > today_momentum:
+                confirmation = "5d accelerating ahead"
+            elif ratio_5d > today_ratio or momentum_5d > today_momentum:
+                confirmation = "5d confirming trend"
+            else:
+                confirmation = "5d lagging behind"
+            
+            # Build category label
+            category_label = f"{momentum_direction} & {performance_direction}"
+            
+            # Determine which bucket
+            if mom_dir_short == "gaining_mom" and perf_dir_short == "outperforming":
+                bucket = 'gaining_mom_outperforming'
+                arrow = "⬈"
+            elif mom_dir_short == "gaining_mom" and perf_dir_short == "underperforming":
+                bucket = 'gaining_mom_underperforming'
+                arrow = "⬉"
+            elif mom_dir_short == "losing_mom" and perf_dir_short == "outperforming":
+                bucket = 'losing_mom_outperforming'
+                arrow = "⬊"
+            else:  # losing both
+                bucket = 'losing_mom_underperforming'
+                arrow = "⬋"
+            
+            # Build reason
+            reason = f"10d: {momentum_direction.lower()} & {performance_direction.lower()}, {confirmation}"
+            
+            # Calculate days in this category
+            days_info = calculate_days_in_category(df)
             
             theme_info = {
                 'theme': theme,
-                'category': full_cat_name,
-                'display_category': arrow + " " + short_cat_name,
+                'category': category_label,
                 'arrow': arrow,
-                'quadrant_5d': get_quadrant_name(r_5d, m_5d),
-                'quadrant_10d': get_quadrant_name(today_r, today_m),
-                'quadrant_20d': get_quadrant_name(recent_4.iloc[-1].get('RRG_Ratio_Long', 100), recent_4.iloc[-1].get('RRG_Mom_Long', 100)),
-                'reason': f"10d: {mom_dir.lower()} & {perf_dir.lower()}, {confirmation}",
-                'days_in_category': calculate_days_in_category(df)['days']
+                'quadrant_5d': quad_5d,
+                'quadrant_10d': quad_10d,
+                'quadrant_20d': quad_20d,
+                'confirmation': confirmation,
+                'reason': reason,
+                'days_in_category': days_info['days']
             }
-            categories[bucket_key].append(theme_info)
-        except: continue
             
-    for k in categories: categories[k].sort(key=lambda x: x['theme'])
+            categories[bucket].append(theme_info)
+            
+        except Exception as e:
+            logger.error(f"Error categorizing {theme}: {e}")
+            continue
+    
+    # Sort each category by theme name
+    for category in categories.values():
+        category.sort(key=lambda x: x['theme'])
+    
     return categories
 
+
 def get_quadrant_name(ratio: float, momentum: float) -> str:
-    if ratio >= 100 and momentum >= 100: return "🟢 Leading"
-    elif ratio < 100 and momentum >= 100: return "🔵 Improving"
-    elif ratio >= 100 and momentum < 100: return "🟡 Weakening"
-    else: return "🔴 Lagging"
+    """Convert ratio/momentum to quadrant name with emoji."""
+    if ratio >= 100 and momentum >= 100:
+        return "🟢 Leading"
+    elif ratio < 100 and momentum >= 100:
+        return "🔵 Improving"
+    elif ratio >= 100 and momentum < 100:
+        return "🟡 Weakening"
+    else:
+        return "🔴 Lagging"
+    """
+    Calculate comprehensive score for a theme/sector (0-100 with grade).
+    
+    Scoring Breakdown:
+    - Current Position (40 pts): Quadrant strength
+    - Momentum Quality (30 pts): Consistency + acceleration
+    - Trajectory (20 pts): 3-day path analysis
+    - Stability (10 pts): Smoothness of movement
+    
+    Args:
+        df: Theme dataframe with RRG metrics
+        view_key: Timeframe to analyze ('Short', 'Med', 'Long')
+        
+    Returns:
+        Dict with score, grade, components, and actionability
+    """
+    if df is None or df.empty or len(df) < 4:
+        return None
+    
+    try:
+        col_ratio = f"RRG_Ratio_{view_key}"
+        col_mom = f"RRG_Mom_{view_key}"
+        
+        if col_ratio not in df.columns or col_mom not in df.columns:
+            return None
+        
+        # Get last 4 days (today + 3-day trail)
+        recent = df.tail(4)
+        if len(recent) < 4:
+            return None
+        
+        last = recent.iloc[-1]
+        ratio = last[col_ratio]
+        mom = last[col_mom]
+        
+        score_breakdown = {}
+        
+        # --- FACTOR 1: Current Position (40 points) ---
+        # Based on which quadrant and how deep into it
+        
+        # Quadrant base score
+        if ratio >= 100 and mom >= 100:  # Leading
+            quadrant_base = 30
+            quadrant_name = "🟢 Leading"
+        elif ratio < 100 and mom >= 100:  # Improving
+            quadrant_base = 20
+            quadrant_name = "🔵 Improving"
+        elif ratio >= 100 and mom < 100:  # Weakening
+            quadrant_base = 15
+            quadrant_name = "🟡 Weakening"
+        else:  # Lagging
+            quadrant_base = 5
+            quadrant_name = "🔴 Lagging"
+        
+        # Distance from center (magnitude bonus)
+        distance = abs(ratio - 100) + abs(mom - 100)
+        if distance > 10:
+            magnitude_bonus = 10
+        elif distance > 5:
+            magnitude_bonus = 5
+        else:
+            magnitude_bonus = 0
+        
+        score_breakdown['position'] = min(40, quadrant_base + magnitude_bonus)
+        
+        # --- FACTOR 2: Momentum Quality (30 points) ---
+        
+        # Check all three timeframes
+        mom_short = last.get('RRG_Mom_Short', 0)
+        mom_med = last.get('RRG_Mom_Med', 0)
+        mom_long = last.get('RRG_Mom_Long', 0)
+        
+        # Consistency (15 points)
+        positive_count = sum([mom_short > 100, mom_med > 100, mom_long > 100])
+        if positive_count == 3:
+            consistency_score = 15
+        elif positive_count == 2:
+            consistency_score = 10
+        elif positive_count == 1:
+            consistency_score = 5
+        else:
+            consistency_score = 0
+        
+        # Acceleration (15 points)
+        if mom_short > mom_med > mom_long:
+            acceleration_score = 15
+        elif mom_short > mom_med or mom_short > mom_long:
+            acceleration_score = 8
+        else:
+            acceleration_score = 0
+        
+        score_breakdown['momentum_quality'] = consistency_score + acceleration_score
+        
+        # --- FACTOR 3: Trajectory (20 points) ---
+        # Analyze the 3-day path
+        
+        trajectory_data = []
+        for i in range(4):
+            row = recent.iloc[i]
+            r = row[col_ratio]
+            m = row[col_mom]
+            
+            if r >= 100 and m >= 100:
+                quad = "Leading"
+            elif r < 100 and m >= 100:
+                quad = "Improving"
+            elif r >= 100 and m < 100:
+                quad = "Weakening"
+            else:
+                quad = "Lagging"
+            
+            trajectory_data.append({
+                'quadrant': quad,
+                'ratio': r,
+                'mom': m
+            })
+        
+        # Improvement trajectory (10 points)
+        quadrant_rank = {"Lagging": 0, "Weakening": 1, "Improving": 2, "Leading": 3}
+        
+        trajectory_path = [quadrant_rank[t['quadrant']] for t in trajectory_data]
+        
+        if trajectory_path[-1] > trajectory_path[0]:  # Improved over 3 days
+            if all(trajectory_path[i] <= trajectory_path[i+1] for i in range(3)):
+                trajectory_improvement = 10  # Consistent improvement each day
+            else:
+                trajectory_improvement = 5  # Improved but not smoothly
+        elif trajectory_path[-1] == trajectory_path[0]:
+            trajectory_improvement = 3  # Stayed same
+        else:
+            trajectory_improvement = 0  # Deteriorated
+        
+        # Momentum acceleration in trail (10 points)
+        mom_values = [t['mom'] for t in trajectory_data]
+        mom_change = mom_values[-1] - mom_values[0]
+        
+        if mom_change > 5:
+            momentum_acceleration = 10
+        elif mom_change > 2:
+            momentum_acceleration = 5
+        elif mom_change > 0:
+            momentum_acceleration = 3
+        else:
+            momentum_acceleration = 0
+        
+        score_breakdown['trajectory'] = trajectory_improvement + momentum_acceleration
+        
+        # --- FACTOR 4: Stability (10 points) ---
+        # Reward smooth movement, penalize whipsaws
+        
+        # Check if bouncing between quadrants
+        unique_quadrants = len(set([t['quadrant'] for t in trajectory_data]))
+        
+        if unique_quadrants == 1:
+            stability_score = 10  # Rock solid
+        elif unique_quadrants == 2:
+            # Check if it's a smooth progression vs whipsaw
+            if trajectory_path == sorted(trajectory_path) or trajectory_path == sorted(trajectory_path, reverse=True):
+                stability_score = 7  # Smooth transition
+            else:
+                stability_score = 3  # Some chop
+        else:
+            stability_score = 0  # Very choppy
+        
+        score_breakdown['stability'] = stability_score
+        
+        # --- CALCULATE TOTAL ---
+        total_score = sum(score_breakdown.values())
+        total_score = min(100, max(0, total_score))
+        
+        # --- FRESHNESS INDICATOR ---
+        # Count how many days it's been in current quadrant
+        current_quad = trajectory_data[-1]['quadrant']
+        days_in_quadrant = 1
+        for i in range(len(trajectory_data) - 2, -1, -1):
+            if trajectory_data[i]['quadrant'] == current_quad:
+                days_in_quadrant += 1
+            else:
+                break
+        
+        if days_in_quadrant <= 2:
+            freshness = "🆕 Fresh"
+            freshness_detail = f"Just entered (Day {days_in_quadrant})"
+        elif days_in_quadrant == 3:
+            freshness = "⭐ Early"
+            freshness_detail = f"Early stage (Day {days_in_quadrant})"
+        else:
+            freshness = "🕐 Established"
+            freshness_detail = f"Established (Day {days_in_quadrant}+)"
+        
+        # --- ACTIONABILITY ---
+        if total_score >= 70 and quadrant_name in ["🟢 Leading", "🔵 Improving"]:
+            action = "✅ BUY"
+            action_detail = "Strong momentum - actively allocate"
+        elif total_score >= 50 and quadrant_name == "🔵 Improving":
+            action = "🎯 WATCH"
+            action_detail = "Building momentum - prepare to enter"
+        elif total_score >= 40 and quadrant_name == "🟢 Leading":
+            action = "⚠️ HOLD"
+            action_detail = "Still positive but momentum fading"
+        elif quadrant_name == "🟡 Weakening":
+            action = "⚠️ REDUCE"
+            action_detail = "Losing momentum - take profits"
+        else:
+            action = "🚫 AVOID"
+            action_detail = "Weak positioning - stay away"
+        
+        # --- TRAJECTORY DESCRIPTION ---
+        if trajectory_path[-1] > trajectory_path[0]:
+            trajectory_label = "🚀 Accelerating"
+        elif trajectory_path[-1] == trajectory_path[0]:
+            if stability_score >= 7:
+                trajectory_label = "➡️ Stable"
+            else:
+                trajectory_label = "⚡ Choppy"
+        else:
+            trajectory_label = "📉 Declining"
+        
+        return {
+            'total_score': total_score,
+            'grade': _score_to_grade(total_score),
+            'quadrant': quadrant_name,
+            'freshness': freshness,
+            'freshness_detail': freshness_detail,
+            'trajectory_label': trajectory_label,
+            'action': action,
+            'action_detail': action_detail,
+            'breakdown': score_breakdown,
+            'days_in_quadrant': days_in_quadrant,
+            'stability': "Smooth" if stability_score >= 7 else "Choppy"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error calculating theme score: {e}")
+        return None
+
 
 # ==========================================
-# 8. VISUALIZATION & CLASSIFICATION
+# 5. ORCHESTRATOR (OPTIMIZED)
 # ==========================================
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_and_process_universe(
+    benchmark_ticker: str = "SPY"
+) -> Tuple[Dict, List[str], Dict[str, str], pd.DataFrame, Dict[str, List[str]]]:
+    """
+    HEAVILY OPTIMIZED data pipeline.
+    1. Filters Master DB immediately to reduce size.
+    2. Vectorizes technical indicators (RVOL, ADR, Returns) before splitting.
+    3. Uses parallel processing only for the complex Alpha/Beta merges.
+    """
+    dm = SectorDataManager()
+    uni_df, tickers, theme_map = dm.load_universe(benchmark_ticker)
+    
+    if uni_df.empty:
+        return {}, ["SECTOR_UNIVERSE is empty"], theme_map, uni_df, {}
+
+    # --- 1. DOWNLOAD MASTER DB ---
+    db_url = st.secrets.get("PARQUET_SECTOR_ROTATION")
+    if not db_url:
+        return {}, ["PARQUET_SECTOR_ROTATION secret missing"], theme_map, uni_df, {}
+
+    try:
+        buffer = get_gdrive_binary_data(db_url)
+        if not buffer:
+            return {}, ["Failed to download Master DB"], theme_map, uni_df, {}
+        
+        # Load Parquet
+        master_df = pd.read_parquet(buffer)
+        
+    except Exception as e:
+        logger.exception(f"Error reading parquet: {e}")
+        return {}, [f"Error reading Parquet file: {e}"], theme_map, uni_df, {}
+
+    # --- 2. OPTIMIZATION: FILTER & STANDARDIZE IMMEDIATELY ---
+    # Standardize columns
+    master_df.columns = [c.strip().title() for c in master_df.columns]
+    if 'Symbol' in master_df.columns and 'Ticker' not in master_df.columns:
+        master_df.rename(columns={'Symbol': 'Ticker'}, inplace=True)
+    
+    # Fix Tickers
+    master_df['Ticker'] = master_df['Ticker'].astype(str).str.upper().str.strip()
+    
+    # Fix Date Index
+    if 'Date' in master_df.columns:
+        master_df['Date'] = pd.to_datetime(master_df['Date'])
+        master_df = master_df.set_index('Date').sort_index()
+    
+    # ⚡ SPEEDUP 1: Filter Master DB to ONLY the tickers we need
+    # This discards 90% of the data if your universe is small vs the full market
+    needed_tickers = set(tickers) | set(theme_map.values())
+    if benchmark_ticker:
+        needed_tickers.add(benchmark_ticker)
+    
+    master_df = master_df[master_df['Ticker'].isin(needed_tickers)].copy()
+    
+    if master_df.empty:
+        return {}, ["No matching tickers found in Parquet"], theme_map, uni_df, {}
+
+    # --- 3. OPTIMIZATION: VECTORIZED TECHNICALS ---
+    # Calculating these ONCE on the full DF is 100x faster than looping
+    logger.info("Starting vectorized calculations...")
+    
+    # Sort for rolling operations
+    master_df.sort_values(['Ticker', 'Date'], inplace=True)
+    
+    # Pre-calculate Returns (Used for Beta later)
+    master_df['Pct_Change'] = master_df.groupby('Ticker')['Close'].pct_change()
+    
+    # Pre-calculate RVOL
+    if 'Volume' in master_df.columns:
+        # Calculate Average Volume (using transform to keep original shape)
+        avg_vol = master_df.groupby('Ticker')['Volume'].transform(
+            lambda x: x.rolling(window=AVG_VOLUME_WINDOW).mean()
+        )
+        master_df['RVOL'] = master_df['Volume'] / avg_vol
+        
+        # Calculate Timeframe RVOLs
+        for label, time_window in TIMEFRAMES.items():
+            master_df[f"RVOL_{label}"] = master_df.groupby('Ticker')['RVOL'].transform(
+                lambda x: x.rolling(window=time_window).mean()
+            )
+
+    # Pre-calculate ADR (Daily Range %)
+    if 'High' in master_df.columns and 'Low' in master_df.columns:
+        daily_range_pct = ((master_df['High'] - master_df['Low']) / master_df['Low']) * 100
+        master_df['ADR_Pct'] = daily_range_pct.groupby(master_df['Ticker']).transform(
+            lambda x: x.rolling(window=ATR_WINDOW).mean()
+        )
+    
+    # Ensure Close is present (fallback to Adj Close if needed)
+    if 'Close' not in master_df.columns and 'Adj Close' in master_df.columns:
+        master_df['Close'] = master_df['Adj Close']
+
+    # --- 4. PREPARE CACHE ---
+    calc = SectorAlphaCalculator()
+    data_cache = {}
+    missing_tickers = []
+    
+    # Split master_df back into dictionary for easy access (Fast pointer splitting)
+    # Using groupby list comprehension is faster than looping
+    full_data_map = {t: df for t, df in master_df.groupby('Ticker')}
+
+    # --- 5. PROCESS BENCHMARK ---
+    if benchmark_ticker not in full_data_map:
+        return {}, [f"Benchmark '{benchmark_ticker}' not found"], theme_map, uni_df, {}
+
+    bench_df = full_data_map[benchmark_ticker].copy()
+    data_cache[benchmark_ticker] = bench_df
+
+    # --- 6. PROCESS ETFS ---
+    # Calculate RRG Metrics for ETFs
+    etf_tickers = list(theme_map.values())
+    for etf in etf_tickers:
+        if etf in full_data_map:
+            df = full_data_map[etf].copy()
+            # process_dataframe is no longer needed here as we did it vectorized above!
+            # We only need RRG metrics
+            df = calc.calculate_rrg_metrics(df, bench_df)
+            data_cache[etf] = df
+        else:
+            missing_tickers.append(etf)
+
+    # --- 7. PROCESS STOCKS (PARALLEL) ---
+    stocks = uni_df[uni_df['Role'] == 'Stock']
+    stock_themes_map = stocks.groupby('Ticker')['Theme'].apply(list).to_dict()
+    stock_tickers = list(stock_themes_map.keys())
+
+    # Helper for thread worker
+    def process_stock_worker(ticker, themes_list):
+        if ticker not in full_data_map:
+            return ticker, None, True
+        
+        try:
+            # Get pre-calculated DF
+            df = full_data_map[ticker].copy()
+            
+            # ⚡ Optimized: We skipped calc.process_dataframe() because we did it in Step 3
+            
+            # Calculate Alpha vs Each Theme
+            for theme in themes_list:
+                parent_etf = theme_map.get(theme)
+                # Use Bench if ETF missing
+                parent_df = data_cache.get(parent_etf, bench_df) 
+                
+                if parent_df is not None:
+                    df = calc.calculate_stock_alpha_multi_theme(df, parent_df, theme)
+            
+            return ticker, df, False
+        except Exception as e:
+            logger.error(f"Error processing {ticker}: {e}")
+            return ticker, None, False
+
+    if stock_tickers:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        # Max workers 16 is usually good for memory/speed balance
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            future_to_stock = {
+                executor.submit(process_stock_worker, t, stock_themes_map[t]): t 
+                for t in stock_tickers
+            }
+            
+            for future in as_completed(future_to_stock):
+                ticker, df_result, is_missing = future.result()
+                if is_missing:
+                    missing_tickers.append(ticker)
+                elif df_result is not None:
+                    data_cache[ticker] = df_result
+
+    logger.info(f"Sync complete. Processed {len(data_cache)} tickers.")
+    return data_cache, missing_tickers, theme_map, uni_df, stock_themes_map
+
+
+# ==========================================
+# 6. VISUALIZATION & CLASSIFICATION
+# ==========================================
+
 def classify_setup(df: pd.DataFrame) -> Optional[str]:
-    if df is None or df.empty: return None
+    """
+    Classify sector/theme setup pattern.
+    
+    Patterns:
+    - J-Hook: Turnaround from weak to strong
+    - Bull Flag: Strong trend with breakout
+    - Rocket: Parabolic acceleration
+    - Breakdown: Accelerating downward
+    - Dead Cat: Weak bounce in downtrend
+    - Power Trend: Sustained strength
+    - Deteriorating: Losing momentum
+    
+    Args:
+        df: Theme dataframe with RRG metrics
+        
+    Returns:
+        Pattern string or None
+    """
+    if df is None or df.empty:
+        return None
+        
     try:
         last = df.iloc[-1]
-        m5, m10, m20 = last.get("RRG_Mom_Short",0), last.get("RRG_Mom_Med",0), last.get("RRG_Mom_Long",0)
-        ratio_20 = last.get("RRG_Ratio_Long", 100)
         
-        if m20 < 100 and m5 > 100 and m5 > (m20 + JHOOK_MIN_SHIFT): return "🪝 J-Hook"
-        if ratio_20 > 100 and m5 > 100 and m5 > m10: return "🚩 Bull Flag"
-        if m5 > m10 > m20 and m20 > 100: return "🚀 Rocket"
-        if m5 < m10 < m20 and m20 < 100: return "💥 Breakdown"
-        if m20 < 100 and m5 > 100 and m5 < (m20 + JHOOK_MIN_SHIFT): return "🐱 Dead Cat"
-        if ratio_20 > 100 and m20 > 100 and m10 > 100 and m5 > 100: return "⚡ Power"
-        if ratio_20 > 100 and m5 < 100 and m5 < m10: return "📉 Fading"
-    except Exception: pass
+        if "RRG_Mom_Short" not in last or "RRG_Mom_Long" not in last:
+            return None
+
+        m5 = last["RRG_Mom_Short"]
+        m10 = last.get("RRG_Mom_Med", 0)
+        m20 = last["RRG_Mom_Long"]
+        ratio_20 = last.get("RRG_Ratio_Long", 100)
+
+        # J-Hook: Turnaround play
+        if m20 < 100 and m5 > 100 and m5 > (m20 + JHOOK_MIN_SHIFT):
+            return "🪝 J-Hook"
+        
+        # Bull Flag: Continuation
+        if ratio_20 > 100 and m5 > 100 and m5 > m10:
+            return "🚩 Bull Flag"
+        
+        # Rocket: Parabolic
+        if m5 > m10 > m20 and m20 > 100:
+            return "🚀 Rocket"
+        
+        # Breakdown: Accelerating down
+        if m5 < m10 < m20 and m20 < 100:
+            return "💥 Breakdown"
+        
+        # Dead Cat Bounce: Weak bounce
+        if m20 < 100 and m5 > 100 and m5 < (m20 + JHOOK_MIN_SHIFT):
+            return "🐱 Dead Cat"
+        
+        # Power Trend: Sustained strength
+        if ratio_20 > 100 and m20 > 100 and m10 > 100 and m5 > 100:
+            return "⚡ Power"
+        
+        # Deteriorating: Losing steam
+        if ratio_20 > 100 and m5 < 100 and m5 < m10:
+            return "📉 Fading"
+            
+    except Exception as e:
+        logger.error(f"Error in classify_setup: {e}")
+    
     return None
 
 def get_quadrant_status(df: pd.DataFrame, timeframe_key: str) -> str:
-    if df is None or df.empty: return "N/A"
+    """
+    Get quadrant status for a theme.
+    
+    Args:
+        df: Theme dataframe with RRG metrics
+        timeframe_key: 'Short', 'Med', or 'Long'
+        
+    Returns:
+        Quadrant status string
+    """
+    if df is None or df.empty:
+        return "N/A"
+    
     try:
-        r = df[f"RRG_Ratio_{timeframe_key}"].iloc[-1]
-        m = df[f"RRG_Mom_{timeframe_key}"].iloc[-1]
-        return get_quadrant_name(r, m)
-    except: return "N/A"
+        col_r = f"RRG_Ratio_{timeframe_key}"
+        col_m = f"RRG_Mom_{timeframe_key}"
+        
+        if col_r not in df.columns or col_m not in df.columns:
+            return "N/A"
+        
+        r = df[col_r].iloc[-1]
+        m = df[col_m].iloc[-1]
+        
+        if r >= 100 and m >= 100:
+            return "🟢 Leading"
+        elif r < 100 and m >= 100:
+            return "🔵 Improving"
+        elif r < 100 and m < 100:
+            return "🔴 Lagging"
+        else:
+            return "🟡 Weakening"
+    except Exception as e:
+        logger.error(f"Error getting quadrant status: {e}")
+        return "N/A"
 
-def plot_simple_rrg(data_cache, target_map, view_key, show_trails):
-    if not target_map: return go.Figure()
+def plot_simple_rrg(
+    data_cache: Dict, 
+    target_map: Dict, 
+    view_key: str, 
+    show_trails: bool
+) -> go.Figure:
+    """
+    Create Relative Rotation Graph scatter plot.
+    
+    Args:
+        data_cache: Dict of {ticker: DataFrame}
+        target_map: Dict of {theme: ticker}
+        view_key: 'Short', 'Med', or 'Long'
+        show_trails: Whether to show 3-day trails
+        
+    Returns:
+        Plotly Figure object
+    """
+    # Validate view_key
+    valid_keys = ['Short', 'Med', 'Long']
+    if view_key not in valid_keys:
+        logger.error(f"Invalid view_key: {view_key}")
+        raise ValueError(f"view_key must be one of {valid_keys}, got: {view_key}")
+    
+    if not target_map:
+        logger.warning("Empty target_map in plot_simple_rrg")
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No sectors selected",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=20)
+        )
+        return fig
+    
     fig = go.Figure()
     all_x, all_y = [], []
     
     for theme, ticker in target_map.items():
         df = data_cache.get(ticker)
-        if df is None or df.empty: continue
-        col_x, col_y = f"RRG_Ratio_{view_key}", f"RRG_Mom_{view_key}"
+        if df is None or df.empty:
+            continue
+        
+        col_x = f"RRG_Ratio_{view_key}"
+        col_y = f"RRG_Mom_{view_key}"
+        
+        if col_x not in df.columns or col_y not in df.columns:
+            continue
+        
         data_slice = df.tail(3) if show_trails else df.tail(1)
-        if data_slice.empty: continue
+        if data_slice.empty:
+            continue
+
+        x_vals = data_slice[col_x].tolist()
+        y_vals = data_slice[col_y].tolist()
+        all_x.extend(x_vals)
+        all_y.extend(y_vals)
         
-        x_vals, y_vals = data_slice[col_x].tolist(), data_slice[col_y].tolist()
-        all_x.extend(x_vals); all_y.extend(y_vals)
-        
+        # Determine color based on quadrant
         last_x, last_y = x_vals[-1], y_vals[-1]
-        color = '#00CC96' if last_x > 100 and last_y > 100 else '#636EFA' if last_x < 100 and last_y > 100 else '#FFA15A' if last_x > 100 else '#EF553B'
+        if last_x > 100 and last_y > 100:
+            color = '#00CC96'  # Green
+        elif last_x < 100 and last_y > 100:
+            color = '#636EFA'  # Blue
+        elif last_x > 100 and last_y < 100:
+            color = '#FFA15A'  # Orange
+        else:
+            color = '#EF553B'  # Red
         
+        # Marker sizes and opacities
         n = len(x_vals)
+        sizes = [MARKER_SIZE_TRAIL] * (n - 1) + [MARKER_SIZE_CURRENT]
+        opacities = [TRAIL_OPACITY] * (n - 1) + [CURRENT_OPACITY]
+        texts = [""] * (n - 1) + [theme]
+        custom_data = [theme] * n
+
         fig.add_trace(go.Scatter(
-            x=x_vals, y=y_vals, mode='lines+markers+text', name=theme, text=[""]*(n-1)+[theme], customdata=[theme]*n,
-            textposition="top center", marker=dict(size=[MARKER_SIZE_TRAIL]*(n-1)+[MARKER_SIZE_CURRENT], color=color, opacity=[TRAIL_OPACITY]*(n-1)+[CURRENT_OPACITY], line=dict(width=1, color='white')),
-            line=dict(color=color, width=1 if show_trails else 0, shape='spline', smoothing=1.3),
-            hoverinfo='text+name', hovertext=[f"{theme}<br>Trend: {x:.1f}<br>Mom: {y:.1f}" for x, y in zip(x_vals, y_vals)]
+            x=x_vals, y=y_vals,
+            mode='lines+markers+text',
+            name=theme,
+            text=texts,
+            customdata=custom_data,
+            textposition="top center",
+            marker=dict(
+                size=sizes,
+                color=color,
+                opacity=opacities,
+                line=dict(width=1, color='white')
+            ),
+            line=dict(
+                color=color,
+                width=1 if show_trails else 0,
+                shape='spline',
+                smoothing=1.3
+            ),
+            hoverinfo='text+name',
+            hovertext=[
+                f"{theme}<br>Trend: {x:.1f}<br>Mom: {y:.1f}"
+                for x, y in zip(x_vals, y_vals)
+            ]
         ))
 
-    limit_x = max(max([abs(x - 100) for x in all_x]) * 1.1, 2.0) if all_x else 2.0
-    limit_y = max(max([abs(y - 100) for y in all_y]) * 1.1, 2.0) if all_y else 2.0
-    
+    # Dynamic scaling
+    if all_x and all_y:
+        limit_x = max(max([abs(x - 100) for x in all_x]) * 1.1, 2.0)
+        limit_y = max(max([abs(y - 100) for y in all_y]) * 1.1, 2.0)
+        x_range = [100 - limit_x, 100 + limit_x]
+        y_range = [100 - limit_y, 100 + limit_y]
+    else:
+        x_range, y_range = [98, 102], [98, 102]
+        limit_x, limit_y = 2, 2
+
+    # Add crosshairs
     fig.add_hline(y=100, line_width=1, line_color="gray", line_dash="dash")
     fig.add_vline(x=100, line_width=1, line_color="gray", line_dash="dash")
     
-    labels = [("LEADING", 100+limit_x*0.5, 100+limit_y*0.5, "rgba(0, 255, 0, 0.7)"),
-              ("IMPROVING", 100-limit_x*0.5, 100+limit_y*0.5, "rgba(0, 100, 255, 0.7)"),
-              ("WEAKENING", 100+limit_x*0.5, 100-limit_y*0.5, "rgba(255, 165, 0, 0.7)"),
-              ("LAGGING", 100-limit_x*0.5, 100-limit_y*0.5, "rgba(255, 0, 0, 0.7)")]
+    # Add quadrant labels
+    lbl_x, lbl_y = limit_x * 0.5, limit_y * 0.5
     
-    for txt, x, y, col in labels: fig.add_annotation(x=x, y=y, text=f"<b>{txt}</b>", showarrow=False, font=dict(color=col, size=20))
+    fig.add_annotation(
+        x=100+lbl_x, y=100+lbl_y,
+        text="<b>LEADING</b>",
+        showarrow=False,
+        font=dict(color="rgba(0, 255, 0, 0.7)", size=20)
+    )
+    fig.add_annotation(
+        x=100-lbl_x, y=100+lbl_y,
+        text="<b>IMPROVING</b>",
+        showarrow=False,
+        font=dict(color="rgba(0, 100, 255, 0.7)", size=20)
+    )
+    fig.add_annotation(
+        x=100+lbl_x, y=100-lbl_y,
+        text="<b>WEAKENING</b>",
+        showarrow=False,
+        font=dict(color="rgba(255, 165, 0, 0.7)", size=20)
+    )
+    fig.add_annotation(
+        x=100-lbl_x, y=100-lbl_y,
+        text="<b>LAGGING</b>",
+        showarrow=False,
+        font=dict(color="rgba(255, 0, 0, 0.7)", size=20)
+    )
+
+    fig.update_layout(
+        xaxis=dict(
+            title="Relative Trend",
+            showgrid=False,
+            range=x_range,
+            constrain='domain'
+        ),
+        yaxis=dict(
+            title="Relative Momentum",
+            showgrid=False,
+            range=y_range
+        ),
+        height=750,
+        showlegend=False,
+        template="plotly_dark",
+        margin=dict(l=40, r=40, t=40, b=40)
+    )
     
-    fig.update_layout(xaxis=dict(title="Relative Trend", showgrid=False, range=[100-limit_x, 100+limit_x]), 
-                      yaxis=dict(title="Relative Momentum", showgrid=False, range=[100-limit_y, 100+limit_y]),
-                      height=750, showlegend=False, template="plotly_dark", margin=dict(l=40, r=40, t=40, b=40))
     return fig
-
-# ==========================================
-# 9. ORCHESTRATOR
-# ==========================================
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
-    """HEAVILY OPTIMIZED data pipeline."""
-    dm = SectorDataManager()
-    uni_df, tickers, theme_map = dm.load_universe(benchmark_ticker)
-    if uni_df.empty: return {}, ["SECTOR_UNIVERSE is empty"], theme_map, uni_df, {}
-
-    db_url = st.secrets.get("PARQUET_SECTOR_ROTATION")
-    if not db_url: return {}, ["PARQUET secret missing"], theme_map, uni_df, {}
-
-    try:
-        buffer = ud.get_gdrive_binary_data(db_url)
-        master_df = pd.read_parquet(buffer)
-    except Exception as e: return {}, [f"Error reading Parquet: {e}"], theme_map, uni_df, {}
-
-    # Standardize & Filter
-    master_df.columns = [c.strip().title() for c in master_df.columns]
-    if 'Symbol' in master_df.columns: master_df.rename(columns={'Symbol': 'Ticker'}, inplace=True)
-    master_df['Ticker'] = master_df['Ticker'].str.upper().str.strip()
-    if 'Date' in master_df.columns:
-        # Convert column to datetime first
-        master_df['Date'] = pd.to_datetime(master_df['Date'])
-        # Set index using the column name (this moves it to index and removes it from columns)
-        master_df = master_df.set_index('Date').sort_index()
-
-    needed = set(tickers) | set(theme_map.values()) | {benchmark_ticker}
-    master_df = master_df[master_df['Ticker'].isin(needed)].copy()
-    if master_df.empty: return {}, ["No tickers found"], theme_map, uni_df, {}
-
-    # Vectorized Calcs
-    master_df.sort_values(['Ticker', 'Date'], inplace=True)
-    master_df['Pct_Change'] = master_df.groupby('Ticker')['Close'].pct_change()
-    
-    if 'Volume' in master_df.columns:
-        avg_vol = master_df.groupby('Ticker')['Volume'].transform(lambda x: x.rolling(window=AVG_VOLUME_WINDOW).mean())
-        master_df['RVOL'] = master_df['Volume'] / avg_vol
-        for label, time_window in TIMEFRAMES.items():
-            master_df[f"RVOL_{label}"] = master_df.groupby('Ticker')['RVOL'].transform(lambda x: x.rolling(window=time_window).mean())
-            
-    if 'Close' not in master_df.columns and 'Adj Close' in master_df.columns: master_df['Close'] = master_df['Adj Close']
-
-    # Cache Building
-    calc = SectorAlphaCalculator()
-    data_cache = {}
-    missing_tickers = []
-    full_data_map = {t: df for t, df in master_df.groupby('Ticker')}
-
-    if benchmark_ticker not in full_data_map: return {}, [f"Benchmark {benchmark_ticker} missing"], theme_map, uni_df, {}
-    bench_df = full_data_map[benchmark_ticker].copy()
-    data_cache[benchmark_ticker] = bench_df
-
-    # Process ETFs
-    for etf in theme_map.values():
-        if etf in full_data_map:
-            data_cache[etf] = calc.calculate_rrg_metrics(full_data_map[etf].copy(), bench_df)
-        else: missing_tickers.append(etf)
-
-    # Process Stocks (Parallel)
-    stocks = uni_df[uni_df['Role'] == 'Stock']
-    stock_themes_map = stocks.groupby('Ticker')['Theme'].apply(list).to_dict()
-    
-    def process_stock_worker(ticker, themes_list):
-        if ticker not in full_data_map: return ticker, None, True
-        try:
-            df = full_data_map[ticker].copy()
-            for theme in themes_list:
-                parent_df = data_cache.get(theme_map.get(theme), bench_df)
-                if parent_df is not None: df = calc.calculate_stock_alpha_multi_theme(df, parent_df, theme)
-            return ticker, df, False
-        except: return ticker, None, False
-
-    if stock_themes_map:
-        with ThreadPoolExecutor(max_workers=16) as executor:
-            future_to_stock = {executor.submit(process_stock_worker, t, stock_themes_map[t]): t for t in stock_themes_map.keys()}
-            for future in as_completed(future_to_stock):
-                t, res, is_miss = future.result()
-                if is_miss: missing_tickers.append(t)
-                elif res is not None: data_cache[t] = res
-
-    logger.info(f"Sync complete. {len(data_cache)} tickers.")
-    return data_cache, missing_tickers, theme_map, uni_df, stock_themes_map
