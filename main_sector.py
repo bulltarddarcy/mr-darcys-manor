@@ -209,7 +209,7 @@ def run_theme_momentum_app(df_global=None):
         elif "text" in point:
             st.session_state.sector_target = point["text"]
     
-    #st.divider()
+    st.divider()
 
     # --- 7. THEME CATEGORIES DISPLAY ---
     st.subheader("📊 Theme Categories")
@@ -219,35 +219,8 @@ def run_theme_momentum_app(df_global=None):
         with st.expander("📖 How Categories Work", expanded=False):
             st.markdown("""
             ### Understanding Momentum & Performance Categories
-            
             Sectors are categorized based on their **10-day trend direction**:
-            
-            **⬈ Gaining Momentum & Outperforming**
-            - Moving up AND right on RRG chart
-            - Both accelerating AND outperforming benchmark
-            → **Best opportunity** - sector gaining strength
-            
-            **⬉ Gaining Momentum & Underperforming**
-            - Moving up but still on left side
-            - Accelerating but still behind benchmark
-            → **Potential reversal** - watch for breakout
-            
-            **⬊ Losing Momentum & Outperforming**
-            - Moving down but still on right side
-            - Decelerating but still ahead of benchmark
-            → **Topping** - take profits, avoid new entries
-            
-            **⬋ Losing Momentum & Underperforming**
-            - Moving down AND left on RRG chart
-            - Both decelerating AND underperforming
-            → **Avoid** - sector in decline
-            
-            ---
-            
-            **5-Day Confirmation** shows if short-term trend supports the 10-day direction:
-            - "5d accelerating ahead" = Very strong ⭐⭐⭐
-            - "5d confirming trend" = Strong ⭐⭐
-            - "5d lagging behind" = Weak ⭐
+            ...
             """)
             
     with col_guide2:
@@ -302,6 +275,8 @@ def run_theme_momentum_app(df_global=None):
             )
         else:
             style_func(f"**{title}** - No sectors currently in this category")
+
+    st.markdown("---")
     
     # ==========================================
     # STOCK ANALYSIS SECTION
@@ -342,12 +317,11 @@ def run_theme_momentum_app(df_global=None):
         st.info(f"No stocks found for selected themes.")
         return
 
-    # Run Analysis
+    # Run Analysis - FAST MODE (No expensive columns yet)
+    # FIX: Only pass 4 arguments here
     df_stocks = us.analyze_stocks_batch(
         etf_data_cache, 
         stock_theme_pairs, 
-        st.session_state.opt_show_divergences, 
-        st.session_state.opt_show_mkt_caps, 
         st.session_state.opt_show_biotech, 
         theme_cat_map
     )
@@ -459,9 +433,12 @@ def run_theme_momentum_app(df_global=None):
     if "active_stock_filters" not in st.session_state:
         st.session_state.active_stock_filters = current_ui_filters
 
-    # 2. Button to update active filters
+    # 2. Button to update active filters AND RESET ENRICHMENT
     if st.button("Apply Filters", type="primary", use_container_width=True):
         st.session_state.active_stock_filters = current_ui_filters
+        # RESET the checkboxes so we don't do expensive calculations automatically
+        st.session_state.opt_show_divergences = False
+        st.session_state.opt_show_mkt_caps = False
         st.rerun()
 
     # 3. Apply the ACTIVE filters (not the UI filters)
@@ -474,14 +451,23 @@ def run_theme_momentum_app(df_global=None):
     # Display Results
     st.markdown(f"**Showing {len(df_filtered)} of {len(df_stocks)} stock-theme combinations**")
 
-    # --- SETTINGS CHECKBOXES ---
+    # --- SETTINGS CHECKBOXES (RENDERED AFTER FILTERING) ---
     c1, c2, c3, _ = st.columns([2, 2, 2, 6]) 
     with c1:
-        st.checkbox("Show Divergences", key="opt_show_divergences", help="Slower: Scans RSI history.")
+        st.checkbox("Show Divergences", key="opt_show_divergences", help="Enrich filtered list. Slower.")
     with c2:
-        st.checkbox("Show Market Caps", key="opt_show_mkt_caps", help="Slower: Fetches live data.")
+        st.checkbox("Show Market Caps", key="opt_show_mkt_caps", help="Enrich filtered list. Slower.")
     with c3:
         st.checkbox("Show Biotech", key="opt_show_biotech", value=False, help="Include Biotech theme.")
+
+    # --- ENRICH DATA ---
+    # Only run enrichment if checkboxes are checked (and logic ensures they are unchecked on filter apply)
+    df_filtered = us.enrich_stock_data(
+        df_filtered, 
+        etf_data_cache, 
+        st.session_state.opt_show_mkt_caps, 
+        st.session_state.opt_show_divergences
+    )
 
     column_config = {
         "Ticker": st.column_config.TextColumn("Ticker", width="small"),
