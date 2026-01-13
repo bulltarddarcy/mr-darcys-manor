@@ -300,6 +300,7 @@ SEAS_SCAN_PERIODS = {"21d": 21, "42d": 42, "63d": 63, "126d": 126}
 SEAS_ARB_EV_THRESH = 3.0
 SEAS_ARB_RECENT_THRESH = -3.0
 SEAS_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+SEAS_TABLE_HEIGHT = 750 
 
 # --- CONSTANTS: EMA DISTANCE APP ---
 EMA_DIST_DEFAULT_TICKER = "QQQ"
