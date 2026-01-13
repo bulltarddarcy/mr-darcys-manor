@@ -490,6 +490,29 @@ def run_theme_momentum_app(df_global=None):
     }
     
     st.dataframe(df_filtered, use_container_width=True, hide_index=True, column_config=column_config)
+
+    # --- TICKER LOOKUP ---
+    
+    # Text input for ticker
+    lookup_ticker = st.text_input(
+        "Enter a ticker to see its sectors:", 
+        placeholder="e.g. AAPL",
+        label_visibility="visible"
+    ).upper().strip()
+
+    if lookup_ticker:
+        # Check against the universe dataframe loaded at the start
+        if not uni_df.empty and 'Ticker' in uni_df.columns:
+            matches = uni_df[uni_df['Ticker'] == lookup_ticker]
+            
+            if not matches.empty:
+                # Get unique themes for this ticker
+                found_themes = sorted(matches['Theme'].unique().tolist())
+                st.success(f"✅ **{lookup_ticker}** is mapped to: **{', '.join(found_themes)}**")
+            else:
+                st.warning(f"❌ Ticker **{lookup_ticker}** not found in the loaded Universe.")
+        else:
+            st.error("Universe data not loaded.")
     
     if not df_filtered.empty:
         st.caption("Copy tickers:")
