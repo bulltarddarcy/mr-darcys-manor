@@ -136,7 +136,7 @@ def run_theme_momentum_app(df_global=None):
             with btn_col2:
                 if st.button("⭐ Big 11", use_container_width=True):
                     big_11 = [
-                        "Communications", "Consumer Discretionary", "Consumer Staples",
+                        "Comms", "Cons Discr", "Cons Staples",
                         "Energy", "Financials", "Healthcare", "Industrials",
                         "Materials", "Real Estate", "Technology", "Utilities"
                     ]
