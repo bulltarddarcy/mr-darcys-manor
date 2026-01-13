@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 GLOBAL_SESSION = requests.Session()
 
 # --- SHARED CONSTANTS ---
-CACHE_TTL = 600
+CACHE_TTL = 43200  # 12 Hours
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
 SMA50_PERIOD = 50
