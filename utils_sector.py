@@ -907,9 +907,8 @@ def plot_simple_rrg(data_cache, target_map, view_key, show_trails):
 # ==========================================
 # 9. ORCHESTRATOR
 # ==========================================
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=ud.CACHE_TTL, show_spinner=False)
 def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
-    """HEAVILY OPTIMIZED data pipeline."""
     dm = SectorDataManager()
     uni_df, tickers, theme_map = dm.load_universe(benchmark_ticker)
     if uni_df.empty: return {}, ["SECTOR_UNIVERSE is empty"], theme_map, uni_df, {}
