@@ -209,7 +209,7 @@ def run_theme_momentum_app(df_global=None):
         elif "text" in point:
             st.session_state.sector_target = point["text"]
     
-    st.divider()
+    #st.divider()
 
     # --- 7. THEME CATEGORIES DISPLAY ---
     st.subheader("📊 Theme Categories")
@@ -275,8 +275,6 @@ def run_theme_momentum_app(df_global=None):
             )
         else:
             style_func(f"**{title}** - No sectors currently in this category")
-
-    st.markdown("---")
     
     # ==========================================
     # STOCK ANALYSIS SECTION
