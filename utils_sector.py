@@ -563,30 +563,85 @@ def calculate_consensus_theme_score(df: pd.DataFrame) -> Optional[Dict]:
 def analyze_stocks_batch(
     etf_data_cache: Dict,
     stock_theme_pairs: List[Tuple[str, str]],
-    show_divergences: bool,
-    show_mkt_caps: bool,
     show_biotech: bool,
     theme_category_map: Dict[str, str]
 ) -> pd.DataFrame:
     """
-    Perform heavy lifting for stock analysis: MC fetching, Divergence scanning, and Data extraction.
-    MOVED FROM MAIN to keep main clean.
+    Performance-optimized initial stock scan. 
+    Does NOT fetch market caps or divergences (use enrich_stock_data for that).
     """
     if not stock_theme_pairs:
         return pd.DataFrame()
     
-    unique_tickers = list(set([pair[0] for pair in stock_theme_pairs]))
-    
-    # 1. Fetch Market Caps
-    mc_map = {}
-    if show_mkt_caps:
-        with st.spinner("Fetching Market Caps..."):
-            mc_map = ud.fetch_market_caps_batch(unique_tickers)
+    # 3. Process Single Stock Helper
+    def process_single_stock(stock, stock_theme):
+        if stock_theme == "Biotech" and not show_biotech: return None
+        sdf = etf_data_cache.get(stock)
+        if sdf is None or sdf.empty or len(sdf) < 20: return None
 
-    # 2. Scan Divergences
-    div_map = {}
+        # Volume Filter
+        try:
+            recent_vol = sdf['Volume'].values[-20:]
+            recent_close = sdf['Close'].values[-20:]
+            if (recent_vol.mean() * recent_close.mean()) < MIN_DOLLAR_VOLUME: return None
+        except: return None
+
+        try:
+            last = sdf.iloc[-1]
+            return {
+                "Ticker": stock,
+                "Theme": stock_theme,
+                "Theme Category": theme_category_map.get(stock_theme, "Unknown"),
+                "Price": last['Close'],
+                "Market Cap (B)": 0.0, # Placeholder, enriched later
+                "Beta": last.get(f"Beta_{stock_theme}", 1.0),
+                "Alpha 5d": last.get(f"Alpha_Short_{stock_theme}", 0),
+                "Alpha 10d": last.get(f"Alpha_Med_{stock_theme}", 0),
+                "Alpha 20d": last.get(f"Alpha_Long_{stock_theme}", 0),
+                "RVOL 5d": last.get('RVOL_Short', 0),
+                "RVOL 10d": last.get('RVOL_Med', 0),
+                "RVOL 20d": last.get('RVOL_Long', 0),
+                "Div": "-", # Placeholder, enriched later
+                "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
+                "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
+                "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
+                "200 MA": get_ma_signal(last['Close'], last.get('Sma200', 0)),
+            }
+        except Exception: return None
+
+    # 4. Execute Extraction
+    stock_data = []
+    # No spinner here, this should be fast
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        future_to_stock = {executor.submit(process_single_stock, s, t): s for s, t in stock_theme_pairs}
+        for future in as_completed(future_to_stock):
+            result = future.result()
+            if result: stock_data.append(result)
+                
+    return pd.DataFrame(stock_data)
+
+def enrich_stock_data(df: pd.DataFrame, etf_data_cache: Dict, show_mkt_caps: bool, show_divergences: bool) -> pd.DataFrame:
+    """
+    Enriches the filtered dataframe with Market Caps and Divergences.
+    This is run AFTER filtering to save API calls/computation.
+    """
+    if df.empty or (not show_mkt_caps and not show_divergences):
+        return df
+
+    unique_tickers = df['Ticker'].unique().tolist()
+    enriched_df = df.copy()
+
+    # 1. Market Caps
+    if show_mkt_caps:
+        with st.spinner("Fetching Market Caps for filtered stocks..."):
+            mc_map = ud.fetch_market_caps_batch(unique_tickers)
+            # Map using Ticker column
+            enriched_df['Market Cap (B)'] = enriched_df['Ticker'].map(mc_map).fillna(0) / 1e9
+
+    # 2. Divergences
     if show_divergences:
-        with st.spinner("Scanning Divergences..."):
+        div_map = {}
+        with st.spinner("Scanning Divergences for filtered stocks..."):
             def process_div_single(stock):
                 sdf = etf_data_cache.get(stock)
                 if sdf is None or sdf.empty or len(sdf) < 20: return stock, "—"
@@ -615,53 +670,10 @@ def analyze_stocks_batch(
                 for future in as_completed(future_to_div):
                     t, d_str = future.result()
                     div_map[t] = d_str
+            
+            enriched_df['Div'] = enriched_df['Ticker'].map(div_map).fillna("-")
 
-    # 3. Process Single Stock Helper
-    def process_single_stock(stock, stock_theme):
-        if stock_theme == "Biotech" and not show_biotech: return None
-        sdf = etf_data_cache.get(stock)
-        if sdf is None or sdf.empty or len(sdf) < 20: return None
-
-        # Volume Filter
-        try:
-            recent_vol = sdf['Volume'].values[-20:]
-            recent_close = sdf['Close'].values[-20:]
-            if (recent_vol.mean() * recent_close.mean()) < MIN_DOLLAR_VOLUME: return None
-        except: return None
-
-        try:
-            last = sdf.iloc[-1]
-            return {
-                "Ticker": stock,
-                "Theme": stock_theme,
-                "Theme Category": theme_category_map.get(stock_theme, "Unknown"),
-                "Price": last['Close'],
-                "Market Cap (B)": mc_map.get(stock, 0) / 1e9,
-                "Beta": last.get(f"Beta_{stock_theme}", 1.0),
-                "Alpha 5d": last.get(f"Alpha_Short_{stock_theme}", 0),
-                "Alpha 10d": last.get(f"Alpha_Med_{stock_theme}", 0),
-                "Alpha 20d": last.get(f"Alpha_Long_{stock_theme}", 0),
-                "RVOL 5d": last.get('RVOL_Short', 0),
-                "RVOL 10d": last.get('RVOL_Med', 0),
-                "RVOL 20d": last.get('RVOL_Long', 0),
-                "Div": div_map.get(stock, "—"),
-                "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
-                "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
-                "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
-                "200 MA": get_ma_signal(last['Close'], last.get('Sma200', 0)),
-            }
-        except Exception: return None
-
-    # 4. Execute Extraction
-    stock_data = []
-    with st.spinner(f"Processing {len(stock_theme_pairs)} stocks..."):
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            future_to_stock = {executor.submit(process_single_stock, s, t): s for s, t in stock_theme_pairs}
-            for future in as_completed(future_to_stock):
-                result = future.result()
-                if result: stock_data.append(result)
-                
-    return pd.DataFrame(stock_data)
+    return enriched_df
 
 def apply_stock_filters(df_stocks: pd.DataFrame, filters: List[Dict]) -> pd.DataFrame:
     """
@@ -681,11 +693,17 @@ def apply_stock_filters(df_stocks: pd.DataFrame, filters: List[Dict]) -> pd.Data
     numeric_conditions = []
     for f in numeric_filters:
         col, op = f['column'], f['operator']
+        
+        # Safety check for missing columns (e.g. Market Cap before enrichment)
+        if col not in df_filtered.columns:
+            continue
+
         if f['value_type'] == 'Number':
             val = f['value']
             cond = (df_filtered[col] >= val) if op == '>=' else (df_filtered[col] <= val)
         else:
             val_col = f['value_column']
+            if val_col not in df_filtered.columns: continue
             cond = (df_filtered[col] >= df_filtered[val_col]) if op == '>=' else (df_filtered[col] <= df_filtered[val_col])
         numeric_conditions.append(cond)
         
@@ -693,6 +711,8 @@ def apply_stock_filters(df_stocks: pd.DataFrame, filters: List[Dict]) -> pd.Data
     categorical_conditions = []
     for i, f in enumerate(categorical_filters):
         col, val = f['column'], f['value_categorical']
+        if col not in df_filtered.columns: continue
+        
         cond = (df_filtered[col] == val)
         logic = f.get('logic', 'AND') if i > 0 else None
         categorical_conditions.append((cond, logic))
