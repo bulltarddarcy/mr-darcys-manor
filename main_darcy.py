@@ -134,7 +134,8 @@ def run_rankings_app(df):
 
     tab_rank, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money", "💡 Top 3", "🤡 Bulltard"])
     mc_thresh = ud.RANK_MC_THRESHOLDS.get(min_mkt_cap_rank, 1e10)
-    top_bulls, top_bears, valid_data = ud.calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
+    with st.spinner("Crunching numbers..."):
+        top_bulls, top_bears, valid_data = ud.calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
 
     with tab_rank:
         if valid_data.empty:
