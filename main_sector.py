@@ -363,7 +363,7 @@ def run_theme_momentum_app(df_global=None):
     with c_opt3:
         st.checkbox("Show Biotech", key="opt_show_biotech", value=False, help="Include Biotech theme.")
     
-    st.divider() # Separation
+    # st.divider() # Separation
     
     # Define Columns
     numeric_columns = ["Price", "Market Cap (B)", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
@@ -457,7 +457,7 @@ def run_theme_momentum_app(df_global=None):
     df_filtered = us.apply_stock_filters(df_stocks, filters)
     
     # Display Results
-    st.markdown("---")
+    # st.markdown("---")
     st.caption(f"**Showing {len(df_filtered)} of {len(df_stocks)} stocks**")
     
     column_config = {
