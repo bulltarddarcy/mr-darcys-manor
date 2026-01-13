@@ -1,1058 +1,1285 @@
-# main_darcy.py
-# --- IMPORTS ---
+"""
+Sector Rotation App - REFACTORED VERSION
+With multi-theme support, smart filters, and comprehensive scoring.
+"""
+
 import streamlit as st
 import pandas as pd
-import numpy as np
-import altair as alt
-import yfinance as yf
-import math
-from datetime import date, timedelta
+import utils_sector as us
+import utils_darcy as ud  # Ensure darcy utils are available for divergence logic
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# --- IMPORT UTILS ---
-# We now rely primarily on the 'ud' alias to access constants and functions
-import utils_darcy as ud
-
-# --- 1. GLOBAL DATA LOADING & UTILITIES ---
-
-DATA_KEYS_PARQUET = ud.get_parquet_config()
-
-# --- 2. APP MODULES ---
-
-def run_database_app(df):
-    st.title("📂 Database")
-    max_data_date = ud.get_max_trade_date(df)
+# ==========================================
+# UI HELPERS
+# ==========================================
+def get_ma_signal(price: float, ma_val: float) -> str:
+    """
+    Return emoji based on price vs moving average.
     
-    # Initialize State
-    ud.initialize_database_state(max_data_date)
-
-    def save_db_state(key, saved_key):
-        if key in st.session_state:
-            st.session_state[saved_key] = st.session_state[key]
-    
-    # UI Inputs
-    c1, c2, c3, c4 = st.columns(4, gap="medium")
-    with c1:
-        db_ticker = st.text_input("Ticker (blank=all)", value=st.session_state.saved_db_ticker, key="db_ticker_input", on_change=save_db_state, args=("db_ticker_input", "saved_db_ticker")).strip().upper()
-    with c2: 
-        start_date = st.date_input("Trade Start Date", value=st.session_state.saved_db_start, key="db_start", on_change=save_db_state, args=("db_start", "saved_db_start"))
-    with c3: 
-        end_date = st.date_input("Trade End Date", value=st.session_state.saved_db_end, key="db_end", on_change=save_db_state, args=("db_end", "saved_db_end"))
-    with c4:
-        # UPDATED: Use Constant
-        db_exp_end = st.date_input("Expiration Range (end)", value=st.session_state.saved_db_exp, key="db_exp", on_change=save_db_state, args=("db_exp", "saved_db_exp"))
-    
-    ot1, ot2, ot3, _ = st.columns([1.5, 1.5, 1.5, 5.5])
-    with ot1: 
-        inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_db_inc_cb, key="db_inc_cb", on_change=save_db_state, args=("db_inc_cb", "saved_db_inc_cb"))
-    with ot2: 
-        inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_db_inc_ps, key="db_inc_ps", on_change=save_db_state, args=("db_inc_ps", "saved_db_inc_ps"))
-    with ot3: 
-        inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_db_inc_pb, key="db_inc_pb", on_change=save_db_state, args=("db_inc_pb", "saved_db_inc_pb"))
-    
-    # Filter Data
-    filtered_df = ud.filter_database_trades(
-        df, db_ticker, start_date, end_date, db_exp_end, inc_cb, inc_ps, inc_pb
-    )
-    
-    if filtered_df.empty:
-        st.warning("No data found matching these filters.")
-        return
+    Args:
+        price: Current price
+        ma_val: Moving average value
         
-    # Display Styled Dataframe
-    st.subheader("Non-Expired Trades")
-    st.caption("⚠️ User should check OI to confirm trades are still open")
-    
-    styled_df = ud.get_database_styled_view(filtered_df)
-    
-    # UPDATED: Use Constant for Max Rows
-    st.dataframe(
-        styled_df, 
-        use_container_width=True, 
-        hide_index=True, 
-        height=ud.get_table_height(filtered_df, max_rows=ud.DB_TABLE_MAX_ROWS)
-    )
-    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    Returns:
+        Emoji indicator
+    """
+    if pd.isna(ma_val) or ma_val == 0:
+        return "⚠️"
+    return "✅" if price > ma_val else "❌"
 
-def run_rankings_app(df):
-    st.title("🏆 Rankings")
-    max_data_date = ud.get_max_trade_date(df)
-    
-    # Use Constant for Lookback
-    start_default = max_data_date - timedelta(days=ud.RANK_LOOKBACK_DAYS)
-    
-    ud.initialize_rankings_state(start_default, max_data_date)
+def shorten_category_name(name):
+    """Helper to shorten category names for UI display."""
+    return name.replace("Gaining Momentum", "Gain Mom") \
+               .replace("Losing Momentum", "Lose Mom") \
+               .replace("Outperforming", "Outperf") \
+               .replace("Underperforming", "Underperf")
 
-    def save_rank_state(key, saved_key):
-        if key in st.session_state:
-            st.session_state[saved_key] = st.session_state[key]
+# ==========================================
+# MAIN PAGE FUNCTION
+# ==========================================
+def run_theme_momentum_app(df_global=None):
+    """
+    Main entry point for Sector Rotation application.
     
-    # UI Inputs
-    c1, c2, c3, c4 = st.columns([1, 1, 0.7, 1.3], gap="small")
-    with c1: 
-        rank_start = st.date_input("Trade Start Date", value=st.session_state.saved_rank_start, key="rank_start", on_change=save_rank_state, args=("rank_start", "saved_rank_start"))
-    with c2: 
-        rank_end = st.date_input("Trade End Date", value=st.session_state.saved_rank_end, key="rank_end", on_change=save_rank_state, args=("rank_end", "saved_rank_end"))
-    with c3: 
-        limit = st.number_input("Limit", value=st.session_state.saved_rank_limit, min_value=1, max_value=200, key="rank_limit", on_change=save_rank_state, args=("rank_limit", "saved_rank_limit"))
-    with c4: 
-        # UPDATED: Use Keys from Utils
-        mc_options = list(ud.RANK_MC_THRESHOLDS.keys())
-        default_mc_index = mc_options.index("10B") if "10B" in mc_options else 0
-        
-        min_mkt_cap_rank = st.selectbox("Min Market Cap", mc_options, index=default_mc_index, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
-        filter_ema = st.checkbox("Hide < 8 EMA", value=False, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
-        
-    f_filtered = ud.filter_rankings_data(df, rank_start, rank_end)
+    Features:
+    - RRG quadrant analysis
+    - Multi-timeframe views
+    - Stock-level alpha analysis
+    - Smart pattern filters
+    - Comprehensive scoring
+    """
+    st.title("🔄 Theme Momentum")
     
-    if f_filtered.empty:
-        st.warning("No trades found matching these dates.")
+    # --- 0. BENCHMARK CONTROL ---
+    if "sector_benchmark" not in st.session_state:
+        st.session_state.sector_benchmark = "SPY"
+
+    # --- 1. DATA FETCH (CACHED) ---
+    with st.spinner(f"Syncing Sector Data ({st.session_state.sector_benchmark})..."):
+        etf_data_cache, missing_tickers, theme_map, uni_df, stock_themes = \
+            us.fetch_and_process_universe(st.session_state.sector_benchmark)
+
+    if uni_df.empty:
+        st.warning("⚠️ SECTOR_UNIVERSE secret is missing or empty.")
         return
 
-    tab_rank, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money", "💡 Top 3", "🤡 Bulltard"])
-    mc_thresh = ud.RANK_MC_THRESHOLDS.get(min_mkt_cap_rank, 1e10)
-    top_bulls, top_bears, valid_data = ud.calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
+    # --- 2. MISSING DATA CHECK ---
+    if missing_tickers:
+        with st.expander(f"⚠️ Missing Data for {len(missing_tickers)} Tickers", expanded=False):
+            st.caption("These tickers were in your Universe but not found in the parquet file.")
+            st.write(", ".join(missing_tickers))
 
-    with tab_rank:
-        if valid_data.empty:
-            st.warning("Not enough data for Smart Money scores.")
-        else:
-            sm_config = {
-                "Symbol": st.column_config.TextColumn("Ticker", width=60),
-                "Score": st.column_config.ProgressColumn("Score", format="%d", min_value=0, max_value=100),
-                "Trade_Count": st.column_config.NumberColumn("Qty", width=50),
-                "Last Trade": st.column_config.TextColumn("Last", width=70)
-            }
-            cols_to_show = ["Symbol", "Score", "Trade_Count", "Last Trade"]
-            sm1, sm2 = st.columns(2, gap="large")
-            with sm1:
-                st.markdown(f"<div style='color: #71d28a; font-weight:bold;'>Top Bullish Scores</div>", unsafe_allow_html=True)
-                if not top_bulls.empty:
-                    st.dataframe(top_bulls[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bulls, max_rows=100))
-            with sm2:
-                st.markdown(f"<div style='color: #f29ca0; font-weight:bold;'>Top Bearish Scores</div>", unsafe_allow_html=True)
-                if not top_bears.empty:
-                    st.dataframe(top_bears[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bears, max_rows=100))
-        st.markdown("<br><br>", unsafe_allow_html=True)
-
-    with tab_ideas:
-        if top_bulls.empty: st.info("No Bullish candidates found to analyze.")
-        else:
-            st.caption(f"ℹ️ Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for confluence...")
-            best_ideas = ud.generate_top_ideas(top_bulls, df)
-            cols = st.columns(3)
-            for i, cand in enumerate(best_ideas):
-                with cols[i]:
-                    with st.container(border=True):
-                        st.markdown(f"### #{i+1} {cand['Ticker']}")
-                        st.metric("Conviction", f"{cand['Score']:.1f}/10", f"${cand['Price']:.2f}")
-                        st.markdown("**Strategy:**")
-                        if cand['Suggestions']['Sell Puts']: st.success(f"🛡️ **Sell Put:** {cand['Suggestions']['Sell Puts']}")
-                        if cand['Suggestions']['Buy Calls']: st.info(f"🟢 **Buy Call:** {cand['Suggestions']['Buy Calls']}")
-                        st.markdown("---")
-                        for r in cand['Reasons']: st.caption(f"• {r}")
-        st.markdown("<br><br>", unsafe_allow_html=True)
-
-    with tab_vol:
-        st.caption("ℹ️ Legacy Methodology: Score = (Calls + Puts Sold) - (Puts Bought).")
-        bull_df, bear_df = ud.calculate_volume_rankings(f_filtered, mc_thresh, filter_ema, limit)
-        rank_col_config = {
-            "Symbol": st.column_config.TextColumn("Symbol", width=60),
-            "Trade Count": st.column_config.NumberColumn("#", width=50),
-            "Last Trade": st.column_config.TextColumn("Last Trade", width=90),
-            "Score": st.column_config.NumberColumn("Score", width=50),
-        }
-        cols_final = ["Symbol", "Trade Count", "Last Trade", "Score"]
-        v1, v2 = st.columns(2)
-        with v1:
-            st.markdown(f"<div style='color: #71d28a; font-weight:bold;'>Bullish Volume</div>", unsafe_allow_html=True)
-            if not bull_df.empty: st.dataframe(bull_df[cols_final], use_container_width=True, hide_index=True, column_config=rank_col_config, height=ud.get_table_height(bull_df, max_rows=100))
-        with v2:
-            st.markdown(f"<div style='color: #f29ca0; font-weight:bold;'>Bearish Volume</div>", unsafe_allow_html=True)
-            if not bear_df.empty: st.dataframe(bear_df[cols_final], use_container_width=True, hide_index=True, column_config=rank_col_config, height=ud.get_table_height(bear_df, max_rows=100))
-        st.markdown("<br><br>", unsafe_allow_html=True)
-
-def run_pivot_tables_app(df):
-    st.title("🎯 Pivot Tables")
-    max_data_date = ud.get_max_trade_date(df)
-    ud.initialize_pivot_state(max_data_date, max_data_date)
-
-    def save_pv_state(key, saved_key):
-        if key in st.session_state: st.session_state[saved_key] = st.session_state[key]
-
-    col_filters, col_calculator = st.columns([1, 1], gap="medium")
-    with col_filters:
-        st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>🔍 Filters</h4>", unsafe_allow_html=True)
-        fc1, fc2, fc3 = st.columns(3)
-        with fc1: td_start = st.date_input("Trade Start Date", value=st.session_state.saved_pv_start, key="pv_start", on_change=save_pv_state, args=("pv_start", "saved_pv_start"))
-        with fc2: td_end = st.date_input("Trade End Date", value=st.session_state.saved_pv_end, key="pv_end", on_change=save_pv_state, args=("pv_end", "saved_pv_end"))
-        with fc3: ticker_filter = st.text_input("Ticker (blank=all)", value=st.session_state.saved_pv_ticker, key="pv_ticker", on_change=save_pv_state, args=("pv_ticker", "saved_pv_ticker")).strip().upper()
-        
-        fc4, fc5, fc6 = st.columns(3)
-        with fc4: 
-            opts_not = list(ud.PIVOT_NOTIONAL_MAP.keys())
-            curr_not = st.session_state.saved_pv_notional
-            idx_not = opts_not.index(curr_not) if curr_not in opts_not else 0
-            sel_not = st.selectbox("Min Dollars", options=opts_not, index=idx_not, key="pv_notional", on_change=save_pv_state, args=("pv_notional", "saved_pv_notional"))
-            min_notional = ud.PIVOT_NOTIONAL_MAP[sel_not]
-        with fc5: 
-            opts_mc = list(ud.PIVOT_MC_MAP.keys())
-            curr_mc = st.session_state.saved_pv_mkt_cap
-            idx_mc = opts_mc.index(curr_mc) if curr_mc in opts_mc else 0
-            sel_mc = st.selectbox("Mkt Cap Min", options=opts_mc, index=idx_mc, key="pv_mkt_cap", on_change=save_pv_state, args=("pv_mkt_cap", "saved_pv_mkt_cap"))
-            min_mkt_cap = ud.PIVOT_MC_MAP[sel_mc]
-        with fc6: 
-            opts_ema = ["All", "Yes"]
-            curr_ema = st.session_state.saved_pv_ema
-            idx_ema = opts_ema.index(curr_ema) if curr_ema in opts_ema else 0
-            ema_filter = st.selectbox("Over 21 Day EMA", options=opts_ema, index=idx_ema, key="pv_ema_filter", on_change=save_pv_state, args=("pv_ema_filter", "saved_pv_ema"))
-
-    with col_calculator:
-        st.markdown("<h4 style='font-size: 1rem; margin-top: 0; margin-bottom: 10px;'>💰 Puts Sold Calculator</h4>", unsafe_allow_html=True)
-        cc1, cc2, cc3 = st.columns(3)
-        with cc1: c_premium = st.number_input("Premium", min_value=0.00, value=st.session_state.saved_calc_premium, step=0.05, format="%.2f", key="calc_premium", on_change=save_pv_state, args=("calc_premium", "saved_calc_premium"))
-        with cc2: c_strike = st.number_input("Strike Price", min_value=0.01, value=st.session_state.saved_calc_strike, step=1.0, format="%.2f", key="calc_strike", on_change=save_pv_state, args=("calc_strike", "saved_calc_strike"))
-        with cc3: c_expiry = st.date_input("Expiration", value=st.session_state.saved_calc_expiry, key="calc_expiry", on_change=save_pv_state, args=("calc_expiry", "saved_calc_expiry"))
-        
-        dte = (c_expiry - date.today()).days + 1
-        coc_ret = (c_premium / c_strike) * 100 if c_strike > 0 else 0.0
-        annual_ret = (coc_ret / dte) * 365 if dte > 0 else 0.0
-
-        st.session_state["calc_out_ann"] = f"{annual_ret:.1f}%"
-        st.session_state["calc_out_coc"] = f"{coc_ret:.1f}%"
-        st.session_state["calc_out_dte"] = str(max(0, dte))
-
-        cc4, cc5, cc6 = st.columns(3)
-        with cc4: st.text_input("Annualised Return", key="calc_out_ann")
-        with cc5: st.text_input("Cash on Cash Return", key="calc_out_coc")
-        with cc6: st.text_input("Days to Expiration", key="calc_out_dte")
-
-    st.markdown("""<div style="display: flex; gap: 20px; font-size: 14px; margin-top: 10px; margin-bottom: 20px; align-items: center;">
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#b7e1cd"></div> This Friday</div>
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#fce8b2"></div> Next Friday</div>
-        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#f4c7c3"></div> Two Fridays</div>
-    </div>""", unsafe_allow_html=True)
-    st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Market Cap filtering can be buggy. If empty, reset \'Mkt Cap Min\' to 0B.</div>', unsafe_allow_html=True)
-    st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Scroll down to see the Risk Reversals table.</div>', unsafe_allow_html=True)
-
-    d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
-    if d_range.empty: return
-
-    cb_pool, ps_pool, pb_pool, df_rr = ud.generate_pivot_pools(d_range)
-    df_cb_f = ud.filter_pivot_dataframe(cb_pool, ticker_filter, min_notional, min_mkt_cap, ema_filter)
-    df_ps_f = ud.filter_pivot_dataframe(ps_pool, ticker_filter, min_notional, min_mkt_cap, ema_filter)
-    df_pb_f = ud.filter_pivot_dataframe(pb_pool, ticker_filter, min_notional, min_mkt_cap, ema_filter)
-    df_rr_f = ud.filter_pivot_dataframe(df_rr, ticker_filter, min_notional, min_mkt_cap, ema_filter)
-
-    row1_c1, row1_c2, row1_c3 = st.columns(3)
-    with row1_c1:
-        st.subheader("Calls Bought")
-        tbl = ud.get_pivot_styled_view(df_cb_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=ud.COLUMN_CONFIG_PIVOT)
-    with row1_c2:
-        st.subheader("Puts Sold")
-        tbl = ud.get_pivot_styled_view(df_ps_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=ud.COLUMN_CONFIG_PIVOT)
-    with row1_c3:
-        st.subheader("Puts Bought")
-        tbl = ud.get_pivot_styled_view(df_pb_f)
-        if not tbl.empty: st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=ud.COLUMN_CONFIG_PIVOT)
+    # --- 3. SESSION STATE INITIALIZATION ---
+    if "sector_view" not in st.session_state:
+        st.session_state.sector_view = "5 Days"
+    if "sector_trails" not in st.session_state:
+        st.session_state.sector_trails = False
     
-    st.subheader("Risk Reversals")
-    tbl_rr = ud.get_pivot_styled_view(df_rr_f, is_rr=True)
-    if not tbl_rr.empty: 
-        st.dataframe(tbl_rr.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl_rr, max_rows=50), column_config=ud.COLUMN_CONFIG_PIVOT)
-        st.markdown("<br><br>", unsafe_allow_html=True)
-    else: st.caption("No matched RR pairs found.")
+    all_themes = sorted(list(theme_map.keys()))
+    if not all_themes:
+        st.error("No valid themes found. Check data sources.")
+        return
 
-def run_strike_zones_app(df):
-    st.title("📊 Strike Zones")
+    if "sector_target" not in st.session_state or st.session_state.sector_target not in all_themes:
+        st.session_state.sector_target = "All"  # Default to All instead of first theme
     
-    exp_range_default = (date.today() + timedelta(days=ud.SZ_DEFAULT_EXP_OFFSET))
-    ud.initialize_strike_zone_state(exp_range_default)
+    if "sector_theme_filter_widget" not in st.session_state:
+        st.session_state.sector_theme_filter_widget = all_themes
 
-    def save_sz_state(key, saved_key):
-        if key in st.session_state: st.session_state[saved_key] = st.session_state[key]
-    
-    col_settings, col_visuals = st.columns([1, 2.5], gap="large")
-    with col_settings:
-        ticker = st.text_input("Ticker", value=st.session_state.saved_sz_ticker, key="sz_ticker", on_change=save_sz_state, args=("sz_ticker", "saved_sz_ticker")).strip().upper()
-        td_start = st.date_input("Trade Date (start)", value=st.session_state.saved_sz_start, key="sz_start", on_change=save_sz_state, args=("sz_start", "saved_sz_start"))
-        td_end = st.date_input("Trade Date (end)", value=st.session_state.saved_sz_end, key="sz_end", on_change=save_sz_state, args=("sz_end", "saved_sz_end"))
-        exp_end = st.date_input("Exp. Range (end)", value=st.session_state.saved_sz_exp, key="sz_exp", on_change=save_sz_state, args=("sz_exp", "saved_sz_exp"))
+    # --- 4. RRG QUADRANT GRAPHIC ---
+    st.subheader("Rotation Quadrant Graphic")
+
+    # User Guide
+    with st.expander("🗺️ Graphic User Guide", expanded=False):
+        st.markdown(f"""
+        **🧮 How It Works (The Math)**
+        This chart shows **Relative Performance** against **{st.session_state.sector_benchmark}** (not absolute price).
         
-        c_sub1, c_sub2 = st.columns(2)
-        with c_sub1:
-            st.markdown("**View Mode**")
-            view_mode = st.radio("Select View", ["Price Zones", "Expiry Buckets"], index=0 if st.session_state.saved_sz_view == "Price Zones" else 1, label_visibility="collapsed", key="sz_view", on_change=save_sz_state, args=("sz_view", "saved_sz_view"))
-            st.markdown("**Zone Width**")
-            width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], index=0 if st.session_state.saved_sz_width_mode == "Auto" else 1, label_visibility="collapsed", key="sz_width_mode", on_change=save_sz_state, args=("sz_width_mode", "saved_sz_width_mode"))
-            if width_mode == "Fixed": 
-                # UPDATED: Use Constant for Default
-                fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=st.session_state.saved_sz_fixed, key="sz_fixed", on_change=save_sz_state, args=("sz_fixed", "saved_sz_fixed"))
-            else: fixed_size_choice = ud.SZ_DEFAULT_FIXED_SIZE
-        with c_sub2:
-            st.markdown("**Include**")
-            inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_sz_inc_cb, key="sz_inc_cb", on_change=save_sz_state, args=("sz_inc_cb", "saved_sz_inc_cb"))
-            inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_sz_inc_ps, key="sz_inc_ps", on_change=save_sz_state, args=("sz_inc_ps", "saved_sz_inc_ps"))
-            inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_sz_inc_pb, key="sz_inc_pb", on_change=save_sz_state, args=("sz_inc_pb", "saved_sz_inc_pb"))
+        * **X-Axis (Trend):** Are we beating the benchmark?
+            * `> 100`: Outperforming {st.session_state.sector_benchmark}
+            * `< 100`: Underperforming {st.session_state.sector_benchmark}
+        * **Y-Axis (Momentum):** How fast is the trend changing?
+            * `> 100`: Gaining speed (Acceleration)
+            * `< 100`: Losing speed (Deceleration)
+        
+        *Calculations use Weighted Regression (recent days weighted 3x more)*
+        
+        **📊 Quadrant Guide**
+        * 🟢 **LEADING (Top Right):** Strong trend + accelerating. The winners.
+        * 🟡 **WEAKENING (Bottom Right):** Strong trend but losing steam. Take profits.
+        * 🔴 **LAGGING (Bottom Left):** Weak trend + decelerating. The losers.
+        * 🔵 **IMPROVING (Top Left):** Weak trend but momentum building. Turnarounds.
+        """)
+
+    # Controls
+    with st.expander("⚙️ Chart Inputs & Filters", expanded=False):
+        col_inputs, col_filters = st.columns([1, 1])
+        
+        # --- LEFT: TIMEFRAME & BENCHMARK ---
+        with col_inputs:
+            st.markdown("**Benchmark Ticker**")
+            new_benchmark = st.radio(
+                "Benchmark",
+                ["SPY", "QQQ"],
+                horizontal=True,
+                index=["SPY", "QQQ"].index(st.session_state.sector_benchmark) 
+                    if st.session_state.sector_benchmark in ["SPY", "QQQ"] else 0,
+                key="sector_benchmark_radio",
+                label_visibility="collapsed"
+            )
             
-    with col_visuals: chart_container = st.container()
+            if new_benchmark != st.session_state.sector_benchmark:
+                st.session_state.sector_benchmark = new_benchmark
+                st.cache_data.clear()
+                st.rerun()
 
-    edit_pool_raw = ud.filter_strike_zone_data(df, ticker, td_start, td_end, exp_end, inc_cb, inc_ps, inc_pb)
-    if edit_pool_raw.empty:
-        with col_visuals: st.warning("No trades match current filters.")
+            st.markdown("---")
+            st.markdown("**Timeframe Window**")
+            st.session_state.sector_view = st.radio(
+                "Timeframe Window",
+                ["5 Days", "10 Days", "20 Days"],
+                horizontal=True,
+                key="timeframe_radio",
+                label_visibility="collapsed"
+            )
+            
+            st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
+            st.session_state.sector_trails = st.checkbox(
+                "Show 3-Day Trails",
+                value=st.session_state.sector_trails
+            )
+            
+            # Display last data date
+            if st.session_state.sector_benchmark in etf_data_cache:
+                bench_df = etf_data_cache[st.session_state.sector_benchmark]
+                if not bench_df.empty:
+                    last_dt = bench_df.index[-1].strftime("%Y-%m-%d")
+                    st.caption(f"📅 Data Date: {last_dt}")
+
+        # --- RIGHT: SECTOR FILTERS ---
+        with col_filters:
+            st.markdown("**Sectors Shown**")
+            btn_col1, btn_col2, btn_col3 = st.columns(3)
+            
+            with btn_col1:
+                if st.button("➕ Everything", use_container_width=True):
+                    st.session_state.sector_theme_filter_widget = all_themes
+                    st.rerun()
+
+            with btn_col2:
+                if st.button("⭐ Big 11", use_container_width=True):
+                    big_11 = [
+                        "Communications", "Consumer Discretionary", "Consumer Staples",
+                        "Energy", "Financials", "Healthcare", "Industrials",
+                        "Materials", "Real Estate", "Technology", "Utilities"
+                    ]
+                    valid = [t for t in big_11 if t in all_themes]
+                    st.session_state.sector_theme_filter_widget = valid
+                    st.rerun()
+
+            with btn_col3:
+                if st.button("➖ Clear", use_container_width=True):
+                    st.session_state.sector_theme_filter_widget = []
+                    st.rerun()
+            
+            sel_themes = st.multiselect(
+                "Select Themes",
+                all_themes,
+                key="sector_theme_filter_widget",
+                label_visibility="collapsed"
+            )
+    
+    filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
+    timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
+    view_key = timeframe_map[st.session_state.sector_view]
+
+    # --- 6. RRG CHART ---
+    
+    # Get categories for filtering
+    categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
+    
+    # Category filter buttons
+    st.markdown("**Filter Chart by Category:**")
+    
+    # Row 1: All Themes button
+    if st.button("🎯 All Themes", use_container_width=False, key="filter_all"):
+        st.session_state.chart_filter = "all"
+        st.rerun()
+    
+    # Row 2: Category buttons (Shortened names)
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⬈ Gain Mom & Outperf", use_container_width=True, key="filter_gain_out"):
+            st.session_state.chart_filter = "gaining_mom_outperforming"
+            st.rerun()
+    with col2:
+        if st.button("⬉ Gain Mom & Underperf", use_container_width=True, key="filter_gain_under"):
+            st.session_state.chart_filter = "gaining_mom_underperforming"
+            st.rerun()
+    
+    # Row 3: Category buttons (Shortened names)
+    col3, col4 = st.columns(2)
+    with col3:
+        if st.button("⬊ Lose Mom & Outperf", use_container_width=True, key="filter_lose_out"):
+            st.session_state.chart_filter = "losing_mom_outperforming"
+            st.rerun()
+    with col4:
+        if st.button("⬋ Lose Mom & Underperf", use_container_width=True, key="filter_lose_under"):
+            st.session_state.chart_filter = "losing_mom_underperforming"
+            st.rerun()
+    
+    # Initialize filter if not set
+    if 'chart_filter' not in st.session_state:
+        st.session_state.chart_filter = "all"
+    
+    # Apply filter to theme map
+    if st.session_state.chart_filter == "all":
+        filtered_map_chart = filtered_map
+        st.caption(f"Showing all {len(filtered_map_chart)} themes")
+    else:
+        # Get themes in selected category
+        selected_themes = [t['theme'] for t in categories.get(st.session_state.chart_filter, [])]
+        filtered_map_chart = {k: v for k, v in filtered_map.items() if k in selected_themes}
+        
+        # Get category name for display
+        category_names = {
+            'gaining_mom_outperforming': '⬈ Gain Mom & Outperf',
+            'gaining_mom_underperforming': '⬉ Gain Mom & Underperf',
+            'losing_mom_outperforming': '⬊ Lose Mom & Outperf',
+            'losing_mom_underperforming': '⬋ Lose Mom & Underperf'
+        }
+        st.caption(f"Showing {len(filtered_map_chart)} themes in {category_names.get(st.session_state.chart_filter, 'category')}")
+    
+    # Display chart with filtered themes
+    chart_placeholder = st.empty()
+    with chart_placeholder:
+        fig = us.plot_simple_rrg(etf_data_cache, filtered_map_chart, view_key, st.session_state.sector_trails)
+        chart_event = st.plotly_chart(
+            fig,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="points"
+        )
+    
+    # Handle chart selection
+    if chart_event and chart_event.selection and chart_event.selection.points:
+        point = chart_event.selection.points[0]
+        if "customdata" in point:
+            st.session_state.sector_target = point["customdata"]
+        elif "text" in point:
+            st.session_state.sector_target = point["text"]
+    
+    st.divider()
+
+    # --- 7. SECTOR OVERVIEW (RENAMED TO THEME CATEGORIES) ---
+    st.subheader("📊 Theme Categories")
+    
+    # Guides - Refactored Layout
+    col_guide1, col_guide2 = st.columns([1, 1], gap="small")
+    
+    with col_guide1:
+        with st.popover("📖 How Categories Work", use_container_width=True):
+            st.markdown("""
+            ### Understanding Momentum & Performance Categories
+            
+            Sectors are categorized based on their **10-day trend direction**:
+            
+            **⬈ Gain Mom & Outperf**
+            - Moving up AND right on RRG chart
+            - Both accelerating AND outperforming benchmark
+            → **Best opportunity** - sector gaining strength
+            
+            **⬉ Gain Mom & Underperf**
+            - Moving up but still on left side
+            - Accelerating but still behind benchmark
+            → **Potential reversal** - watch for breakout
+            
+            **⬊ Lose Mom & Outperf**
+            - Moving down but still on right side
+            - Decelerating but still ahead of benchmark
+            → **Topping** - take profits, avoid new entries
+            
+            **⬋ Lose Mom & Underperf**
+            - Moving down AND left on RRG chart
+            - Both decelerating AND underperforming
+            → **Avoid** - sector in decline
+            
+            ---
+            
+            **5-Day Confirmation** shows if short-term trend supports the 10-day direction:
+            - "5d accelerating ahead" = Very strong ⭐⭐⭐
+            - "5d confirming trend" = Strong ⭐⭐
+            - "5d lagging behind" = Weak ⭐
+            """)
+            
+    with col_guide2:
+        if st.button("📖 View All Possible Combinations", use_container_width=True):
+            st.session_state.show_full_guide = True
+            st.rerun()
+    
+    # Show full combinations guide if requested
+    if st.session_state.get('show_full_guide', False):
+        with st.expander("📖 All 12 Possible Combinations", expanded=True):
+            if st.button("✖️ Close Guide"):
+                st.session_state.show_full_guide = False
+                st.rerun()
+            
+            st.markdown("""
+            ## Complete Category Guide
+            
+            Each of the 4 main categories can have 3 confirmation states from the 5-day window.
+            
+            ### 1. ⬈ Gain Mom & Outperf
+            
+            **Best case - sector improving on both axes**
+            
+            - **1a. 5d accelerating ahead** ⭐⭐⭐
+              - 10d: Moving up-right
+              - 5d: Even MORE up-right
+              - **Action:** Strong buy - momentum building fast
+              - **Example:** Tech sector breaking out with volume
+            
+            - **1b. 5d confirming trend** ⭐⭐
+              - 10d: Moving up-right
+              - 5d: Also up-right, tracking 10d
+              - **Action:** Buy - steady improvement
+              - **Example:** Tech in consistent uptrend
+            
+            - **1c. 5d lagging behind** ⭐
+              - 10d: Moving up-right
+              - 5d: Behind 10d (pullback)
+              - **Action:** Caution - might be losing steam
+              - **Example:** Tech taking a breather
+            
+            ---
+            
+            ### 2. ⬉ Gain Mom & Underperf
+            
+            **Bottoming - picking up speed but still behind benchmark**
+            
+            - **2a. 5d accelerating ahead** 🔄⭐
+              - 10d: Moving up but left
+              - 5d: Accelerating faster
+              - **Action:** Watch closely - reversal starting
+              - **Example:** Beaten-down sector showing life
+            
+            - **2b. 5d confirming trend** 🔄
+              - 10d: Moving up but left
+              - 5d: Also moving up-left
+              - **Action:** Early reversal stage
+              - **Example:** Weak sector starting to improve
+            
+            - **2c. 5d lagging behind** 🔄
+              - 10d: Moving up but left
+              - 5d: Not keeping pace
+              - **Action:** False start - not ready
+              - **Example:** Weak sector with brief bounce
+            
+            ---
+            
+            ### 3. ⬊ Lose Mom & Outperf
+            
+            **Topping - still ahead of benchmark but decelerating**
+            
+            - **3a. 5d accelerating ahead** ⚠️
+              - 10d: Moving right but down
+              - 5d: Ahead of 10d
+              - **Action:** Possible last push up
+              - **Example:** Leader showing one more surge
+            
+            - **3b. 5d confirming trend** ⚠️⚠️
+              - 10d: Moving right but down
+              - 5d: Also moving right-down
+              - **Action:** Take profits - top is forming
+              - **Example:** Strong sector losing steam
+            
+            - **3c. 5d lagging behind** ⚠️⚠️⚠️
+              - 10d: Moving right but down
+              - 5d: Even weaker
+              - **Action:** Avoid - topping accelerating
+              - **Example:** Leader rolling over
+            
+            ---
+            
+            ### 4. ⬋ Lose Mom & Underperf
+            
+            **Worst case - decline on both axes**
+            
+            - **4a. 5d accelerating ahead** ❌
+              - 10d: Moving down-left
+              - 5d: Less bad than 10d
+              - **Action:** Still avoid, but may bottom soon
+              - **Example:** Downtrend slowing
+            
+            - **4b. 5d confirming trend** ❌❌
+              - 10d: Moving down-left
+              - 5d: Also down-left
+              - **Action:** Avoid - consistent weakness
+              - **Example:** Weak sector staying weak
+            
+            - **4c. 5d lagging behind** ❌❌❌
+              - 10d: Moving down-left
+              - 5d: Even worse
+              - **Action:** Avoid strongly - accelerating lower
+              - **Example:** Sector in free fall
+            
+            ---
+            
+            ## Key Insights
+            
+            **Best Setups:**
+            - ⬈ with 5d accelerating = Strongest momentum
+            - ⬉ with 5d accelerating = Early reversal catch
+            
+            **Profit-Taking Signals:**
+            - ⬊ with any 5d = Momentum fading
+            
+            **Stay Away:**
+            - ⬋ with any 5d = Both metrics declining
+            """)
+    
+    # Get momentum/performance categories
+    categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
+    
+    # --- CATEGORY 1: Gaining Momentum & Outperforming ---
+    if categories['gaining_mom_outperforming']:
+        st.success(f"⬈ **GAIN MOM & OUTPERF** ({len(categories['gaining_mom_outperforming'])} sectors)")
+        st.caption("✅ **Best Opportunities** - Sectors accelerating with momentum building. 🆕 Day 1 = Fresh entry!")
+        
+        data = []
+        for theme_info in categories['gaining_mom_outperforming']:
+            # Highlight fresh entries (Day 1-2)
+            days = theme_info['days_in_category']
+            if days == 1:
+                days_display = "🆕 Day 1"
+            elif days == 2:
+                days_display = "⭐ Day 2"
+            else:
+                days_display = f"Day {days}"
+            
+            # Shorten display category
+            short_cat = shorten_category_name(theme_info['category'])
+            
+            data.append({
+                "Sector": theme_info['theme'],
+                "Days": days_display,
+                "Category": theme_info['arrow'] + " " + short_cat,
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
+                "Why Selected": theme_info['reason']
+            })
+        
+        # Sort by days (fresh first)
+        df_display = pd.DataFrame(data)
+        df_display['_days_sort'] = df_display['Days'].str.extract(r'(\d+)').astype(int)
+        df_display = df_display.sort_values('_days_sort').drop('_days_sort', axis=1)
+        
+        st.dataframe(
+            df_display,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
+            }
+        )
+    else:
+        st.info("⬈ **GAIN MOM & OUTPERF** - No sectors currently in this category")
+    
+    # --- CATEGORY 2: Gaining Momentum & Underperforming ---
+    if categories['gaining_mom_underperforming']:
+        st.info(f"⬉ **GAIN MOM & UNDERPERF** ({len(categories['gaining_mom_underperforming'])} sectors)")
+        st.caption("🔄 **Potential Reversals** - Sectors bottoming, watch for breakout. 🆕 Day 1 = Fresh reversal!")
+        
+        data = []
+        for theme_info in categories['gaining_mom_underperforming']:
+            days = theme_info['days_in_category']
+            if days == 1:
+                days_display = "🆕 Day 1"
+            elif days == 2:
+                days_display = "⭐ Day 2"
+            else:
+                days_display = f"Day {days}"
+            
+            short_cat = shorten_category_name(theme_info['category'])
+
+            data.append({
+                "Sector": theme_info['theme'],
+                "Days": days_display,
+                "Category": theme_info['arrow'] + " " + short_cat,
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
+                "Why Selected": theme_info['reason']
+            })
+        
+        df_display = pd.DataFrame(data)
+        df_display['_days_sort'] = df_display['Days'].str.extract(r'(\d+)').astype(int)
+        df_display = df_display.sort_values('_days_sort').drop('_days_sort', axis=1)
+        
+        st.dataframe(
+            df_display,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
+            }
+        )
+    else:
+        st.info("⬉ **GAIN MOM & UNDERPERF** - No sectors currently in this category")
+    
+    # --- CATEGORY 3: Losing Momentum & Outperforming ---
+    if categories['losing_mom_outperforming']:
+        st.warning(f"⬊ **LOSE MOM & OUTPERF** ({len(categories['losing_mom_outperforming'])} sectors)")
+        st.caption("⚠️ **Topping** - Take profits, avoid new entries. 🆕 Day 1 = Just started losing steam")
+        
+        data = []
+        for theme_info in categories['losing_mom_outperforming']:
+            days = theme_info['days_in_category']
+            if days == 1:
+                days_display = "🆕 Day 1"
+            elif days == 2:
+                days_display = "⭐ Day 2"
+            else:
+                days_display = f"Day {days}"
+            
+            short_cat = shorten_category_name(theme_info['category'])
+
+            data.append({
+                "Sector": theme_info['theme'],
+                "Days": days_display,
+                "Category": theme_info['arrow'] + " " + short_cat,
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
+                "Why Selected": theme_info['reason']
+            })
+        
+        df_display = pd.DataFrame(data)
+        df_display['_days_sort'] = df_display['Days'].str.extract(r'(\d+)').astype(int)
+        df_display = df_display.sort_values('_days_sort').drop('_days_sort', axis=1)
+        
+        st.dataframe(
+            df_display,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
+            }
+        )
+    else:
+        st.info("⬊ **LOSE MOM & OUTPERF** - No sectors currently in this category")
+    
+    # --- CATEGORY 4: Losing Momentum & Underperforming ---
+    if categories['losing_mom_underperforming']:
+        st.error(f"⬋ **LOSE MOM & UNDERPERF** ({len(categories['losing_mom_underperforming'])} sectors)")
+        st.caption("❌ **Avoid** - Sectors declining on both metrics")
+        
+        data = []
+        for theme_info in categories['losing_mom_underperforming']:
+            days = theme_info['days_in_category']
+            if days == 1:
+                days_display = "🆕 Day 1"
+            elif days == 2:
+                days_display = "⭐ Day 2"
+            else:
+                days_display = f"Day {days}"
+            
+            short_cat = shorten_category_name(theme_info['category'])
+
+            data.append({
+                "Sector": theme_info['theme'],
+                "Days": days_display,
+                "Category": theme_info['arrow'] + " " + short_cat,
+                "5d": theme_info['quadrant_5d'],
+                "10d": theme_info['quadrant_10d'],
+                "20d": theme_info['quadrant_20d'],
+                "Why Selected": theme_info['reason']
+            })
+        
+        df_display = pd.DataFrame(data)
+        df_display['_days_sort'] = df_display['Days'].str.extract(r'(\d+)').astype(int)
+        df_display = df_display.sort_values('_days_sort').drop('_days_sort', axis=1)
+        
+        st.dataframe(
+            df_display,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")
+            }
+        )
+    else:
+        st.info("⬋ **LOSE MOM & UNDERPERF** - No sectors currently in this category")
+    
+    st.markdown("---")
+    
+    st.subheader(f"📊 Stock Analysis")
+    
+    # Theme selector with "All" option (unique key)
+    all_themes = ["All"] + sorted(theme_map.keys())
+    
+    # Initialize sector_target if not exists
+    if 'sector_target' not in st.session_state:
+        st.session_state.sector_target = "All"
+    
+    # --- UI CONTROLS & OPTIONAL SETTINGS (REFACTORED) ---
+    col_sel, col_space = st.columns([1, 2])
+    with col_sel:
+        st.session_state.sector_target = st.selectbox(
+            "Select Theme",
+            all_themes,
+            index=all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0,
+            key="stock_theme_selector_unique"
+        )
+        
+        st.markdown('<div style="margin-top: 10px;"></div>', unsafe_allow_html=True)
+        st.caption("Performance Settings")
+        
+        c_opt1, c_opt2 = st.columns(2)
+        with c_opt1:
+            show_divergences = st.checkbox(
+                "Show Divergences", 
+                key="opt_show_divergences",
+                help="Slower: Scans RSI history for divergences."
+            )
+        with c_opt2:
+            show_mkt_caps = st.checkbox(
+                "Show Market Caps", 
+                key="opt_show_mkt_caps",
+                help="Slower: Fetches live Market Cap data from Yahoo Finance."
+            )
+    
+    # Get momentum/performance categories for theme categorization
+    categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
+    
+    # Build theme -> category mapping (SHORT NAMES)
+    theme_category_map = {}
+    for theme_info in categories.get('gaining_mom_outperforming', []):
+        theme_category_map[theme_info['theme']] = "⬈ Gain Mom & Outperf"
+    for theme_info in categories.get('gaining_mom_underperforming', []):
+        theme_category_map[theme_info['theme']] = "⬉ Gain Mom & Underperf"
+    for theme_info in categories.get('losing_mom_outperforming', []):
+        theme_category_map[theme_info['theme']] = "⬊ Lose Mom & Outperf"
+    for theme_info in categories.get('losing_mom_underperforming', []):
+        theme_category_map[theme_info['theme']] = "⬋ Lose Mom & Underperf"
+    
+    selected_theme = st.session_state.sector_target
+
+    # Filter stocks for selected theme(s)
+    if selected_theme == "All":
+        # Get all stocks and their themes
+        stock_theme_pairs = []
+        for _, row in uni_df[uni_df['Role'] == 'Stock'].iterrows():
+            stock_theme_pairs.append((row['Ticker'], row['Theme']))
+    else:
+        # Get stocks for selected theme
+        stock_theme_pairs = []
+        for _, row in uni_df[(uni_df['Theme'] == selected_theme) & (uni_df['Role'] == 'Stock')].iterrows():
+            stock_theme_pairs.append((row['Ticker'], row['Theme']))
+    
+    if not stock_theme_pairs:
+        st.info(f"No stocks found")
         return
+    
+    # --- OPTIMIZATION START ---
+    
+    # 1. Fetch Market Caps (Conditional)
+    mc_map = {}
+    if show_mkt_caps:
+        with st.spinner("Fetching Market Caps..."):
+            all_tickers = [pair[0] for pair in stock_theme_pairs]
+            mc_map = ud.fetch_market_caps_batch(all_tickers)
 
-    order_type_col = "Order Type" if "Order Type" in edit_pool_raw.columns else "Order type"
-    editor_input = edit_pool_raw[["Include", "Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"]].copy()
-    editor_input["Dollars"] = pd.to_numeric(editor_input["Dollars"], errors='coerce').fillna(0)
-    editor_input["Contracts"] = pd.to_numeric(editor_input["Contracts"], errors='coerce').fillna(0)
+    # 2. Define Helper for Parallel Execution
+    def process_single_stock(stock, stock_theme):
+        sdf = etf_data_cache.get(stock)
+        
+        # Fast Fail: Check data existence and length
+        if sdf is None or sdf.empty or len(sdf) < 20:
+            return None
 
-    column_configuration = {
-        "Include": st.column_config.CheckboxColumn("Include", default=True),
-        "Trade Date": st.column_config.DateColumn("Trade Date", format="DD MMM YY"),
-        "Expiry_DT": st.column_config.DateColumn("Expiry", format="DD MMM YY"),
-        "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
-        "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
-        order_type_col: st.column_config.TextColumn("Order Type"),
-        "Symbol": st.column_config.TextColumn("Symbol"),
-        "Strike": st.column_config.TextColumn("Strike"),
+        # Fast Fail: Volume Filter (Calculated on the fly to avoid heavy copies)
+        try:
+            # Check last 20 days volume directly
+            recent_vol = sdf['Volume'].values[-20:]
+            recent_close = sdf['Close'].values[-20:]
+            avg_vol = recent_vol.mean()
+            avg_price = recent_close.mean()
+            
+            if (avg_vol * avg_price) < us.MIN_DOLLAR_VOLUME:
+                return None
+        except:
+            return None
+
+        # If we pass filters, do calculations
+        try:
+            last = sdf.iloc[-1]
+            
+            # Divergence Logic (Heavy CPU - Optional)
+            div_str = "—"
+            if show_divergences:
+                d_d, _ = ud.prepare_data(sdf.copy())
+                if d_d is not None and not d_d.empty:
+                    # Convert strict setting to boolean
+                    strict_bool = (ud.DIV_STRICT_DEFAULT == "Yes")
+                    
+                    divs = ud.find_divergences(
+                        d_d, 
+                        stock, 
+                        'Daily',
+                        min_n=0,
+                        periods_input=ud.DIV_CSV_PERIODS_DAYS,
+                        optimize_for='PF',
+                        lookback_period=ud.DIV_LOOKBACK_DEFAULT,
+                        price_source=ud.DIV_SOURCE_DEFAULT,
+                        strict_validation=strict_bool,
+                        recent_days_filter=ud.DIV_DAYS_SINCE_DEFAULT,
+                        rsi_diff_threshold=ud.DIV_RSI_DIFF_DEFAULT
+                    )
+                    
+                    # Filter only for recent active divergences
+                    active_divs = [d for d in divs if d.get('Is_Recent', False)]
+                    
+                    if active_divs:
+                        # Take the most recent one
+                        last_div = active_divs[-1]
+                        d_type = last_div['Type']
+                        div_str = f"🟢 {d_type}" if d_type == 'Bullish' else f"🔴 {d_type}"
+
+            # Get alpha/beta metrics safely
+            alpha_5d = last.get(f"Alpha_Short_{stock_theme}", 0)
+            alpha_10d = last.get(f"Alpha_Med_{stock_theme}", 0)
+            alpha_20d = last.get(f"Alpha_Long_{stock_theme}", 0)
+            beta = last.get(f"Beta_{stock_theme}", 1.0)
+
+            return {
+                "Ticker": stock,
+                "Theme": stock_theme,
+                "Theme Category": theme_category_map.get(stock_theme, "Unknown"),
+                "Price": last['Close'],
+                "Market Cap (B)": mc_map.get(stock, 0) / 1e9, # Will be 0 if not fetched
+                "Beta": beta,
+                "Alpha 5d": alpha_5d,
+                "Alpha 10d": alpha_10d,
+                "Alpha 20d": alpha_20d,
+                "RVOL 5d": last.get('RVOL_Short', 0),
+                "RVOL 10d": last.get('RVOL_Med', 0),
+                "RVOL 20d": last.get('RVOL_Long', 0),
+                "Div": div_str,
+                "8 EMA": get_ma_signal(last['Close'], last.get('Ema8', 0)),
+                "21 EMA": get_ma_signal(last['Close'], last.get('Ema21', 0)),
+                "50 MA": get_ma_signal(last['Close'], last.get('Sma50', 0)),
+                "200 MA": get_ma_signal(last['Close'], last.get('Sma200', 0)),
+            }
+        except Exception:
+            return None
+
+    # 3. Execute in Parallel
+    stock_data = []
+    
+    # We use max_workers=20 to keep memory usage reasonable while gaining speed
+    with st.spinner(f"Processing {len(stock_theme_pairs)} stocks..."):
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            future_to_stock = {
+                executor.submit(process_single_stock, stock, theme): stock 
+                for stock, theme in stock_theme_pairs
+            }
+            
+            for future in as_completed(future_to_stock):
+                result = future.result()
+                if result is not None:
+                    stock_data.append(result)
+
+    # --- OPTIMIZATION END ---
+
+    if not stock_data:
+        st.info(f"No stocks found (or filtered by volume).")
+        return
+    
+    df_stocks = pd.DataFrame(stock_data)
+    
+    # --- FILTER BUILDER ---
+    st.markdown("### 🔍 Custom Filters")
+
+    with st.expander("ℹ️ How are RVOL and Alpha calculated?"):
+        st.markdown(r"""
+        ### **1. RVOL (Relative Volume) - 5, 10, & 20 Days**
+        The calculation establishes a daily relative volume ratio and averages it over specific timeframes.
+        
+        **Daily Calculation:**
+        $$
+        \text{Daily RVOL} = \frac{\text{Volume}}{\text{Avg Volume (Last 20 Days)}}
+        $$
+        
+        **Timeframes:**
+        * **RVOL 5/10/20 Days:** The **average** of the *Daily RVOL* over the last 5, 10, or 20 trading days.
+        
+        **Interpretation:**
+        > An RVOL of **1.3** means the stock is trading at **130%** of its normal volume on average over that timeframe.
+        
+        ---
+        
+        ### **2. Alpha - 5, 10, & 20 Days**
+        Measures excess return relative to the **Sector ETF** (not just the general market), adjusted for volatility (Beta).
+        
+        **Daily Calculation:**
+        1.  **Beta ($\beta$):** 60-day rolling window of Stock returns vs. Sector ETF returns.
+        2.  **Expected Return:** $\text{Sector \% Change} \times \beta$
+        3.  **1-Day Alpha:** $\text{Stock \% Change} - \text{Expected Return}$
+        
+        **Timeframes:**
+        * **Alpha 5/10/20 Days:** The **cumulative sum** of the *1-Day Alpha* over the last 5, 10, or 20 trading days.
+        
+        **Interpretation:**
+        > An Alpha 5d of **3.0** means the stock has outperformed its expected sector-adjusted return by **3%** over the last week.
+        """)
+    
+    st.caption("Build up to 8 filters. Filters apply automatically as you change them.")
+    
+    # Filterable columns (numeric and categorical)
+    numeric_columns = ["Price", "Market Cap (B)", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
+    # Added "Div" and MA signals to categorical columns
+    categorical_columns = ["Theme", "Theme Category", "Div", "8 EMA", "21 EMA", "50 MA", "200 MA"]
+    all_filter_columns = numeric_columns + categorical_columns
+    
+    # Get unique values for categorical columns
+    unique_themes = sorted(df_stocks['Theme'].unique().tolist())
+    unique_categories = sorted(df_stocks['Theme Category'].unique().tolist())
+    unique_divs = sorted(df_stocks['Div'].astype(str).unique().tolist())
+    unique_8ema = sorted(df_stocks['8 EMA'].unique().tolist())
+    unique_21ema = sorted(df_stocks['21 EMA'].unique().tolist())
+    unique_50ma = sorted(df_stocks['50 MA'].unique().tolist())
+    unique_200ma = sorted(df_stocks['200 MA'].unique().tolist())
+    
+    # Filter Buttons: Clear & Darcy Special
+    col_clear, col_special, col_space = st.columns([1, 1, 3])
+    with col_clear:
+        if st.button("🗑️ Clear Filters", type="secondary", use_container_width=True):
+            # Delete all filter-related keys INCLUDING filter_defaults
+            keys_to_delete = [k for k in st.session_state.keys() 
+                            if k.startswith('filter_') or k == 'filter_defaults' or k == 'default_filters_set']
+            for key in keys_to_delete:
+                del st.session_state[key]
+            # Set a flag that we've cleared (so defaults don't reload)
+            st.session_state.filters_were_cleared = True
+            st.rerun()
+            
+    with col_special:
+        if st.button("✨ Darcy Special", type="primary", use_container_width=True):
+            # 1. Enable Performance Settings
+            st.session_state.opt_show_divergences = True
+            st.session_state.opt_show_mkt_caps = True
+            
+            # 2. Reset Clear Flag
+            st.session_state.filters_were_cleared = False
+            st.session_state.default_filters_set = True
+            
+            # 3. Define Presets (Alpha, RVOL, MktCap, Themes, Div)
+            # Logic: (Num AND Num AND ...) AND (Theme OR Theme OR Div)
+            new_defaults = {
+                0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
+                1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
+                2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+                3: {'column': 'Market Cap (B)', 'operator': '>=', 'type': 'Number', 'value': 5.0},
+                # Chain OR logic for categories/div
+                4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
+                5: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf', 'logic': 'OR'},
+                6: {'column': 'Div', 'operator': '=', 'type': 'Categorical', 'value_cat': '🟢 Bullish'},
+                7: {}
+            }
+            # Fill remaining empty slots up to 8
+            for i in range(8):
+                if i not in new_defaults:
+                    new_defaults[i] = {}
+            
+            st.session_state.filter_defaults = new_defaults
+            st.rerun()
+    
+    # Always ensure filter_defaults exists
+    if 'filter_defaults' not in st.session_state:
+        st.session_state.filter_defaults = {}
+        for i in range(8): st.session_state.filter_defaults[i] = {}
+    
+    # Initialize default filters on first load ONLY (not after clearing)
+    if 'default_filters_set' not in st.session_state:
+        # Only set defaults if we haven't just cleared
+        if not st.session_state.get('filters_were_cleared', False):
+            st.session_state.default_filters_set = True
+            st.session_state.filter_defaults = {
+                0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0},
+                1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
+                2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+                3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
+                4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf'},
+                5: {}, 6: {}, 7: {}
+            }
+        else:
+            # We just cleared, so set empty defaults
+            st.session_state.default_filters_set = True
+            st.session_state.filter_defaults = {}
+            for i in range(8): st.session_state.filter_defaults[i] = {}
+            # Clear the flag for next time
+            st.session_state.filters_were_cleared = False
+    
+    # Create 8 filter rows (expanded for Darcy Special)
+    filters = []
+    
+    for i in range(8):
+        cols = st.columns([0.20, 0.08, 0.22, 0.35, 0.15])
+        
+        # Get default for this filter if exists
+        default = st.session_state.get('filter_defaults', {}).get(i, {})
+        default_column = default.get('column')
+        default_operator = default.get('operator', '>=')
+        default_type = default.get('type', 'Number')
+        default_value = default.get('value', 0.0)
+        default_value_column = default.get('value_column', 'Alpha 10d')
+        default_value_cat = default.get('value_cat', '')
+        default_logic = default.get('logic', 'AND')
+        
+        with cols[0]:
+            # Set default index
+            if default_column and default_column in all_filter_columns:
+                default_index = all_filter_columns.index(default_column) + 1
+            else:
+                default_index = 0
+            
+            column = st.selectbox(
+                f"Filter {i+1} Column",
+                [None] + all_filter_columns,
+                index=default_index,
+                key=f"filter_{i}_column",
+                label_visibility="collapsed",
+                placeholder="Select column..."
+            )
+        
+        # Determine if column is numeric or categorical
+        is_numeric = column in numeric_columns
+        is_categorical = column in categorical_columns
+        
+        if is_numeric:
+            with cols[1]:
+                operator = st.selectbox(
+                    "Operator",
+                    [">=", "<="],
+                    index=0 if default_operator == '>=' else 1,
+                    key=f"filter_{i}_operator",
+                    label_visibility="collapsed",
+                    disabled=column is None
+                )
+            
+            with cols[2]:
+                value_type = st.radio(
+                    "Type",
+                    ["Number", "Column"],
+                    index=0 if default_type == 'Number' else 1,
+                    key=f"filter_{i}_type",
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    disabled=column is None
+                )
+            
+            with cols[3]:
+                if value_type == "Number":
+                    value = st.number_input(
+                        "Value",
+                        value=default_value,
+                        step=0.1,
+                        format="%.2f",
+                        key=f"filter_{i}_value",
+                        label_visibility="collapsed",
+                        disabled=column is None
+                    )
+                    value_column = None
+                    value_categorical = None
+                else:  # Column
+                    # Get index for default column
+                    if default_value_column in numeric_columns:
+                        col_index = numeric_columns.index(default_value_column)
+                    else:
+                        col_index = 0
+                    
+                    value_column = st.selectbox(
+                        "Compare to",
+                        numeric_columns,
+                        index=col_index,
+                        key=f"filter_{i}_value_column",
+                        label_visibility="collapsed",
+                        disabled=column is None
+                    )
+                    value = None
+                    value_categorical = None
+        
+        elif is_categorical:
+            # For categorical columns, show = operator and dropdown
+            with cols[1]:
+                operator = st.selectbox(
+                    "Operator",
+                    ["="],
+                    key=f"filter_{i}_operator_cat",
+                    label_visibility="collapsed",
+                    disabled=column is None
+                )
+            
+            with cols[2]:
+                st.write("")  # Placeholder
+            
+            with cols[3]:
+                if column == "Theme":
+                    # Get index for default
+                    if default_value_cat in unique_themes:
+                        cat_index = unique_themes.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    
+                    value_categorical = st.selectbox(
+                        "Select Theme",
+                        unique_themes,
+                        index=cat_index,
+                        key=f"filter_{i}_value_theme",
+                        label_visibility="collapsed"
+                    )
+                elif column == "Theme Category":
+                    # Get index for default
+                    if default_value_cat in unique_categories:
+                        cat_index = unique_categories.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    
+                    value_categorical = st.selectbox(
+                        "Select Category",
+                        unique_categories,
+                        index=cat_index,
+                        key=f"filter_{i}_value_category",
+                        label_visibility="collapsed"
+                    )
+                elif column == "Div":
+                     # Get index for default
+                    if default_value_cat in unique_divs:
+                        cat_index = unique_divs.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    
+                    value_categorical = st.selectbox(
+                        "Select Div",
+                        unique_divs,
+                        index=cat_index,
+                        key=f"filter_{i}_value_div",
+                        label_visibility="collapsed"
+                    )
+                elif column == "8 EMA":
+                    if default_value_cat in unique_8ema:
+                        cat_index = unique_8ema.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    value_categorical = st.selectbox(
+                        "Select 8 EMA",
+                        unique_8ema,
+                        index=cat_index,
+                        key=f"filter_{i}_value_8ema",
+                        label_visibility="collapsed"
+                    )
+                elif column == "21 EMA":
+                    if default_value_cat in unique_21ema:
+                        cat_index = unique_21ema.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    value_categorical = st.selectbox(
+                        "Select 21 EMA",
+                        unique_21ema,
+                        index=cat_index,
+                        key=f"filter_{i}_value_21ema",
+                        label_visibility="collapsed"
+                    )
+                elif column == "50 MA":
+                    if default_value_cat in unique_50ma:
+                        cat_index = unique_50ma.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    value_categorical = st.selectbox(
+                        "Select 50 MA",
+                        unique_50ma,
+                        index=cat_index,
+                        key=f"filter_{i}_value_50ma",
+                        label_visibility="collapsed"
+                    )
+                elif column == "200 MA":
+                    if default_value_cat in unique_200ma:
+                        cat_index = unique_200ma.index(default_value_cat)
+                    else:
+                        cat_index = 0
+                    value_categorical = st.selectbox(
+                        "Select 200 MA",
+                        unique_200ma,
+                        index=cat_index,
+                        key=f"filter_{i}_value_200ma",
+                        label_visibility="collapsed"
+                    )
+                else:
+                    value_categorical = None
+                
+                value = None
+                value_column = None
+                value_type = "Categorical"
+        
+        else:
+            # No column selected
+            with cols[1]:
+                st.write("")
+            with cols[2]:
+                st.write("")
+            with cols[3]:
+                st.write("")
+            operator = None
+            value = None
+            value_column = None
+            value_categorical = None
+            value_type = None
+        
+        with cols[4]:
+            # Logic connector (except for last filter)
+            if i < 7 and column is not None:
+                logic = st.radio(
+                    "Logic",
+                    ["AND", "OR"],
+                    index=0 if default_logic == 'AND' else 1,
+                    key=f"filter_{i}_logic",
+                    horizontal=True,
+                    label_visibility="collapsed"
+                )
+            else:
+                logic = None
+        
+        # Store filter config (only if column is selected)
+        if column is not None:
+            filters.append({
+                'column': column,
+                'operator': operator,
+                'value_type': value_type,
+                'value': value,
+                'value_column': value_column,
+                'value_categorical': value_categorical,
+                'logic': logic
+            })
+    
+    # Apply filters automatically
+    df_filtered = df_stocks.copy()
+    
+    if filters:
+        # Separate numeric and categorical filters (keeping track of indices)
+        numeric_filters = []
+        categorical_filters = []
+        
+        for i, f in enumerate(filters):
+            if f['value_type'] in ['Number', 'Column']:
+                numeric_filters.append(f)
+            elif f['value_type'] == 'Categorical':
+                categorical_filters.append(f)
+        
+        # Build numeric conditions (all combined with AND)
+        numeric_conditions = []
+        for f in numeric_filters:
+            col = f['column']
+            op = f['operator']
+            
+            if f['value_type'] == 'Number':
+                val = f['value']
+                if op == '>=':
+                    condition = df_filtered[col] >= val
+                else:
+                    condition = df_filtered[col] <= val
+            else:  # Column
+                val_col = f['value_column']
+                if op == '>=':
+                    condition = df_filtered[col] >= df_filtered[val_col]
+                else:
+                    condition = df_filtered[col] <= df_filtered[val_col]
+            
+            numeric_conditions.append(condition)
+        
+        # Build categorical conditions (using logic from PREVIOUS categorical filter)
+        categorical_conditions = []
+        for i, f in enumerate(categorical_filters):
+            col = f['column']
+            val_cat = f['value_categorical']
+            condition = df_filtered[col] == val_cat
+            
+            # For first categorical filter, use None
+            # For subsequent, use the previous categorical filter's logic
+            if i == 0:
+                logic = None
+            else:
+                logic = categorical_filters[i-1].get('logic', 'AND')
+            
+            categorical_conditions.append((condition, logic))
+        
+        # Combine all numeric conditions with AND
+        final_condition = None
+        if numeric_conditions:
+            numeric_combined = numeric_conditions[0]
+            for cond in numeric_conditions[1:]:
+                numeric_combined = numeric_combined & cond
+            final_condition = numeric_combined
+        
+        # Combine all categorical conditions with their logic
+        if categorical_conditions:
+            cat_combined = categorical_conditions[0][0]
+            
+            for i in range(1, len(categorical_conditions)):
+                condition, logic = categorical_conditions[i]
+                if logic == 'OR':
+                    cat_combined = cat_combined | condition
+                else:  # AND (default)
+                    cat_combined = cat_combined & condition
+            
+            # Combine numeric and categorical with AND
+            if final_condition is not None:
+                final_condition = final_condition & cat_combined
+            else:
+                final_condition = cat_combined
+        
+        # Apply the filter
+        if final_condition is not None:
+            df_filtered = df_filtered[final_condition]
+    
+    # Display results
+    st.markdown("---")
+    st.caption(f"**Showing {len(df_filtered)} of {len(df_stocks)} stocks**")
+    
+    # Column configuration
+    column_config = {
+        "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+        "Theme": st.column_config.TextColumn("Theme", width="medium"),
+        "Theme Category": st.column_config.TextColumn("Theme Category", width="medium"),
+        "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+        "Market Cap (B)": st.column_config.NumberColumn("Mkt Cap", format="$%.1fB"),
+        "Beta": st.column_config.NumberColumn("Beta", format="%.2f"),
+        "Alpha 5d": st.column_config.NumberColumn("Alpha 5d", format="%+.2f%%"),
+        "Alpha 10d": st.column_config.NumberColumn("Alpha 10d", format="%+.2f%%"),
+        "Alpha 20d": st.column_config.NumberColumn("Alpha 20d", format="%+.2f%%"),
+        "RVOL 5d": st.column_config.NumberColumn("RVOL 5d", format="%.2fx"),
+        "RVOL 10d": st.column_config.NumberColumn("RVOL 10d", format="%.2fx"),
+        "RVOL 20d": st.column_config.NumberColumn("RVOL 20d", format="%.2fx"),
+        "Div": st.column_config.TextColumn("Div", width="small"), # Added config for Div
+        "8 EMA": st.column_config.TextColumn("8 EMA", width="small"),
+        "21 EMA": st.column_config.TextColumn("21 EMA", width="small"),
+        "50 MA": st.column_config.TextColumn("50 MA", width="small"),
+        "200 MA": st.column_config.TextColumn("200 MA", width="small"),
     }
     
-    st.subheader("Data Table & Selection")
-    edited_df = st.data_editor(editor_input, column_config=column_configuration, disabled=["Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"], hide_index=True, use_container_width=True, key="sz_editor")
-    f_final = edit_pool_raw[edited_df["Include"]].copy()
-    st.markdown("<br><br>", unsafe_allow_html=True)
-
-    with chart_container:
-        if f_final.empty: st.info("No rows selected. Check the 'Include' boxes below.")
-        else:
-            spot, ema8, ema21, sma200 = ud.get_strike_zone_technicals(ticker)
-            def pct_from_spot(x):
-                if x is None or np.isnan(x): return "—"
-                return f"{(x/spot-1)*100:+.1f}%"
-            
-            badges = [f'<span class="price-badge-header">Price: ${spot:,.2f}</span>']
-            if ema8: badges.append(f'<span class="badge">EMA(8): ${ema8:,.2f} ({pct_from_spot(ema8)})</span>')
-            if ema21: badges.append(f'<span class="badge">EMA(21): ${ema21:,.2f} ({pct_from_spot(ema21)})</span>')
-            if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
-            st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
-
-            if view_mode == "Price Zones":
-                html_code = ud.generate_price_zones_html(f_final, spot, width_mode, fixed_size_choice)
-                st.markdown(html_code, unsafe_allow_html=True)
-            else:
-                html_code = ud.generate_expiry_buckets_html(f_final)
-                st.markdown(html_code, unsafe_allow_html=True)
-            st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them in the Data Tables box below.")
-
-def run_price_divergences_app(df_global):
-    st.title("📉 Price Divergences")
-    st.markdown("""<style>.top-note { color: #888888; font-size: 14px; margin-bottom: 2px; font-family: inherit; } [data-testid="stDataFrame"] th { font-weight: 900 !important; } </style>""", unsafe_allow_html=True)
-    ud.initialize_divergence_state()
-
-    def save_rsi_state(key, saved_key):
-        st.session_state[saved_key] = st.session_state[key]
+    st.dataframe(
+        df_filtered,
+        use_container_width=True,
+        hide_index=True,
+        column_config=column_config
+    )
+    
+    # Tickers to copy to clipboard
+    if not df_filtered.empty:
+        tickers_list = df_filtered['Ticker'].unique().tolist()
+        ticker_str = ", ".join(tickers_list)
         
-    dataset_map = ud.get_parquet_config()
-    options = list(dataset_map.keys())
-    tab_div, tab_hist = st.tabs(["📉 Active/Recent Divergences", "📜 Divergences History"])
-
-    with tab_div:
-        data_option_div = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_div_pills")
-        with st.expander("ℹ️ Page User Guide"):
-            c_guide1, c_guide2 = st.columns(2)
-            with c_guide1:
-                st.markdown("#### ⚙️ Settings & Inputs")
-                st.markdown("""
-                * **Dataset**: Selects the universe of stocks to scan (e.g., SP500, NASDAQ).
-                * **Days Since Signal**: Filters the view to show only signals that were confirmed within this number of past trading days.
-                * **Min RSI Delta**: The minimum required difference between the two RSI pivot points.
-                * **Strict 50-Cross**: If "Yes", signal is invalid if RSI crossed 50 between pivots.
-                """)
-            with c_guide2:
-                st.markdown("#### 📊 Table Columns")
-                st.markdown("""
-                * **RSI Δ**: RSI value at first pivot vs second pivot.
-                * **Price Δ**: Price at first pivot vs second pivot.
-                * **RSI %ile (New)**: The historical percentile rank of the **2nd Pivot (The Signal Candle)**.
-                    * **Value**: Shows how rare the signal RSI is (e.g., **5** = Bottom 5% of all history).
-                    * **Highlighting**: The cell turns YELLOW if **EITHER** pivot (1 or 2) was historically extreme (<10% or >90%).
-                """)
-        
-        if data_option_div:
-            try:
-                key = dataset_map[data_option_div]
-                master = ud.load_parquet_and_clean(key)
-                if master is not None and not master.empty:
-                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                    with st.expander(f"View Scanned Tickers ({data_option_div})"):
-                        if t_col:
-                            unique_tickers = sorted(master[t_col].unique().tolist())
-                            st.write(", ".join(unique_tickers))
-                        else: st.caption("No ticker column found in dataset.")
-
-                    target_highlight_daily = None
-                    highlight_list_weekly = []
-                    date_col_raw = next((c for c in master.columns if 'DATE' in c.upper()), None)
-                    if date_col_raw:
-                        master[date_col_raw] = pd.to_datetime(master[date_col_raw])
-                        max_dt_obj = master[date_col_raw].max()
-                        target_highlight_daily = max_dt_obj.strftime('%Y-%m-%d')
-                        days_to_subtract = max_dt_obj.weekday()
-                        current_week_monday = (max_dt_obj - timedelta(days=days_to_subtract))
-                        prev_week_monday = current_week_monday - timedelta(days=7)
-                        highlight_list_weekly = [current_week_monday.strftime('%Y-%m-%d'), prev_week_monday.strftime('%Y-%m-%d')]
-                    
-                    # UPDATED: Use Constants for Defaults
-                    c_d1, c_d2, c_d3, c_d4, c_d5 = st.columns(5)
-                    with c_d1: days_since = st.number_input("Days Since Signal", min_value=1, value=st.session_state.saved_rsi_div_days_since, step=1, key="rsi_div_days_since", on_change=save_rsi_state, args=("rsi_div_days_since", "saved_rsi_div_days_since"))
-                    with c_d2: div_diff = st.number_input("Min RSI Delta", min_value=0.5, value=st.session_state.saved_rsi_div_diff, step=0.5, key="rsi_div_diff", on_change=save_rsi_state, args=("rsi_div_diff", "saved_rsi_div_diff"))
-                    with c_d3: div_lookback = st.number_input("Max Candle Between Pivots", min_value=30, value=st.session_state.saved_rsi_div_lookback, step=5, key="rsi_div_lookback", on_change=save_rsi_state, args=("rsi_div_lookback", "saved_rsi_div_lookback"))
-                    
-                    with c_d4:
-                         curr_strict = st.session_state.saved_rsi_div_strict
-                         idx_strict = ud.DIV_STRICT_OPTS.index(curr_strict) if curr_strict in ud.DIV_STRICT_OPTS else 0
-                         strict_div_str = st.selectbox("Strict 50-Cross Invalidation", ud.DIV_STRICT_OPTS, index=idx_strict, key="rsi_div_strict", on_change=save_rsi_state, args=("rsi_div_strict", "saved_rsi_div_strict"))
-                         strict_div = (strict_div_str == "Yes")
-                    with c_d5:
-                         curr_source = st.session_state.saved_rsi_div_source
-                         idx_source = ud.DIV_SOURCE_OPTS.index(curr_source) if curr_source in ud.DIV_SOURCE_OPTS else 0
-                         div_source = st.selectbox("Candle Price Methodology", ud.DIV_SOURCE_OPTS, index=idx_source, key="rsi_div_source", on_change=save_rsi_state, args=("rsi_div_source", "saved_rsi_div_source"))
-                    
-                    raw_results_div = []
-                    progress_bar = st.progress(0, text="Scanning Divergences...")
-                    grouped = master.groupby(t_col)
-                    grouped_list = list(grouped)
-                    total_groups = len(grouped_list)
-                    
-                    for i, (ticker, group) in enumerate(grouped_list):
-                        d_d, d_w = ud.prepare_data(group.copy())
-                        
-                        if d_d is not None:
-                            daily_divs = ud.find_divergences(d_d, ticker, 'Daily', min_n=0, periods_input=ud.DIV_CSV_PERIODS_DAYS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
-                            if daily_divs and 'RSI' in d_d.columns:
-                                all_rsi = d_d['RSI'].dropna().values
-                                if len(all_rsi) > 0:
-                                    for div in daily_divs:
-                                        p1 = (all_rsi < div['RSI1']).mean() * 100
-                                        p2 = (all_rsi < div['RSI2']).mean() * 100
-                                        div['RSI1_Pct'] = p1; div['RSI2_Pct'] = p2
-                                        div['Extreme_Flag'] = (p1 < 10 or p2 < 10) if div['Type'] == 'Bullish' else (p1 > 90 or p2 > 90)
-                            raw_results_div.extend(daily_divs)
-                        
-                        if d_w is not None: 
-                            weekly_divs = ud.find_divergences(d_w, ticker, 'Weekly', min_n=0, periods_input=ud.DIV_CSV_PERIODS_WEEKS, optimize_for='PF', lookback_period=div_lookback, price_source=div_source, strict_validation=strict_div, recent_days_filter=days_since, rsi_diff_threshold=div_diff)
-                            if weekly_divs and 'RSI' in d_w.columns:
-                                all_rsi_w = d_w['RSI'].dropna().values
-                                if len(all_rsi_w) > 0:
-                                    for div in weekly_divs:
-                                        p1 = (all_rsi_w < div['RSI1']).mean() * 100
-                                        p2 = (all_rsi_w < div['RSI2']).mean() * 100
-                                        div['RSI1_Pct'] = p1; div['RSI2_Pct'] = p2
-                                        div['Extreme_Flag'] = (p1 < 10 or p2 < 10) if div['Type'] == 'Bullish' else (p1 > 90 or p2 > 90)
-                            raw_results_div.extend(weekly_divs)
-                        if i % 10 == 0 or i == total_groups - 1: progress_bar.progress((i + 1) / total_groups)
-                    progress_bar.empty()
-                    
-                    if raw_results_div:
-                        df_all_results = pd.DataFrame(raw_results_div)
-                        res_div_df = df_all_results[df_all_results["Is_Recent"] == True].copy()
-                        if res_div_df.empty: st.warning(f"No signals found in the last {days_since} days.")
-                        else:
-                            res_div_df = res_div_df.sort_values(by='Signal_Date_ISO', ascending=False)
-                            consolidated = res_div_df.groupby(['Ticker', 'Type', 'Timeframe']).head(1)
-                            for tf in ['Daily', 'Weekly']:
-                                targets = highlight_list_weekly if tf == 'Weekly' else ([target_highlight_daily] if target_highlight_daily else [])
-                                date_header = "Week Δ" if tf == 'Weekly' else "Day Δ"
-                                for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                                    st.subheader(f"{emoji} {tf} {s_type} Signals")
-                                    tbl_df = consolidated[(consolidated['Type']==s_type) & (consolidated['Timeframe']==tf)].copy()
-                                    price_header = "Close Price Δ" if div_source == 'Close' else ("Low Price Δ" if s_type == 'Bullish' else "High Price Δ")
-                                    pct_col_title = "RSI Low %ile" if s_type == 'Bullish' else "RSI High %ile"
-
-                                    if not tbl_df.empty:
-                                        if 'RSI2_Pct' not in tbl_df.columns: tbl_df['RSI2_Pct'] = 50
-                                        if 'Extreme_Flag' not in tbl_df.columns: tbl_df['Extreme_Flag'] = False
-                                        def style_div_df(df_in):
-                                            def highlight_cells(row):
-                                                styles = [''] * len(row)
-                                                if row['Signal_Date_ISO'] in targets:
-                                                    if 'Date_Display' in df_in.columns:
-                                                        idx = df_in.columns.get_loc('Date_Display')
-                                                        styles[idx] = 'background-color: rgba(255, 244, 229, 0.7); color: #e67e22; font-weight: bold;'
-                                                if row.get('Extreme_Flag', False):
-                                                    if 'RSI2_Pct' in df_in.columns:
-                                                        idx_p = df_in.columns.get_loc('RSI2_Pct')
-                                                        styles[idx_p] = 'background-color: rgba(255, 235, 59, 0.25); color: #f57f17; font-weight: bold;'
-                                                return styles
-                                            return df_in.style.apply(highlight_cells, axis=1)
-                                        st.dataframe(style_div_df(tbl_df), column_config={"Ticker": st.column_config.TextColumn("Ticker"), "Tags": st.column_config.ListColumn("Tags"), "Date_Display": st.column_config.TextColumn(date_header), "RSI_Display": st.column_config.TextColumn("RSI Δ"), "RSI2_Pct": st.column_config.NumberColumn(pct_col_title, format="%d", help="Percentile rank of the signal RSI relative to ticker history."), "Price_Display": st.column_config.TextColumn(price_header), "Last_Close": st.column_config.TextColumn("Last Close")}, column_order=["Ticker", "Tags", "Date_Display", "RSI_Display", "Price_Display", "Last_Close", "RSI2_Pct"], hide_index=True, use_container_width=True, height=ud.get_table_height(tbl_df, max_rows=50))
-                                    else: st.info("No signals.")
-                    else: st.warning("No Divergence signals found.")
-                else: st.error(f"Failed to load dataset.")
-            except Exception as e: st.error(f"Analysis failed: {e}")
-
-    with tab_hist:
-        c_h1, c_h2, c_h3, c_h4 = st.columns(4)
-        with c_h1:
-            hist_ticker_in = st.text_input("Ticker", value=st.session_state.rsi_hist_ticker, key="rsi_hist_ticker_in").strip().upper()
-            st.session_state.rsi_hist_ticker = hist_ticker_in
-        # UPDATED: Use Constants for History Defaults
-        with c_h2: h_lookback = st.number_input("Max Days Btwn Pivots", min_value=30, value=ud.DIV_LOOKBACK_DEFAULT, step=5, key="rsi_hist_lookback")
-        with c_h3: h_diff = st.number_input("Min RSI Delta", min_value=0.5, value=ud.DIV_RSI_DIFF_DEFAULT, step=0.5, key="rsi_hist_diff")
-        with c_h4:
-            h_strict_str = st.selectbox("50-Cross Inval", ud.DIV_STRICT_OPTS, index=0, key="rsi_hist_strict")
-            h_strict = (h_strict_str == "Yes")
-        c_h5, c_h6, c_h7 = st.columns(3)
-        with c_h5: h_source = st.selectbox("Candle Price Method", ud.DIV_SOURCE_OPTS, index=0, key="rsi_hist_source")
-        with c_h6: h_per_days = st.text_input("Periods (Days)", value="5, 21, 63, 126, 252", key="rsi_hist_p_days")
-        with c_h7: h_per_weeks = st.text_input("Periods (Weeks)", value="4, 13, 26, 52", key="rsi_hist_p_weeks")
-
-        current_params = {"t": hist_ticker_in, "lb": h_lookback, "str": h_strict, "src": h_source, "pd": h_per_days, "pw": h_per_weeks, "diff": h_diff}
-        run_hist = False
-        if current_params != st.session_state.rsi_hist_last_run_params: run_hist = True
-        
-        if hist_ticker_in and run_hist:
-            with st.spinner(f"Analyzing lifetime history for {hist_ticker_in}..."):
-                try:
-                    ticker_map = ud.load_ticker_map()
-                    df_h = ud.get_ticker_technicals(hist_ticker_in, ticker_map)
-                    if df_h is None or df_h.empty: df_h = ud.fetch_yahoo_data(hist_ticker_in)
-                    
-                    if df_h is not None and not df_h.empty:
-                        d_d_h, d_w_h = ud.prepare_data(df_h.copy())
-                        raw_results_hist = []
-                        p_days_parsed = ud.parse_periods(h_per_days)
-                        p_weeks_parsed = ud.parse_periods(h_per_weeks)
-                        if d_d_h is not None: 
-                            d_daily = ud.find_divergences(d_d_h, hist_ticker_in, 'Daily', min_n=0, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff)
-                            d_daily = ud.inject_volume_data(d_daily, d_d_h)
-                            raw_results_hist.extend(d_daily)
-                        if d_w_h is not None: 
-                            d_weekly = ud.find_divergences(d_w_h, hist_ticker_in, 'Weekly', min_n=0, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff)
-                            d_weekly = ud.inject_volume_data(d_weekly, d_w_h)
-                            raw_results_hist.extend(d_weekly)
-                        st.session_state.rsi_hist_results = pd.DataFrame(raw_results_hist)
-                        st.session_state.rsi_hist_last_run_params = current_params
-                    else:
-                        st.error(f"Could not load data for {hist_ticker_in}")
-                        st.session_state.rsi_hist_results = pd.DataFrame()
-                except Exception as e: st.error(f"Error: {e}")
-        
-        if st.session_state.rsi_hist_results is not None and not st.session_state.rsi_hist_results.empty:
-            res_df_h = st.session_state.rsi_hist_results.copy().sort_values(by='Signal_Date_ISO', ascending=False)
-            for tf in ['Daily', 'Weekly']:
-                p_cols_to_show = []
-                current_periods = ud.parse_periods(h_per_days if tf == 'Daily' else h_per_weeks)
-                for p in current_periods:
-                    col_key = f"Ret_{p}"
-                    if col_key in res_df_h.columns: p_cols_to_show.append(col_key)
-
-                for s_type, emoji in [('Bullish', '🟢'), ('Bearish', '🔴')]:
-                    st.subheader(f"{emoji} {tf} {s_type} History")
-                    tbl_df = res_df_h[(res_df_h['Type']==s_type) & (res_df_h['Timeframe']==tf)].copy()
-                    if not tbl_df.empty:
-                        def style_ret(df_in):
-                            def highlight_val(val):
-                                if pd.isna(val): return ''
-                                color = '#1e7e34' if val > 0 else '#c5221f'
-                                return f'color: {color}; font-weight: bold;'
-                            style_obj = df_in.style
-                            for p_c in p_cols_to_show: style_obj = style_obj.map(highlight_val, subset=[p_c])
-                            return style_obj
-                        cfg = { "P1_Date_ISO": st.column_config.TextColumn("Date 1", width="medium"), "Signal_Date_ISO": st.column_config.TextColumn("Date 2", width="medium"), "RSI1": st.column_config.NumberColumn("RSI 1", format="%.0f"), "RSI2": st.column_config.NumberColumn("RSI 2", format="%.0f"), "Price1": st.column_config.NumberColumn("Price 1", format="$%.2f"), "Price2": st.column_config.NumberColumn("Price 2", format="$%.2f") }
-                        for p_c in p_cols_to_show:
-                            days = p_c.split('_')[1]
-                            cfg[p_c] = st.column_config.NumberColumn(f"{days}{'d' if tf=='Daily' else 'w'} %", format="%+.2f%%")
-                        cols_base = ["P1_Date_ISO", "Signal_Date_ISO", "RSI1", "RSI2", "Price1", "Price2"]
-                        st.dataframe(style_ret(tbl_df[cols_base + p_cols_to_show]), column_config=cfg, hide_index=True, use_container_width=True, height=(min(len(tbl_df), 50) + 1) * 35 )
-                    else: st.caption("No signals found.")
-        
-        st.divider()
-        st.subheader("💾 Data Downloads")
-        col_dl_1, col_dl_2 = st.columns(2)
-        with col_dl_1:
-            st.markdown(f"**Option 1: {hist_ticker_in} Complete History**")
-            st.caption("Download all Daily/Weekly, Bullish/Bearish divergences for this specific ticker.")
-            if st.session_state.rsi_hist_results is not None and not st.session_state.rsi_hist_results.empty:
-                export_df = ud.process_divergence_export_columns(st.session_state.rsi_hist_results)
-                csv_single = export_df.to_csv(index=False).encode('utf-8')
-                st.download_button(label=f"⬇️ Download {hist_ticker_in} History (CSV)", data=csv_single, file_name=f"{hist_ticker_in}_Divergence_History.csv", mime="text/csv", key="dl_single_ticker_hist")
-            else: st.info("Input a ticker above to generate data.")
-        with col_dl_2:
-            st.markdown(f"**Option 2: Bulk Dataset History**")
-            st.caption("Scan complete history for EVERY ticker in the selected dataset.")
-            bulk_dataset_opt = st.selectbox("Select Dataset", options=options, index=0, key="rsi_hist_bulk_sel", label_visibility="collapsed")
-            if st.button("🚀 Process Bulk History", key="btn_bulk_hist"):
-                try:
-                    key = dataset_map[bulk_dataset_opt]
-                    master_bulk = ud.load_parquet_and_clean(key)
-                    if master_bulk is not None and not master_bulk.empty:
-                        t_col_b = next((c for c in master_bulk.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                        if t_col_b:
-                            bulk_results = []
-                            grouped_bulk = master_bulk.groupby(t_col_b)
-                            total_b = len(grouped_bulk)
-                            prog_b = st.progress(0, text="Processing Bulk History...")
-                            p_days_parsed = ud.parse_periods(h_per_days)
-                            p_weeks_parsed = ud.parse_periods(h_per_weeks)
-                            for idx, (tkr, grp) in enumerate(grouped_bulk):
-                                d_d_b, d_w_b = ud.prepare_data(grp.copy())
-                                if d_d_b is not None: 
-                                    res_d = ud.find_divergences(d_d_b, tkr, 'Daily', min_n=0, periods_input=p_days_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff)
-                                    res_d = ud.inject_volume_data(res_d, d_d_b)
-                                    bulk_results.extend(res_d)
-                                if d_w_b is not None:
-                                    res_w = ud.find_divergences(d_w_b, tkr, 'Weekly', min_n=0, periods_input=p_weeks_parsed, lookback_period=h_lookback, price_source=h_source, strict_validation=h_strict, recent_days_filter=99999, rsi_diff_threshold=h_diff)
-                                    res_w = ud.inject_volume_data(res_w, d_w_b)
-                                    bulk_results.extend(res_w)
-                                if idx % 5 == 0: prog_b.progress((idx+1)/total_b)
-                            prog_b.empty()
-                            if bulk_results: st.session_state.rsi_hist_bulk_df = pd.DataFrame(bulk_results)
-                            else: st.warning("No divergences found in dataset.")
-                        else: st.error("Ticker column missing in dataset.")
-                except Exception as e: st.error(f"Bulk Process Error: {e}")
-            if st.session_state.rsi_hist_bulk_df is not None and not st.session_state.rsi_hist_bulk_df.empty:
-                bulk_export = ud.process_divergence_export_columns(st.session_state.rsi_hist_bulk_df)
-                csv_bulk = bulk_export.to_csv(index=False).encode('utf-8')
-                st.success(f"Ready: {len(bulk_export)} rows generated.")
-                st.download_button(label="⬇️ Download Full Dataset History (CSV)", data=csv_bulk, file_name=f"Bulk_Divergence_History_{date.today().strftime('%Y%m%d')}.csv", mime="text/csv", key="dl_bulk_ticker_hist")
-        st.divider()
-
-def run_rsi_scanner_app(df_global):
-    st.title("🤖 RSI Scanner")
-
-    # UPDATED: Use Constants for Defaults
-    if 'saved_rsi_pct_low' not in st.session_state: st.session_state.saved_rsi_pct_low = ud.RSI_SCAN_DEFAULT_PCT_LOW
-    if 'saved_rsi_pct_high' not in st.session_state: st.session_state.saved_rsi_pct_high = ud.RSI_SCAN_DEFAULT_PCT_HIGH
-    if 'saved_rsi_pct_min_n' not in st.session_state: st.session_state.saved_rsi_pct_min_n = ud.RSI_SCAN_DEFAULT_MIN_N
-    if 'saved_rsi_pct_periods' not in st.session_state: st.session_state.saved_rsi_pct_periods = ud.RSI_SCAN_DEFAULT_PERIODS
-
-    def save_rsi_state(key, saved_key):
-        st.session_state[saved_key] = st.session_state[key]
-
-    dataset_map = DATA_KEYS_PARQUET
-    options = list(dataset_map.keys())
-    tab_bot, tab_pct = st.tabs(["🤖 Contextual Backtester", "🔢 RSI Percentiles"])
-
-    with tab_bot:
-        c_left, c_mid, c_right = st.columns([1, 0.2, 3])
-        with c_left:
-            st.markdown("#### 1. Asset & Scope")
-            # UPDATED: Constants
-            ticker = st.text_input("Ticker", value=ud.RSI_BOT_DEFAULT_TICKER, key="rsi_bt_ticker_input").strip().upper()
-            lookback_years = st.number_input("Lookback Years", min_value=1, max_value=20, value=ud.RSI_BOT_DEFAULT_LOOKBACK)
-            rsi_tol = st.number_input("RSI Tolerance", min_value=0.5, max_value=10.0, value=ud.RSI_BOT_DEFAULT_TOLERANCE, step=0.5, help="Search for RSI +/- this value.")
-            
-            use_hist_date = st.checkbox("Test from Past Date", value=False, help="Enable this to see what the tool would have shown on a specific day in the past.")
-            if use_hist_date: ref_date = st.date_input("Select Reference Date", value=date.today() - timedelta(days=5))
-            else: ref_date = date.today()
-
-            dedupe_str = st.selectbox("De-dupe Signals", ["Yes", "No"], index=0, help="If Yes (Recommended): Simulates 'One Trade at a Time'.")
-            dedupe_signals = (dedupe_str == "Yes")
-            
-        with c_right:
-            st.markdown("#### 2. Contextual Filters")
-            # UPDATED: Constants for Options
-            f_sma200 = st.selectbox("Price vs 200 SMA", ud.RSI_BOT_FILTERS_OPTS, index=0, key="f_sma200")
-            f_sma50 = st.selectbox("Price vs 50 SMA", ud.RSI_BOT_FILTERS_OPTS, index=0, key="f_sma50")
-
-        st.divider()
-        if ticker:
-            ticker_map = ud.load_ticker_map()
-            df = ud.load_backtest_data(ticker, ticker_map)
-            
-            if df is None or df.empty: st.error(f"Could not retrieve data for {ticker}.")
-            else:
-                with st.spinner(f"Analyzing {ticker} context..."):
-                    bt_data = ud.run_contextual_backtest(df, ref_date, lookback_years, rsi_tol, f_sma200, f_sma50, dedupe_signals)
-
-                if bt_data and "error" in bt_data: st.error(bt_data["error"])
-                elif bt_data:
-                    current_rsi = bt_data['current_rsi']
-                    rsi_rank = bt_data['rsi_rank']
-                    matches_count = bt_data['matches_count']
-                    res_df = bt_data['results_df']
-                    trade_log = bt_data['trade_log']
-                    ref_date_str = bt_data['ref_date_str']
-
-                    st.subheader(f"📊 Analysis: {ticker} on {ref_date_str}")
-                    sc1, sc2, sc3, sc4 = st.columns(4)
-                    sc1.metric(f"Price ({ref_date_str})", f"${bt_data['close_price']:.2f}")
-                    sc2.metric("Reference RSI", f"{current_rsi:.1f}")
-                    sc3.metric("RSI Hist. Rank", f"{rsi_rank:.1f}%", help=f"Percentile Rank: Bottom {rsi_rank:.1f}%")
-                    sc4.metric("Total Signals", f"{matches_count}", help="Raw count of days matching criteria (RSI + Filters) BEFORE De-duping is applied.")
-                    
-                    if not res_df.empty:
-                        col_order = ["Days", "Count", "Min DD", "Avg DD", "Median DD", "Max DD", "Lump EV", "Lump WR", "Optimal Entry", "Optimal EV", "Optimal WR"]
-                        st.dataframe(
-                            ud.get_rsi_backtest_styled(res_df[col_order]),
-                            column_config={
-                                "Days": st.column_config.NumberColumn("Hold", help="Trading Days held"),
-                                "Lump EV": st.column_config.NumberColumn("Lump EV", help="Avg Return (Lump Sum entry)."),
-                                "Lump WR": st.column_config.NumberColumn("Lump WR", help="Win Rate (Lump Sum entry)."),
-                                "Optimal Entry": st.column_config.TextColumn("Best Entry", help="Strategy (Lump Sum vs DCA) with highest historical EV."),
-                                "Optimal EV": st.column_config.NumberColumn("Best EV", help="Avg Return of the Best Entry strategy."),
-                                "Optimal WR": st.column_config.NumberColumn("Best WR", help="Win Rate of the Best Entry strategy."),
-                                "Min DD": st.column_config.NumberColumn("Lump Min DD", help="Smallest (Best Case) Asset Drawdown."),
-                                "Max DD": st.column_config.NumberColumn("Lump Max DD", help="Largest (Worst Case) Asset Drawdown."),
-                                "Avg DD": st.column_config.NumberColumn("Lump Avg DD", help="Average Asset Drawdown."),
-                                "Median DD": st.column_config.NumberColumn("Lump Med DD", help="Median Asset Drawdown."),
-                            },
-                            use_container_width=True, hide_index=True, height=ud.get_table_height(res_df, max_rows=10)
-                        )
-                        st.markdown("##### 🧠 Strategic Insights")
-                        c_i1, c_i2 = st.columns(2)
-                        best_row = res_df.loc[res_df['Optimal EV'].idxmax()]
-                        with c_i1:
-                            st.success(f"""**🏆 Best Historical Hold**\nIf you entered on {ref_date_str} (RSI {current_rsi:.1f}), the best historical strategy was holding for **{best_row['Days']} Days**.\n* **Avg Return:** +{best_row['Optimal EV']:.2f}%\n* **Win Rate:** {best_row['Optimal WR']:.1f}%\n* **Strategy:** {best_row['Optimal Entry']}""")
-                        with c_i2:
-                            if trade_log:
-                                trade_log_df = pd.DataFrame(trade_log)
-                                csv = trade_log_df.to_csv(index=False).encode('utf-8')
-                                st.download_button(label="⬇️ Download Trade History (CSV)", data=csv, file_name=f"{ticker}_RSI_Backtest_{ref_date_str}.csv", mime="text/csv", help="Downloads log of all trades using Close Prices.")
-                        
-                        st.divider()
-                        st.subheader("🔍 Trade Drill-Down")
-                        if trade_log:
-                            df_log = pd.DataFrame(trade_log)
-                            unique_periods = sorted([p for p in df_log['Period'].unique() if isinstance(p, int)])
-                            period_opts = [f"{p} Days" for p in unique_periods]
-                            sel_period_str = st.selectbox("Select Holding Period to Inspect", period_opts, index=len(period_opts)-1) 
-                            if sel_period_str:
-                                sel_p_int = int(sel_period_str.split(" ")[0])
-                                subset = df_log[df_log['Period'] == sel_p_int].copy()
-                                st.dataframe(subset[["Entry Date", "Entry Price", "Exit Date", "Exit Price", "Return %", "Max Drawdown %"]].style.format({"Entry Price": "${:,.2f}", "Exit Price": "${:,.2f}", "Return %": "{:+.2f}%", "Max Drawdown %": "{:+.2f}%"}).map(lambda x: 'color: #c5221f; font-weight: bold;' if x < -15 else '', subset=['Max Drawdown %']).map(lambda x: 'color: #71d28a; font-weight: bold;' if x > 0 else 'color: #f29ca0;', subset=['Return %']), use_container_width=True, hide_index=True)
-                    else: st.warning(f"No historical matches found for RSI {current_rsi:.1f} (+/- {rsi_tol}). Try widening tolerance.")
-
-    with tab_pct:
-        data_option_pct = st.pills("Dataset", options=options, selection_mode="single", default=options[0] if options else None, label_visibility="collapsed", key="rsi_pct_pills")
-        if data_option_pct:
-            try:
-                key = dataset_map[data_option_pct]
-                master = ud.load_parquet_and_clean(key)
-                if master is not None and not master.empty:
-                    t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                    with st.expander(f"View Scanned Tickers ({data_option_pct})"):
-                        if t_col:
-                            unique_tickers = sorted(master[t_col].unique().tolist())
-                            st.write(", ".join(unique_tickers))
-                        else: st.caption("No ticker column found in dataset.")
-
-                    c_p1, c_p2, c_p3, c_p4 = st.columns(4)
-                    with c_p1: pct_low = st.number_input("RSI Low (e.g. 10)", min_value=1, max_value=40, value=st.session_state.saved_rsi_pct_low, step=1, key="rsi_pct_low", on_change=save_rsi_state, args=("rsi_pct_low", "saved_rsi_pct_low"))
-                    with c_p2: pct_high = st.number_input("RSI High (e.g. 90)", min_value=60, max_value=99, value=st.session_state.saved_rsi_pct_high, step=1, key="rsi_pct_high", on_change=save_rsi_state, args=("rsi_pct_high", "saved_rsi_pct_high"))
-                    with c_p3: min_n_pct = st.number_input("Min N", min_value=1, value=st.session_state.saved_rsi_pct_min_n, step=1, key="rsi_pct_min_n", on_change=save_rsi_state, args=("rsi_pct_min_n", "saved_rsi_pct_min_n"))
-                    with c_p4: periods_str_pct = st.text_input("Periods", value=st.session_state.saved_rsi_pct_periods, key="rsi_pct_periods", on_change=save_rsi_state, args=("rsi_pct_periods", "saved_rsi_pct_periods"))
-            
-                    periods_pct = ud.parse_periods(periods_str_pct)
-                    raw_results_pct = []
-                    prog_bar = st.progress(0, text="Scanning Percentiles...")
-                    grouped = master.groupby(t_col)
-                    total_groups = len(grouped)
-                    for i, (ticker, group) in enumerate(grouped):
-                        d_d, _ = ud.prepare_data(group.copy())
-                        if d_d is not None:
-                            raw_results_pct.extend(ud.find_rsi_percentile_signals(d_d, ticker, pct_low=pct_low/100.0, pct_high=pct_high/100.0, min_n=min_n_pct, timeframe='Daily', periods_input=periods_pct, optimize_for='SQN'))
-                        if i % 10 == 0: prog_bar.progress((i+1)/total_groups)
-                    prog_bar.empty()
-                    
-                    if raw_results_pct:
-                        df_pct = pd.DataFrame(raw_results_pct)
-                        df_pct = df_pct.sort_values(by=['Date_Obj', 'Ticker'], ascending=[False, True])
-                        st.dataframe(df_pct, column_config={"Ticker": st.column_config.TextColumn("Ticker"), "Date": st.column_config.TextColumn("Date"), "Action": st.column_config.TextColumn("Signal"), "RSI_Display": st.column_config.TextColumn("RSI Transition"), "Signal_Price": st.column_config.TextColumn("Signal Price"), "Last_Close": st.column_config.TextColumn("Last Close"), "Profit Factor": st.column_config.NumberColumn("Profit Factor", format="%.2f"), "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.1f%%"), "EV": st.column_config.NumberColumn("EV", format="%.1f%%"), "EV Target": st.column_config.NumberColumn("EV Target", format="$%.2f"), "SQN": st.column_config.NumberColumn("SQN", format="%.2f")}, hide_index=True, use_container_width=True, height=ud.get_table_height(df_pct, max_rows=50))
-                    else: st.info("No percentile signals found.")
-                else: st.error("Failed to load data.")
-            except Exception as e: st.error(f"Error: {e}")
-
-def run_seasonality_app(df_global):
-    st.title("📅 Seasonality")
-    if 'seas_single_df' not in st.session_state: st.session_state.seas_single_df = None
-    if 'seas_single_last_ticker' not in st.session_state: st.session_state.seas_single_last_ticker = ""
-    if 'seas_scan_results' not in st.session_state: st.session_state.seas_scan_results = None
-    if 'seas_scan_csvs' not in st.session_state: st.session_state.seas_scan_csvs = None
-    if 'seas_scan_active' not in st.session_state: st.session_state.seas_scan_active = False
-    
-    tab_single, tab_scan = st.tabs(["🔎 Single Ticker Analysis", "🚀 Opportunity Scanner"])
-    
-    with tab_single:
-        with st.expander("ℹ️ Page Notes: Methodology"):
-            st.markdown("""**📊 Calendar Month Performance**\n* **Year Total:** The **Compounded Return** for that year (Start Price vs End Price).\n* **Month Average:** The **AVERAGE** return for that specific month across the selected history.""")
-
-        c1, c2, c3 = st.columns([1, 1, 1])
-        with c1: ticker_input = st.text_input("Ticker", value="SPY", key="seas_ticker").strip().upper()
-        if not ticker_input:
-            st.info("Please enter a ticker symbol.")
-            return
-
-        ticker_map = ud.load_ticker_map()
-        if (ticker_input != st.session_state.seas_single_last_ticker) or (st.session_state.seas_single_df is None):
-            with st.spinner(f"Fetching history for {ticker_input}..."):
-                fetched_df = ud.fetch_history_optimized(ticker_input, ticker_map)
-                st.session_state.seas_single_df = fetched_df
-                st.session_state.seas_single_last_ticker = ticker_input
-        df = st.session_state.seas_single_df
-
-        if df is None or df.empty: st.error(f"Could not load data for {ticker_input}. Check the ticker symbol.")
-        else:
-            try:
-                temp_df = df.copy()
-                d_col = next((c for c in temp_df.columns if 'DATE' in c.upper()), None)
-                if d_col: 
-                    temp_df[d_col] = pd.to_datetime(temp_df[d_col])
-                    min_y = temp_df[d_col].dt.year.min()
-                    max_y = temp_df[d_col].dt.year.max()
-                else: min_y, max_y = 2000, date.today().year
-            except: min_y, max_y = 2000, date.today().year
-
-            # UPDATED: Constant
-            def_start = max(min_y, max_y - ud.SEAS_DEFAULT_LOOKBACK_YEARS)
-
-            with c2: start_year = st.number_input("Start Year (History)", min_value=min_y, max_value=max_y, value=def_start, key="seas_start")
-            with c3: end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_y, value=max_y, key="seas_end")
-
-            stats = ud.calculate_seasonality_stats(df, start_year, end_year)
-            if not stats: st.warning("Insufficient data for calculation.")
-            else:
-                avg_stats = stats['avg_stats']
-                win_rates = stats['win_rates']
-                curr_df = stats['curr_df']
-                hist_df = stats['hist_df']
-                
-                current_month = date.today().month
-                current_year = date.today().year
-                cur_val = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)).get(current_month, 0.0)
-                if pd.isna(cur_val): cur_val = 0.0
-                hist_avg = avg_stats.get(current_month, 0.0)
-                diff = cur_val - hist_avg
-                context_str = f"Outperforming Hist Avg of {ud.fmt_finance_str(hist_avg)}" if diff > 0 else f"Underperforming Hist Avg of {ud.fmt_finance_str(hist_avg)}"
-                cur_color = "#71d28a" if cur_val > 0 else "#f29ca0"
-
-                idx_next = (current_month % 12) + 1
-                idx_next_2 = ((current_month + 1) % 12) + 1
-                nm_name = ud.SEAS_MONTH_NAMES[idx_next-1]
-                nnm_name = ud.SEAS_MONTH_NAMES[idx_next_2-1]
-                nm_avg = avg_stats.get(idx_next, 0.0)
-                nm_wr = win_rates.get(idx_next, 0.0)
-                nnm_avg = avg_stats.get(idx_next_2, 0.0)
-                if nm_avg >= 1.5 and nm_wr >= 65: positioning = "🚀 <b>Strong Bullish.</b> Historically a standout month."
-                elif nm_avg > 0 and nm_wr >= 50: positioning = "↗️ <b>Mildly Bullish.</b> Positive bias, moderate conviction."
-                elif nm_avg < 0 and nm_avg > -1.0: positioning = "⚠️ <b>Choppy/Weak.</b> Historically drags or trends flat."
-                else: positioning = "🐻 <b>Bearish.</b> Historically a weak month."
-                trend_vs = "improves" if nnm_avg > nm_avg else "weakens"
-                
-                st.markdown(f"""<div style="background-color: rgba(128,128,128,0.05); border-left: 5px solid #66b7ff; padding: 15px; border-radius: 4px; margin-bottom: 25px;"><div style="font-weight: bold; font-size: 1.1em; margin-bottom: 8px; color: #444;">🤖 Seasonal Outlook</div><div style="margin-bottom: 4px;">• <b>Current ({ud.SEAS_MONTH_NAMES[current_month-1]}):</b> <span style="color:{cur_color}; font-weight:bold;">{ud.fmt_finance_str(cur_val)}</span>. {context_str}.</div><div style="margin-bottom: 4px;">• <b>Next Month ({nm_name}):</b> {positioning} (Avg: {ud.fmt_finance_str(nm_avg)}, Win Rate: {nm_wr:.1f}%)</div><div>• <b>Following ({nnm_name}):</b> Seasonality {trend_vs} to an average of <b>{ud.fmt_finance_str(nnm_avg)}</b>.</div></div>""", unsafe_allow_html=True)
-
-                col_chart1, col_chart2 = st.columns(2, gap="medium")
-                with col_chart1:
-                    st.subheader(f"📈 Performance Tracking")
-                    hist_cumsum = avg_stats.cumsum()
-                    line_data_hist = pd.DataFrame({'Month': range(1, 13), 'MonthName': ud.SEAS_MONTH_NAMES, 'Value': hist_cumsum.values, 'Type': f'Avg ({start_year}-{end_year})'})
-                    curr_monthly_stats = curr_df.groupby('Month')['Pct'].sum().reindex(range(1, 13)) 
-                    curr_cumsum = curr_monthly_stats.cumsum()
-                    valid_curr_indices = curr_monthly_stats.dropna().index
-                    line_data_curr = pd.DataFrame({'Month': valid_curr_indices, 'MonthName': [ud.SEAS_MONTH_NAMES[i-1] for i in valid_curr_indices], 'Value': curr_cumsum.loc[valid_curr_indices].values, 'Type': f'Current Year ({current_year})'})
-                    combined_line_data = pd.concat([line_data_hist, line_data_curr])
-                    combined_line_data['Label'] = combined_line_data['Value'].apply(ud.fmt_finance_str)
-                    line_base = alt.Chart(combined_line_data).encode(x=alt.X('MonthName', sort=ud.SEAS_MONTH_NAMES, title='Month'), y=alt.Y('Value', title='Cumulative Return (%)'), color=alt.Color('Type', legend=alt.Legend(orient='bottom', title=None)))
-                    st.altair_chart((line_base.mark_line(point=True) + line_base.mark_text(dy=-10, fontSize=12, fontWeight='bold').encode(text='Label')).properties(height=350).configure_axis(labelFontSize=11, titleFontSize=13), use_container_width=True)
-
-                with col_chart2:
-                    st.subheader(f"📊 Monthly Returns")
-                    hist_bar_data = pd.DataFrame({'Month': range(1, 13), 'MonthName': ud.SEAS_MONTH_NAMES, 'Value': avg_stats.values, 'Type': 'Historical Avg'})
-                    completed_curr_df = curr_df[curr_df['Month'] < current_month].copy()
-                    curr_bar_data = pd.DataFrame()
-                    if not completed_curr_df.empty:
-                        curr_vals = completed_curr_df.groupby('Month')['Pct'].mean()
-                        curr_bar_data = pd.DataFrame({'Month': curr_vals.index, 'MonthName': [ud.SEAS_MONTH_NAMES[i-1] for i in curr_vals.index], 'Value': curr_vals.values, 'Type': f'{current_year} Actual'})
-                    combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
-                    combined_bar_data['Label'] = combined_bar_data['Value'].apply(ud.fmt_finance_str)
-                    combined_bar_data['LabelY'] = combined_bar_data['Value'].apply(lambda x: max(0, x))
-                    base = alt.Chart(combined_bar_data).encode(x=alt.X('MonthName', sort=ud.SEAS_MONTH_NAMES, title=None))
-                    bars = base.mark_bar().encode(y=alt.Y('Value', title='Return (%)'), xOffset='Type', color=alt.condition(alt.datum.Value > 0, alt.value("#71d28a"), alt.value("#f29ca0")))
-                    text = base.mark_text(dy=-10, fontSize=11, fontWeight='bold', color='black').encode(y=alt.Y('LabelY'), xOffset='Type', text='Label')
-                    st.altair_chart((bars + text).properties(height=350).configure_axis(labelFontSize=11, titleFontSize=13), use_container_width=True)
-
-                st.markdown("##### 🎯 Historical Win Rate & Expectancy")
-                cols = st.columns(6); cols2 = st.columns(6)
-                for i in range(12):
-                    mn = ud.SEAS_MONTH_NAMES[i]; wr = win_rates.loc[i+1]; avg = avg_stats.loc[i+1]
-                    border_color = "#71d28a" if avg > 0 else "#f29ca0"
-                    target_col = cols[i] if i < 6 else cols2[i-6]
-                    target_col.markdown(f"""<div style="background-color: rgba(128,128,128,0.05); border-radius: 8px; padding: 8px 5px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {border_color};"><div style="font-size: 0.85rem; font-weight: bold; color: #555;">{mn}</div><div style="font-size: 0.75rem; color: #888; margin-top:2px;">Win Rate</div><div style="font-size: 1.0rem; font-weight: 700;">{wr:.1f}%</div><div style="font-size: 0.75rem; color: #888; margin-top:2px;">Avg Rtn</div><div style="font-size: 0.9rem; font-weight: 600; color: {'#1f7a1f' if avg > 0 else '#a11f1f'};">{ud.fmt_finance_str(avg)}</div></div>""", unsafe_allow_html=True)
-
-                st.markdown("---"); st.subheader("🗓️ Monthly Returns Heatmap")
-                full_pivot = ud.prepare_seasonality_heatmap(hist_df, completed_curr_df)
-                def color_map(val):
-                    if pd.isna(val): return ""
-                    if val == 0: return "color: #888;"
-                    color = "#1f7a1f" if val > 0 else "#a11f1f"
-                    bg_color = "rgba(113, 210, 138, 0.2)" if val > 0 else "rgba(242, 156, 160, 0.2)"
-                    return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
-                heatmap_config = {c: st.column_config.Column(width="small") for c in full_pivot.columns}
-                st.dataframe(full_pivot.style.format(ud.fmt_finance_str).applymap(color_map), use_container_width=True, height=(len(full_pivot)+1)*35+3, column_config=heatmap_config)
-
-    with tab_scan:
-        with st.expander("ℹ️ Page Notes: Methodology & Metrics"):
-            st.markdown(f"""**🚀 Rolling Forward Returns**\n* **Methodology**: Scans history for dates matching the Start Date (+/- {ud.SEAS_SCAN_WINDOW_DAYS} days) and calculates performance for future periods.\n* **Mean Reversion (Arbitrage)**: Looks for tickers with **Positive Seasonality** (Forward 21d EV > {ud.SEAS_ARB_EV_THRESH}%) but **Negative Recent Performance** (Trailing 21d < {ud.SEAS_ARB_RECENT_THRESH}%).""")
-
-        st.subheader("🚀 High-EV Seasonality Scanner")
-        sc1, sc2, sc3 = st.columns([1, 1, 1])
-        with sc1: scan_date = st.date_input("Start Date for Scan", value=date.today(), key="seas_scan_date")
-        with sc2:
-            min_mc_scan = st.selectbox("Min Market Cap", list(ud.SEAS_SCAN_MC_OPTIONS.keys()), index=2, key="seas_scan_mc")
-            mc_thresh_val = ud.SEAS_SCAN_MC_OPTIONS[min_mc_scan]
-        with sc3:
-            # UPDATED: Constants
-            scan_lookback = st.number_input("Lookback Years", min_value=ud.SEAS_SCAN_MIN_YEARS, max_value=ud.SEAS_SCAN_MAX_YEARS, value=ud.SEAS_SCAN_DEFAULT_YEARS, key="seas_scan_lb")
-            
-        start_scan = st.button("Run Scanner")
-        
-        if start_scan:
-            ticker_map = ud.load_ticker_map()
-            if not ticker_map: st.error("No TICKER_MAP found in secrets.")
-            else:
-                progress_bar = st.progress(0, text="Scanning tickers...")
-                res_df, all_csv_rows = ud.run_seasonality_scan(ticker_map, scan_date, scan_lookback, mc_thresh_val)
-                progress_bar.empty()
-                if res_df.empty:
-                    st.warning("No opportunities found.")
-                    st.session_state.seas_scan_results = None
-                else:
-                    st.session_state.seas_scan_results = res_df
-                    st.session_state.seas_scan_csvs = all_csv_rows
-                    st.session_state.seas_scan_active = True
-
-        if st.session_state.seas_scan_active and st.session_state.seas_scan_results is not None:
-            res_df = st.session_state.seas_scan_results
-            all_csv_rows = st.session_state.seas_scan_csvs
-            st.write("---")
-            def highlight_ev(val):
-                if pd.isna(val): return ""
-                color = "#1f7a1f" if val > 0 else "#a11f1f"
-                bg = "rgba(113, 210, 138, 0.25)" if val > 0 else "rgba(242, 156, 160, 0.25)"
-                return f'background-color: {bg}; color: {color}; font-weight: bold;'
-            def color_sharpe(val):
-                if pd.isna(val): return ""
-                if val < 1.0: return "background-color: #ffccbc; color: black"
-                if val < 2.0: return "background-color: #fff9c4; color: black"
-                if val < 3.0: return "background-color: #c8e6c9; color: black"
-                return "background-color: #81c784; color: black"
-
-            st.subheader(f"🗓️ Forward Returns (from {scan_date.strftime('%d %b')})")
-            c_scan1, c_scan2 = st.columns(2)
-            c_scan3, c_scan4 = st.columns(2)
-            # UPDATED: Table Height Constant
-            fixed_height = ud.SEAS_TABLE_HEIGHT
-
-            for col_obj, p_label, sort_col, sharpe_col, p_key in [
-                (c_scan1, "**+21 Trading Days**", "21d_EV", "21d_Sharpe", "21d"),
-                (c_scan2, "**+42 Trading Days**", "42d_EV", "42d_Sharpe", "42d"),
-                (c_scan3, "**+63 Trading Days**", "63d_EV", "63d_Sharpe", "63d"),
-                (c_scan4, "**+126 Trading Days**", "126d_EV", "126d_Sharpe", "126d")
-            ]:
-                with col_obj:
-                    st.markdown(p_label)
-                    if all_csv_rows[p_key]:
-                        df_details = pd.DataFrame(all_csv_rows[p_key]).sort_values(by=["Ticker", "Start Date"])
-                        csv_data = df_details.to_csv(index=False).encode('utf-8')
-                        st.download_button(label=f"💾 Download CSV", data=csv_data, file_name=f"seasonality_{p_key}_inputs_{scan_date.strftime('%Y%m%d')}.csv", mime="text/csv", key=f"dl_btn_{p_key}")
-                    top_df = res_df.sort_values(by=sort_col, ascending=False).head(20)
-                    st.dataframe(top_df[['Ticker', sort_col, sort_col.replace('EV','WR'), sharpe_col]].style.format({sort_col: ud.fmt_finance_str, sort_col.replace('EV','WR'): "{:.1f}%", sharpe_col: "{:.2f}"}).applymap(highlight_ev, subset=[sort_col]).applymap(color_sharpe, subset=[sharpe_col]), use_container_width=True, hide_index=True, height=fixed_height, column_config={sharpe_col: st.column_config.NumberColumn("Sharpe", help="Consistency Score (EV / StdDev). >2 is very consistent.")})
-
-            st.write("---")
-            arb_df = res_df[(res_df['21d_EV'] > ud.SEAS_ARB_EV_THRESH) & (res_df['Recent_21d'] < ud.SEAS_ARB_RECENT_THRESH)].copy()
-            if not arb_df.empty:
-                st.subheader("💎 Arbitrage / Catch-Up Candidates")
-                st.caption(f"Stocks with strong historical seasonality (EV > {ud.SEAS_ARB_EV_THRESH}%) that are currently beaten down (Recent < {ud.SEAS_ARB_RECENT_THRESH}%).")
-                arb_df['Anomaly_Score'] = arb_df['Hist_Lag_21d'] - arb_df['Recent_21d']
-                arb_display = arb_df.sort_values(by='Anomaly_Score', ascending=False).head(15)
-                st.dataframe(arb_display[['Ticker', 'Recent_21d', 'Hist_Lag_21d', '21d_EV', '21d_WR']].style.format({'Recent_21d': ud.fmt_finance_str, 'Hist_Lag_21d': ud.fmt_finance_str, '21d_EV': ud.fmt_finance_str, '21d_WR': "{:.1f}%"}).applymap(lambda x: 'color: #d32f2f; font-weight:bold;', subset=['Recent_21d']).applymap(lambda x: 'color: #2e7d32; font-weight:bold;', subset=['21d_EV']), use_container_width=True, hide_index=True, column_config={"Ticker": st.column_config.TextColumn("Ticker", width=None), "Recent_21d": st.column_config.TextColumn("Recent 21d (Actual)", help="How the stock performed in the last 21 days."), "Hist_Lag_21d": st.column_config.TextColumn("Hist. Trailing 21d (Avg)", help="How the stock USUALLY performs during this trailing 21 day period."), "21d_EV": st.column_config.TextColumn("Hist. Forward 21d (EV)", help="How the stock usually performs in the NEXT 21 days.")})
-
-def run_ema_distance_app(df_global):
-    st.title("📏 EMA Distance Analysis")
-    col_in1, col_in2, _ = st.columns([1, 1, 2])
-    with col_in1:
-        # UPDATED: Use Constant
-        ticker = st.text_input("Ticker", value=ud.EMA_DIST_DEFAULT_TICKER).upper().strip()
-    with col_in2:
-        # UPDATED: Use Constant
-        years_back = st.number_input("Years to Analyze", min_value=1, max_value=20, value=ud.EMA_DIST_DEFAULT_YEARS, step=1)
-    
-    if not ticker:
-        st.warning("Please enter a ticker.")
-        return
-
-    with st.spinner(f"Crunching data for {ticker}..."):
-        df_clean = ud.calculate_ema_distance_data(ticker, years_back)
-        if df_clean is None: return
-
-    close_col = 'CLOSE' if 'CLOSE' in df_clean.columns else 'Close'
-    low_col = 'LOW' if 'LOW' in df_clean.columns else 'Low'
-    date_col = next((c for c in df_clean.columns if 'DATE' in c), "DATE")
-    
-    current_price = df_clean[close_col].iloc[-1]
-    current_ema8 = df_clean['EMA_8'].iloc[-1]
-    current_dist_50 = df_clean['Dist_50'].iloc[-1]
-
-    st.subheader(f"{ticker} vs Moving Avgs & Percentiles")
-    with st.expander("ℹ️ Table User Guide"):
-        st.markdown(f"""**1. Key Metrics Tracked.**\nThe app calculates the percentage distance (the "Gap") between the current price and five different moving averages:\n* 8-day and 21-day EMA: Short-term momentum and "swing" levels.\n* 50-day, 100-day, and 200-day SMA: Medium to long-term trend baselines.\n\n**2. The "Rubber Band" Logic (Percentiles).**\nRather than just showing the current gap, the app looks at {years_back} years of history for that specific ticker to see how rare the current gap is. It calculates:\n* **p50 (Median):** The typical distance from the average.\n* **p70/p80 (Uptrend):** These levels generally occur in strong uptrends.\n* **p90/p95 (Extremes):** The levels reached only 10% or 5% of the time historically.\n\n**3. Visual Highlighting System.**\nThe table uses a traffic-light system to categorize the current price action:\n* 🟢 **Buy Zone (Green):** Triggered if the Gap is ≤ p50 (Median) AND price is > 8-EMA. Suggests a "pullback to the mean" in an uptrend.\n* 🟡 **Warning Zone (Yellow):** Triggered if the gap is between p50 and p90. Price is extending but not yet extreme.\n* 🔴 **Sell/Trim Zone (Red):** Triggered if the gap is $\ge$ p90. Price is statistically over-extended.""")
-
-    stats_data = []
-    thresholds = {} 
-    metrics = [("Close vs 8-EMA", df_clean['EMA_8'], df_clean['Dist_8']), ("Close vs 21-EMA", df_clean['EMA_21'], df_clean['Dist_21']), ("Close vs 50-SMA", df_clean['SMA_50'], df_clean['Dist_50']), ("Close vs 100-SMA", df_clean['SMA_100'], df_clean['Dist_100']), ("Close vs 200-SMA", df_clean['SMA_200'], df_clean['Dist_200'])]
-    for label, ma_series, dist_series in metrics:
-        p_vals = np.percentile(dist_series, [50, 70, 80, 90, 95])
-        thresholds[dist_series.name] = { 'p80': p_vals[2], 'p90': p_vals[3] }
-        stats_data.append({"Metric": label, "Price": current_price, "MA Level": ma_series.iloc[-1], "Gap": dist_series.iloc[-1], "Avg": dist_series.mean(), "p50": p_vals[0], "p70": p_vals[1], "p80": p_vals[2], "p90": p_vals[3], "p95": p_vals[4]})
-
-    df_stats = pd.DataFrame(stats_data)
-    def color_combined(row):
-        styles = [''] * len(row)
-        gap, p50, p90 = row['Gap'], row['p50'], row['p90']
-        idx_gap = df_stats.columns.get_loc("Gap")
-        if gap >= p90: styles[idx_gap] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
-        elif gap <= p50 and (current_price > current_ema8): styles[idx_gap] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
-        elif gap > p50 and gap < p90: styles[idx_gap] = 'background-color: #fff8e1; color: #d68f00;'
-        return styles
-
-    st.dataframe(df_stats.style.apply(color_combined, axis=1).format(ud.fmt_pct_display, subset=["Gap", "Avg", "p50", "p70", "p80", "p90", "p95"]), use_container_width=True, hide_index=True, column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f"), "MA Level": st.column_config.NumberColumn("MA Level", format="$%.2f")})
-    
-    st.subheader("Combo Over-Extension Signals")
-    t8_90 = thresholds['Dist_8']['p90']; t21_80 = thresholds['Dist_21']['p80']; t50_80 = thresholds['Dist_50']['p80']
-    m_d = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_80)
-    m_fs = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_50'] >= t50_80)
-    m_t = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_80) & (df_clean['Dist_50'] >= t50_80)
-    
-    res_d = ud.run_ema_backtest(m_d, df_clean[close_col], df_clean[low_col])
-    res_fs = ud.run_ema_backtest(m_fs, df_clean[close_col], df_clean[low_col])
-    res_t = ud.run_ema_backtest(m_t, df_clean[close_col], df_clean[low_col])
-
-    d_active = "✅" if bool(m_d.iloc[-1]) else "❌"
-    fs_active = "✅" if bool(m_fs.iloc[-1]) else "❌"
-    t_active = "✅" if bool(m_t.iloc[-1]) else "❌"
-
-    combo_rows = [
-        {"Combo Rule": "Double EMA", "Triggers": "(8-EMA Gap ≥ p90), (21-EMA Gap ≥ p80)", "Occurrences": res_d[0], "Hit Rate (>=8% Draw Down)": res_d[1], "Median Days to Draw Down": f"{int(res_d[2])} days", "Active Today?": d_active, "raw_status": bool(m_d.iloc[-1])},
-        {"Combo Rule": "Fast vs Swing", "Triggers": "(8-EMA gap ≥ p90), (50-SMA gap ≥ p80)", "Occurrences": res_fs[0], "Hit Rate (>=8% Draw Down)": res_fs[1], "Median Days to Draw Down": f"{int(res_fs[2])} days", "Active Today?": fs_active, "raw_status": bool(m_fs.iloc[-1])},
-        {"Combo Rule": "Triple Stack", "Triggers": "(8-EMA gap ≥ p90), (50-SMA gap ≥ p80), (21-EMA gap ≥ p80)", "Occurrences": res_t[0], "Hit Rate (>=8% Draw Down)": res_t[1], "Median Days to Draw Down": f"{int(res_t[2])} days", "Active Today?": t_active, "raw_status": bool(m_t.iloc[-1])}
-    ]
-    
-    df_combo = pd.DataFrame(combo_rows)
-    def style_combo(row): return ['font-weight: bold; color: #c5221f;' if row['raw_status'] else ''] * len(row)
-    st.dataframe(df_combo.style.apply(style_combo, axis=1).format({"Hit Rate (>=8% Draw Down)": "{:.1f}%"}), use_container_width=True, hide_index=True, column_config={"Triggers": st.column_config.TextColumn("Trigger Conditions", width="large"), "Active Today?": st.column_config.TextColumn("Active Today?", width="small")}, column_order=["Combo Rule", "Triggers", "Occurrences", "Hit Rate (>=8% Draw Down)", "Median Days to Draw Down", "Active Today?"])
-
-    st.subheader("Visualizing the % Distance from 50 SMA")
-    chart_data = pd.DataFrame({'Date': pd.to_datetime(df_clean[date_col]), 'Distance (%)': df_clean['Dist_50']})
-    # UPDATED: Use Constant
-    chart_data = chart_data[chart_data['Date'] >= (chart_data['Date'].max() - timedelta(days=ud.EMA_DIST_CHART_LOOKBACK))]
-
-    bars = alt.Chart(chart_data).mark_bar().encode(x=alt.X('Date:T', title=None), y=alt.Y('Distance (%)', title='% Dist from 50 SMA'), color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#71d28a"), alt.value("#f29ca0")), tooltip=['Date', 'Distance (%)'])
-    rule = alt.Chart(pd.DataFrame({'y': [current_dist_50]})).mark_rule(color='#333', strokeDash=[5, 5], strokeWidth=2).encode(y='y:Q')
-    st.altair_chart((bars + rule).properties(height=300).interactive(), use_container_width=True)
-
-
-
+        # Just the box, no headers
+        st.caption("Copy tickers:")
+        st.code(ticker_str, language="text")
