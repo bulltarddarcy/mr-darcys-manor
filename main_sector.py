@@ -125,7 +125,7 @@ def run_theme_momentum_app(df_global=None):
 
         # --- RIGHT: SECTOR FILTERS ---
         with col_filters:
-            st.markdown("**Sectors Shown**")
+            st.markdown("**Sectors Shown (Applies to Entire Page!)**")
             btn_col1, btn_col2, btn_col3 = st.columns(3)
             
             with btn_col1:
