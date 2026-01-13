@@ -283,56 +283,53 @@ def run_theme_momentum_app(df_global=None):
     # ==========================================
     st.subheader(f"📊 Stock Analysis")
 
-    # --- 1. SET DEFAULTS (SIMPLIFIED) ---
-    # Only runs once if defaults aren't present. No buttons or callbacks needed.
+    # --- 1. INITIALIZE SETTINGS STATE (Before Analysis) ---
+    # We must init these here so `analyze_stocks_batch` has values to use,
+    # even though the checkbox widgets are drawn later in the UI.
+    if "opt_show_divergences" not in st.session_state:
+        st.session_state.opt_show_divergences = False
+    if "opt_show_mkt_caps" not in st.session_state:
+        st.session_state.opt_show_mkt_caps = False
+    if "opt_show_biotech" not in st.session_state:
+        st.session_state.opt_show_biotech = False
+
+    # --- 2. SET DEFAULT FILTERS ---
     if 'filter_defaults' not in st.session_state:
         st.session_state.filter_defaults = {
             0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0, 'logic': 'AND'},
             1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3, 'logic': 'AND'},
             2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d', 'logic': 'AND'},
             3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
-            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf', 'logic': 'OR'},
+            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf'},
             5: {}, 6: {}, 7: {}
         }
     
-    # --- 2. RENDER CONTROLS ---
-    all_themes = ["All"] + sorted(filtered_map.keys())
-    if 'sector_target' not in st.session_state: st.session_state.sector_target = "All"
-    
-    col_sel, col_opt = st.columns([1, 1])
-    with col_sel:
-        st.session_state.sector_target = st.selectbox(
-            "Select Theme", all_themes,
-            index=all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0,
-            key="stock_theme_selector_unique"
-        )
-    with col_opt:
-        st.caption("Additional Settings")
-        c_opt1, c_opt2, c_opt3 = st.columns(3)
-        show_divergences = c_opt1.checkbox("Show Divergences", key="opt_show_divergences", help="Slower: Scans RSI history for divergences.")
-        show_mkt_caps = c_opt2.checkbox("Show Market Caps", key="opt_show_mkt_caps", help="Slower: Fetches live Market Cap.")
-        show_biotech = c_opt3.checkbox("Show Biotech", key="opt_show_biotech", value=False, help="Include Biotech theme.")
-
-    # --- 3. PROCESS DATA ---
+    # --- 3. PROCESS DATA (Using Global Filters) ---
+    # Create theme category map for the table
     theme_cat_map = {}
     for cat_list in categories.values():
         for t in cat_list:
             theme_cat_map[t['theme']] = t['display_category']
 
-    selected_theme = st.session_state.sector_target
-    
-    if selected_theme == "All":
-        stock_theme_pairs = [(row['Ticker'], row['Theme']) for _, row in uni_df[uni_df['Role'] == 'Stock'].iterrows() if row['Theme'] in filtered_map]
-    else:
-        stock_theme_pairs = [(row['Ticker'], row['Theme']) for _, row in uni_df[(uni_df['Theme'] == selected_theme) & (uni_df['Role'] == 'Stock')].iterrows()]
+    # Generate Stock List based on Global Filter (Top of page)
+    # We always load ALL stocks matching the global filter
+    stock_theme_pairs = []
+    for _, row in uni_df[uni_df['Role'] == 'Stock'].iterrows():
+        if row['Theme'] in filtered_map:
+            stock_theme_pairs.append((row['Ticker'], row['Theme']))
     
     if not stock_theme_pairs:
-        st.info(f"No stocks found")
+        st.info(f"No stocks found for selected themes.")
         return
 
+    # Run Analysis (using session state values for options)
     df_stocks = us.analyze_stocks_batch(
-        etf_data_cache, stock_theme_pairs, show_divergences, 
-        show_mkt_caps, show_biotech, theme_cat_map
+        etf_data_cache, 
+        stock_theme_pairs, 
+        st.session_state.opt_show_divergences, 
+        st.session_state.opt_show_mkt_caps, 
+        st.session_state.opt_show_biotech, 
+        theme_cat_map
     )
 
     if df_stocks.empty:
@@ -344,10 +341,29 @@ def run_theme_momentum_app(df_global=None):
     with st.expander("ℹ️ How are RVOL and Alpha calculated?"):
         st.markdown(r"""
         ### **1. RVOL (Relative Volume) - 5, 10, & 20 Days**
-        ... (Explanation preserved) ...
+        The calculation establishes a daily relative volume ratio and averages it over specific timeframes.
+        **Daily Calculation:** $\text{Daily RVOL} = \frac{\text{Volume}}{\text{Avg Volume (Last 20 Days)}}$
+        **Timeframes:** Average of Daily RVOL over 5/10/20 days.
+        > An RVOL of **1.3** means 130% of normal volume.
+        
+        ### **2. Alpha - 5, 10, & 20 Days**
+        Excess return relative to Sector ETF, adjusted for Beta.
+        1. **Beta ($\beta$):** 60-day rolling correlation.
+        2. **Expected Return:** $\text{Sector \%} \times \beta$
+        3. **Alpha:** $\text{Stock \%} - \text{Expected Return}$
+        > Alpha 5d of **3.0** means outperformance by 3% over the week.
         """)
     
-    st.caption("Filters apply automatically as you change them.")
+    # --- MOVED SETTINGS CHECKBOXES HERE ---
+    c_opt1, c_opt2, c_opt3 = st.columns(3)
+    with c_opt1:
+        st.checkbox("Show Divergences", key="opt_show_divergences", help="Slower: Scans RSI history for divergences.")
+    with c_opt2:
+        st.checkbox("Show Market Caps", key="opt_show_mkt_caps", help="Slower: Fetches live Market Cap data from Yahoo Finance.")
+    with c_opt3:
+        st.checkbox("Show Biotech", key="opt_show_biotech", value=False, help="Include Biotech theme.")
+    
+    st.divider() # Separation
     
     # Define Columns
     numeric_columns = ["Price", "Market Cap (B)", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
