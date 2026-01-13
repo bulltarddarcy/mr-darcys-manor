@@ -102,7 +102,30 @@ def run_rankings_app(df):
         
         min_mkt_cap_rank = st.selectbox("Min Market Cap", mc_options, index=default_mc_index, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
         filter_ema = st.checkbox("Hide < 8 EMA", value=False, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
-        
+
+    # --- INSERT USER GUIDE HERE ---
+    with st.expander("ℹ️ Page User Guide"):
+        st.markdown("### 🏆 Methodology Breakdown")
+        ug1, ug2 = st.columns(2, gap="medium")
+        with ug1:
+            st.markdown("**1. 🧠 Smart Money Score (0-100)**")
+            st.markdown("""
+            A weighted multi-factor model designed to identify high-conviction institutional flow, normalized on a 0-100 scale.
+            * **Sentiment (35%):** Net Premium `(Calls Bought + Puts Sold) - Puts Bought`.
+            * **Impact (30%):** Sentiment relative to Market Cap (detects "outsized" bets).
+            * **Momentum (35%):** Flow velocity over the last 3 active trading days.
+            """)
+        with ug2:
+            st.markdown("**2. 🤡 Legacy Volume Score**")
+            st.markdown("""
+            A raw counting metric for determining simple directionality.
+            * **Formula:** `(Calls Bought + Puts Sold) - Puts Bought`.
+            * **Sorting:** Ranked by this raw Score first, then by total Trade Count.
+            """)
+        st.markdown("---")
+        st.caption("💡 **Top 3 Ideas:** This tab takes the top **Smart Money** candidates and runs them through a technical filter (Trend Alignment, RSI, Whale Support levels) to find the best confluence.")
+    # ------------------------------
+
     f_filtered = ud.filter_rankings_data(df, rank_start, rank_end)
     
     if f_filtered.empty:
