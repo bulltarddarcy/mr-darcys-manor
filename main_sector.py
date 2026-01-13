@@ -446,15 +446,16 @@ def run_theme_momentum_app(df_global=None):
     df_filtered = us.apply_stock_filters(df_stocks, filters)
     
     # Display Results
-    st.caption(f"**Showing {len(df_filtered)} of {len(df_stocks)} stocks**")
+    st.caption(f"**Showing {len(df_filtered)} of {len(df_stocks)} stock-theme combinations**")
 
-    # --- MOVED SETTINGS CHECKBOXES HERE ---
-    c_opt1, c_opt2, c_opt3 = st.columns(3)
-    with c_opt1:
+    # --- SETTINGS CHECKBOXES (Horizontal Compact) ---
+    # The [2, 2, 2, 6] ratio keeps them close on the left and leaves empty space on the right
+    c1, c2, c3, _ = st.columns([2, 2, 2, 6]) 
+    with c1:
         st.checkbox("Show Divergences", key="opt_show_divergences", help="Slower: Scans RSI history for divergences.")
-    with c_opt2:
+    with c2:
         st.checkbox("Show Market Caps", key="opt_show_mkt_caps", help="Slower: Fetches live Market Cap data from Yahoo Finance.")
-    with c_opt3:
+    with c3:
         st.checkbox("Show Biotech", key="opt_show_biotech", value=False, help="Include Biotech theme.")
 
     column_config = {
