@@ -88,7 +88,9 @@ def run_rankings_app(df):
             st.session_state[saved_key] = st.session_state[key]
     
     # UI Inputs
-    c1, c2, c3, c4 = st.columns([1, 1, 0.7, 1.3], gap="small")
+    # UPDATED: Adjusted columns to fit 5 items on one row
+    c1, c2, c3, c4, c5 = st.columns([1, 1, 0.6, 1, 1], gap="small")
+    
     with c1: 
         rank_start = st.date_input("Trade Start Date", value=st.session_state.saved_rank_start, key="rank_start", on_change=save_rank_state, args=("rank_start", "saved_rank_start"))
     with c2: 
@@ -99,9 +101,15 @@ def run_rankings_app(df):
         # UPDATED: Use Keys from Utils
         mc_options = list(ud.RANK_MC_THRESHOLDS.keys())
         default_mc_index = mc_options.index("10B") if "10B" in mc_options else 0
-        
         min_mkt_cap_rank = st.selectbox("Min Market Cap", mc_options, index=default_mc_index, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
-        filter_ema = st.checkbox("Hide < 8 EMA", value=False, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
+    with c5:
+        # UPDATED: Converted Checkbox to Selectbox
+        saved_ema = st.session_state.saved_rank_ema
+        # Handle both boolean (legacy) and string (new) state
+        ema_idx = 1 if (saved_ema is True or saved_ema == "Yes") else 0
+        
+        ema_str = st.selectbox("Hide < 8 EMA", ["No", "Yes"], index=ema_idx, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
+        filter_ema = (ema_str == "Yes")
 
     # --- INSERT USER GUIDE HERE ---
     with st.expander("ℹ️ Page User Guide"):
