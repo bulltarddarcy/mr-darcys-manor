@@ -27,6 +27,13 @@ def get_ma_signal(price: float, ma_val: float) -> str:
         return "⚠️"
     return "✅" if price > ma_val else "❌"
 
+def shorten_category_name(name):
+    """Helper to shorten category names for UI display."""
+    return name.replace("Gaining Momentum", "Gain Mom") \
+               .replace("Losing Momentum", "Lose Mom") \
+               .replace("Outperforming", "Outperf") \
+               .replace("Underperforming", "Underperf")
+
 # ==========================================
 # MAIN PAGE FUNCTION
 # ==========================================
@@ -199,25 +206,25 @@ def run_theme_momentum_app(df_global=None):
         st.session_state.chart_filter = "all"
         st.rerun()
     
-    # Row 2: Category buttons
+    # Row 2: Category buttons (Shortened names)
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("⬈ Gaining Momentum & Outperforming", use_container_width=True, key="filter_gain_out"):
+        if st.button("⬈ Gain Mom & Outperf", use_container_width=True, key="filter_gain_out"):
             st.session_state.chart_filter = "gaining_mom_outperforming"
             st.rerun()
     with col2:
-        if st.button("⬉ Gaining Momentum & Underperforming", use_container_width=True, key="filter_gain_under"):
+        if st.button("⬉ Gain Mom & Underperf", use_container_width=True, key="filter_gain_under"):
             st.session_state.chart_filter = "gaining_mom_underperforming"
             st.rerun()
     
-    # Row 3: Category buttons
+    # Row 3: Category buttons (Shortened names)
     col3, col4 = st.columns(2)
     with col3:
-        if st.button("⬊ Losing Momentum & Outperforming", use_container_width=True, key="filter_lose_out"):
+        if st.button("⬊ Lose Mom & Outperf", use_container_width=True, key="filter_lose_out"):
             st.session_state.chart_filter = "losing_mom_outperforming"
             st.rerun()
     with col4:
-        if st.button("⬋ Losing Momentum & Underperforming", use_container_width=True, key="filter_lose_under"):
+        if st.button("⬋ Lose Mom & Underperf", use_container_width=True, key="filter_lose_under"):
             st.session_state.chart_filter = "losing_mom_underperforming"
             st.rerun()
     
@@ -236,10 +243,10 @@ def run_theme_momentum_app(df_global=None):
         
         # Get category name for display
         category_names = {
-            'gaining_mom_outperforming': '⬈ Gaining Momentum & Outperforming',
-            'gaining_mom_underperforming': '⬉ Gaining Momentum & Underperforming',
-            'losing_mom_outperforming': '⬊ Losing Momentum & Outperforming',
-            'losing_mom_underperforming': '⬋ Losing Momentum & Underperforming'
+            'gaining_mom_outperforming': '⬈ Gain Mom & Outperf',
+            'gaining_mom_underperforming': '⬉ Gain Mom & Underperf',
+            'losing_mom_outperforming': '⬊ Lose Mom & Outperf',
+            'losing_mom_underperforming': '⬋ Lose Mom & Underperf'
         }
         st.caption(f"Showing {len(filtered_map_chart)} themes in {category_names.get(st.session_state.chart_filter, 'category')}")
     
@@ -264,34 +271,35 @@ def run_theme_momentum_app(df_global=None):
     
     st.divider()
 
-    # --- 7. SECTOR OVERVIEW ---
-    st.subheader("📊 Sector Overview")
+    # --- 7. SECTOR OVERVIEW (RENAMED TO THEME CATEGORIES) ---
+    st.subheader("📊 Theme Categories")
     
-    # Help section
-    col_help1, col_help2 = st.columns([4, 1])
-    with col_help2:
+    # Guides - Refactored Layout
+    col_guide1, col_guide2 = st.columns([1, 1], gap="small")
+    
+    with col_guide1:
         with st.popover("📖 How Categories Work", use_container_width=True):
             st.markdown("""
             ### Understanding Momentum & Performance Categories
             
             Sectors are categorized based on their **10-day trend direction**:
             
-            **⬈ Gaining Momentum & Outperforming**
+            **⬈ Gain Mom & Outperf**
             - Moving up AND right on RRG chart
             - Both accelerating AND outperforming benchmark
             → **Best opportunity** - sector gaining strength
             
-            **⬉ Gaining Momentum & Underperforming**
+            **⬉ Gain Mom & Underperf**
             - Moving up but still on left side
             - Accelerating but still behind benchmark
             → **Potential reversal** - watch for breakout
             
-            **⬊ Losing Momentum & Outperforming**
+            **⬊ Lose Mom & Outperf**
             - Moving down but still on right side
             - Decelerating but still ahead of benchmark
             → **Topping** - take profits, avoid new entries
             
-            **⬋ Losing Momentum & Underperforming**
+            **⬋ Lose Mom & Underperf**
             - Moving down AND left on RRG chart
             - Both decelerating AND underperforming
             → **Avoid** - sector in decline
@@ -303,10 +311,11 @@ def run_theme_momentum_app(df_global=None):
             - "5d confirming trend" = Strong ⭐⭐
             - "5d lagging behind" = Weak ⭐
             """)
-            st.markdown("---")
-            if st.button("📖 View All Possible Combinations", use_container_width=True):
-                st.session_state.show_full_guide = True
-                st.rerun()
+            
+    with col_guide2:
+        if st.button("📖 View All Possible Combinations", use_container_width=True):
+            st.session_state.show_full_guide = True
+            st.rerun()
     
     # Show full combinations guide if requested
     if st.session_state.get('show_full_guide', False):
@@ -320,7 +329,7 @@ def run_theme_momentum_app(df_global=None):
             
             Each of the 4 main categories can have 3 confirmation states from the 5-day window.
             
-            ### 1. ⬈ Gaining Momentum & Outperforming
+            ### 1. ⬈ Gain Mom & Outperf
             
             **Best case - sector improving on both axes**
             
@@ -344,7 +353,7 @@ def run_theme_momentum_app(df_global=None):
             
             ---
             
-            ### 2. ⬉ Gaining Momentum & Underperforming
+            ### 2. ⬉ Gain Mom & Underperf
             
             **Bottoming - picking up speed but still behind benchmark**
             
@@ -368,7 +377,7 @@ def run_theme_momentum_app(df_global=None):
             
             ---
             
-            ### 3. ⬊ Losing Momentum & Outperforming
+            ### 3. ⬊ Lose Mom & Outperf
             
             **Topping - still ahead of benchmark but decelerating**
             
@@ -392,7 +401,7 @@ def run_theme_momentum_app(df_global=None):
             
             ---
             
-            ### 4. ⬋ Losing Momentum & Underperforming
+            ### 4. ⬋ Lose Mom & Underperf
             
             **Worst case - decline on both axes**
             
@@ -434,7 +443,7 @@ def run_theme_momentum_app(df_global=None):
     
     # --- CATEGORY 1: Gaining Momentum & Outperforming ---
     if categories['gaining_mom_outperforming']:
-        st.success(f"⬈ **GAINING MOMENTUM & OUTPERFORMING** ({len(categories['gaining_mom_outperforming'])} sectors)")
+        st.success(f"⬈ **GAIN MOM & OUTPERF** ({len(categories['gaining_mom_outperforming'])} sectors)")
         st.caption("✅ **Best Opportunities** - Sectors accelerating with momentum building. 🆕 Day 1 = Fresh entry!")
         
         data = []
@@ -448,10 +457,13 @@ def run_theme_momentum_app(df_global=None):
             else:
                 days_display = f"Day {days}"
             
+            # Shorten display category
+            short_cat = shorten_category_name(theme_info['category'])
+            
             data.append({
                 "Sector": theme_info['theme'],
                 "Days": days_display,
-                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "Category": theme_info['arrow'] + " " + short_cat,
                 "5d": theme_info['quadrant_5d'],
                 "10d": theme_info['quadrant_10d'],
                 "20d": theme_info['quadrant_20d'],
@@ -472,11 +484,11 @@ def run_theme_momentum_app(df_global=None):
             }
         )
     else:
-        st.info("⬈ **GAINING MOMENTUM & OUTPERFORMING** - No sectors currently in this category")
+        st.info("⬈ **GAIN MOM & OUTPERF** - No sectors currently in this category")
     
     # --- CATEGORY 2: Gaining Momentum & Underperforming ---
     if categories['gaining_mom_underperforming']:
-        st.info(f"⬉ **GAINING MOMENTUM & UNDERPERFORMING** ({len(categories['gaining_mom_underperforming'])} sectors)")
+        st.info(f"⬉ **GAIN MOM & UNDERPERF** ({len(categories['gaining_mom_underperforming'])} sectors)")
         st.caption("🔄 **Potential Reversals** - Sectors bottoming, watch for breakout. 🆕 Day 1 = Fresh reversal!")
         
         data = []
@@ -489,10 +501,12 @@ def run_theme_momentum_app(df_global=None):
             else:
                 days_display = f"Day {days}"
             
+            short_cat = shorten_category_name(theme_info['category'])
+
             data.append({
                 "Sector": theme_info['theme'],
                 "Days": days_display,
-                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "Category": theme_info['arrow'] + " " + short_cat,
                 "5d": theme_info['quadrant_5d'],
                 "10d": theme_info['quadrant_10d'],
                 "20d": theme_info['quadrant_20d'],
@@ -512,11 +526,11 @@ def run_theme_momentum_app(df_global=None):
             }
         )
     else:
-        st.info("⬉ **GAINING MOMENTUM & UNDERPERFORMING** - No sectors currently in this category")
+        st.info("⬉ **GAIN MOM & UNDERPERF** - No sectors currently in this category")
     
     # --- CATEGORY 3: Losing Momentum & Outperforming ---
     if categories['losing_mom_outperforming']:
-        st.warning(f"⬊ **LOSING MOMENTUM & OUTPERFORMING** ({len(categories['losing_mom_outperforming'])} sectors)")
+        st.warning(f"⬊ **LOSE MOM & OUTPERF** ({len(categories['losing_mom_outperforming'])} sectors)")
         st.caption("⚠️ **Topping** - Take profits, avoid new entries. 🆕 Day 1 = Just started losing steam")
         
         data = []
@@ -529,10 +543,12 @@ def run_theme_momentum_app(df_global=None):
             else:
                 days_display = f"Day {days}"
             
+            short_cat = shorten_category_name(theme_info['category'])
+
             data.append({
                 "Sector": theme_info['theme'],
                 "Days": days_display,
-                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "Category": theme_info['arrow'] + " " + short_cat,
                 "5d": theme_info['quadrant_5d'],
                 "10d": theme_info['quadrant_10d'],
                 "20d": theme_info['quadrant_20d'],
@@ -552,11 +568,11 @@ def run_theme_momentum_app(df_global=None):
             }
         )
     else:
-        st.info("⬊ **LOSING MOMENTUM & OUTPERFORMING** - No sectors currently in this category")
+        st.info("⬊ **LOSE MOM & OUTPERF** - No sectors currently in this category")
     
     # --- CATEGORY 4: Losing Momentum & Underperforming ---
     if categories['losing_mom_underperforming']:
-        st.error(f"⬋ **LOSING MOMENTUM & UNDERPERFORMING** ({len(categories['losing_mom_underperforming'])} sectors)")
+        st.error(f"⬋ **LOSE MOM & UNDERPERF** ({len(categories['losing_mom_underperforming'])} sectors)")
         st.caption("❌ **Avoid** - Sectors declining on both metrics")
         
         data = []
@@ -569,10 +585,12 @@ def run_theme_momentum_app(df_global=None):
             else:
                 days_display = f"Day {days}"
             
+            short_cat = shorten_category_name(theme_info['category'])
+
             data.append({
                 "Sector": theme_info['theme'],
                 "Days": days_display,
-                "Category": theme_info['arrow'] + " " + theme_info['category'],
+                "Category": theme_info['arrow'] + " " + short_cat,
                 "5d": theme_info['quadrant_5d'],
                 "10d": theme_info['quadrant_10d'],
                 "20d": theme_info['quadrant_20d'],
@@ -592,7 +610,7 @@ def run_theme_momentum_app(df_global=None):
             }
         )
     else:
-        st.info("⬋ **LOSING MOMENTUM & UNDERPERFORMING** - No sectors currently in this category")
+        st.info("⬋ **LOSE MOM & UNDERPERF** - No sectors currently in this category")
     
     st.markdown("---")
     
@@ -637,16 +655,16 @@ def run_theme_momentum_app(df_global=None):
     # Get momentum/performance categories for theme categorization
     categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
     
-    # Build theme -> category mapping
+    # Build theme -> category mapping (SHORT NAMES)
     theme_category_map = {}
     for theme_info in categories.get('gaining_mom_outperforming', []):
-        theme_category_map[theme_info['theme']] = "⬈ Gaining Momentum & Outperforming"
+        theme_category_map[theme_info['theme']] = "⬈ Gain Mom & Outperf"
     for theme_info in categories.get('gaining_mom_underperforming', []):
-        theme_category_map[theme_info['theme']] = "⬉ Gaining Momentum & Underperforming"
+        theme_category_map[theme_info['theme']] = "⬉ Gain Mom & Underperf"
     for theme_info in categories.get('losing_mom_outperforming', []):
-        theme_category_map[theme_info['theme']] = "⬊ Losing Momentum & Outperforming"
+        theme_category_map[theme_info['theme']] = "⬊ Lose Mom & Outperf"
     for theme_info in categories.get('losing_mom_underperforming', []):
-        theme_category_map[theme_info['theme']] = "⬋ Losing Momentum & Underperforming"
+        theme_category_map[theme_info['theme']] = "⬋ Lose Mom & Underperf"
     
     # Filter stocks for selected theme(s)
     if selected_theme == "All":
@@ -862,8 +880,8 @@ def run_theme_momentum_app(df_global=None):
                 0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0},
                 1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
                 2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
-                3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gaining Momentum & Outperforming', 'logic': 'OR'},
-                4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gaining Momentum & Underperforming'},
+                3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
+                4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf'},
                 5: {}  # 6th filter starts empty
             }
         else:
