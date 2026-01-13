@@ -189,14 +189,16 @@ def run_theme_momentum_app(df_global=None):
                 label_visibility="collapsed"
             )
     
+    # --- GLOBAL FILTER APPLICATION ---
+    # We apply this map to ALL downstream functions
     filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
     view_key = timeframe_map[st.session_state.sector_view]
 
     # --- 6. RRG CHART ---
     
-    # Get categories for filtering
-    categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
+    # Get categories for filtering (Uses filtered_map to align with global filter)
+    categories = us.get_momentum_performance_categories(etf_data_cache, filtered_map)
     
     # Category filter buttons
     st.markdown("**Filter Chart by Category:**")
@@ -232,7 +234,7 @@ def run_theme_momentum_app(df_global=None):
     if 'chart_filter' not in st.session_state:
         st.session_state.chart_filter = "all"
     
-    # Apply filter to theme map
+    # Apply chart-specific category filter to the already filtered_map
     if st.session_state.chart_filter == "all":
         filtered_map_chart = filtered_map
         st.caption(f"Showing all {len(filtered_map_chart)} themes")
@@ -438,8 +440,8 @@ def run_theme_momentum_app(df_global=None):
             - ⬋ with any 5d = Both metrics declining
             """)
     
-    # Get momentum/performance categories
-    categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
+    # Get momentum/performance categories (USING GLOBAL FILTER)
+    categories = us.get_momentum_performance_categories(etf_data_cache, filtered_map)
     
     # --- CATEGORY 1: Gaining Momentum & Outperforming ---
     if categories['gaining_mom_outperforming']:
@@ -616,44 +618,49 @@ def run_theme_momentum_app(df_global=None):
     
     st.subheader(f"📊 Stock Analysis")
     
-    # Theme selector with "All" option (unique key)
-    all_themes = ["All"] + sorted(theme_map.keys())
+    # Theme selector with "All" option (Using filtered map to match global filter)
+    all_themes = ["All"] + sorted(filtered_map.keys())
     
     # Initialize sector_target if not exists
     if 'sector_target' not in st.session_state:
         st.session_state.sector_target = "All"
     
-    # --- UI CONTROLS & OPTIONAL SETTINGS ---
-    col_sel, col_opt = st.columns([1, 1])
+    # --- UI CONTROLS & OPTIONAL SETTINGS (REFACTORED) ---
+    col_sel, col_space = st.columns([1, 2])
     with col_sel:
-        selected_theme = st.selectbox(
+        st.session_state.sector_target = st.selectbox(
             "Select Theme",
             all_themes,
             index=all_themes.index(st.session_state.sector_target) if st.session_state.sector_target in all_themes else 0,
             key="stock_theme_selector_unique"
         )
         
-    with col_opt:
-        st.caption("Performance Settings")
-        c_opt1, c_opt2 = st.columns(2)
+        st.markdown('<div style="margin-top: 10px;"></div>', unsafe_allow_html=True)
+        st.caption("Additional Settings")
+        
+        c_opt1, c_opt2, c_opt3 = st.columns(3)
         with c_opt1:
             show_divergences = st.checkbox(
                 "Show Divergences", 
-                value=False, 
+                key="opt_show_divergences",
                 help="Slower: Scans RSI history for divergences."
             )
         with c_opt2:
             show_mkt_caps = st.checkbox(
                 "Show Market Caps", 
-                value=False, 
+                key="opt_show_mkt_caps",
                 help="Slower: Fetches live Market Cap data from Yahoo Finance."
             )
+        with c_opt3:
+            show_biotech = st.checkbox(
+                "Show Biotech",
+                key="opt_show_biotech",
+                value=False,
+                help="Enable this to include stocks from the 'Biotech' theme in the analysis table."
+            )
     
-    # Update session state
-    st.session_state.sector_target = selected_theme
-    
-    # Get momentum/performance categories for theme categorization
-    categories = us.get_momentum_performance_categories(etf_data_cache, theme_map)
+    # Get momentum/performance categories for theme categorization (Using global filter)
+    categories = us.get_momentum_performance_categories(etf_data_cache, filtered_map)
     
     # Build theme -> category mapping (SHORT NAMES)
     theme_category_map = {}
@@ -666,14 +673,18 @@ def run_theme_momentum_app(df_global=None):
     for theme_info in categories.get('losing_mom_underperforming', []):
         theme_category_map[theme_info['theme']] = "⬋ Lose Mom & Underperf"
     
+    selected_theme = st.session_state.sector_target
+
     # Filter stocks for selected theme(s)
+    # Important: Apply Global Filter (filtered_map) logic even when "All" is selected
     if selected_theme == "All":
-        # Get all stocks and their themes
+        # Get all stocks and their themes, BUT ONLY if theme is in global filter
         stock_theme_pairs = []
         for _, row in uni_df[uni_df['Role'] == 'Stock'].iterrows():
-            stock_theme_pairs.append((row['Ticker'], row['Theme']))
+            if row['Theme'] in filtered_map:
+                stock_theme_pairs.append((row['Ticker'], row['Theme']))
     else:
-        # Get stocks for selected theme
+        # Get stocks for selected theme (implicitly respects global filter as selection is from it)
         stock_theme_pairs = []
         for _, row in uni_df[(uni_df['Theme'] == selected_theme) & (uni_df['Role'] == 'Stock')].iterrows():
             stock_theme_pairs.append((row['Ticker'], row['Theme']))
@@ -693,6 +704,10 @@ def run_theme_momentum_app(df_global=None):
 
     # 2. Define Helper for Parallel Execution
     def process_single_stock(stock, stock_theme):
+        # BIOTECH FILTER: Strict exclusion if box is unchecked
+        if stock_theme == "Biotech" and not show_biotech:
+            return None
+
         sdf = etf_data_cache.get(stock)
         
         # Fast Fail: Check data existence and length
@@ -794,7 +809,7 @@ def run_theme_momentum_app(df_global=None):
     # --- OPTIMIZATION END ---
 
     if not stock_data:
-        st.info(f"No stocks found (or filtered by volume).")
+        st.info(f"No stocks found (or filtered by volume/Biotech setting).")
         return
     
     df_stocks = pd.DataFrame(stock_data)
@@ -835,7 +850,7 @@ def run_theme_momentum_app(df_global=None):
         > An Alpha 5d of **3.0** means the stock has outperformed its expected sector-adjusted return by **3%** over the last week.
         """)
     
-    st.caption("Build up to 6 filters. Filters apply automatically as you change them.")
+    st.caption("Build up to 8 filters. Filters apply automatically as you change them.")
     
     # Filterable columns (numeric and categorical)
     numeric_columns = ["Price", "Market Cap (B)", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
@@ -852,8 +867,8 @@ def run_theme_momentum_app(df_global=None):
     unique_50ma = sorted(df_stocks['50 MA'].unique().tolist())
     unique_200ma = sorted(df_stocks['200 MA'].unique().tolist())
     
-    # Clear button with query params to force clean reload
-    col_clear, col_space = st.columns([1, 5])
+    # Filter Buttons: Clear & Darcy Special
+    col_clear, col_special, col_space = st.columns([1, 1, 3])
     with col_clear:
         if st.button("🗑️ Clear Filters", type="secondary", use_container_width=True):
             # Delete all filter-related keys INCLUDING filter_defaults
@@ -864,12 +879,42 @@ def run_theme_momentum_app(df_global=None):
             # Set a flag that we've cleared (so defaults don't reload)
             st.session_state.filters_were_cleared = True
             st.rerun()
+            
+    with col_special:
+        if st.button("✨ Darcy Special", type="primary", use_container_width=True):
+            # 1. Enable Additional Settings
+            st.session_state.opt_show_divergences = True
+            st.session_state.opt_show_mkt_caps = True
+            
+            # 2. Reset Clear Flag
+            st.session_state.filters_were_cleared = False
+            st.session_state.default_filters_set = True
+            
+            # 3. Define Presets (Alpha, RVOL, MktCap, Themes, Div)
+            # Logic: (Num AND Num AND ...) AND (Theme OR Theme OR Div)
+            new_defaults = {
+                0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
+                1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
+                2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+                3: {'column': 'Market Cap (B)', 'operator': '>=', 'type': 'Number', 'value': 5.0},
+                # Chain OR logic for categories/div
+                4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
+                5: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf', 'logic': 'OR'},
+                6: {'column': 'Div', 'operator': '=', 'type': 'Categorical', 'value_cat': '🟢 Bullish'},
+                7: {}
+            }
+            # Fill remaining empty slots up to 8
+            for i in range(8):
+                if i not in new_defaults:
+                    new_defaults[i] = {}
+            
+            st.session_state.filter_defaults = new_defaults
+            st.rerun()
     
     # Always ensure filter_defaults exists
     if 'filter_defaults' not in st.session_state:
-        st.session_state.filter_defaults = {
-            0: {}, 1: {}, 2: {}, 3: {}, 4: {}, 5: {}
-        }
+        st.session_state.filter_defaults = {}
+        for i in range(8): st.session_state.filter_defaults[i] = {}
     
     # Initialize default filters on first load ONLY (not after clearing)
     if 'default_filters_set' not in st.session_state:
@@ -882,21 +927,20 @@ def run_theme_momentum_app(df_global=None):
                 2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
                 3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
                 4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf'},
-                5: {}  # 6th filter starts empty
+                5: {}, 6: {}, 7: {}
             }
         else:
             # We just cleared, so set empty defaults
             st.session_state.default_filters_set = True
-            st.session_state.filter_defaults = {
-                0: {}, 1: {}, 2: {}, 3: {}, 4: {}, 5: {}
-            }
+            st.session_state.filter_defaults = {}
+            for i in range(8): st.session_state.filter_defaults[i] = {}
             # Clear the flag for next time
             st.session_state.filters_were_cleared = False
     
-    # Create 6 filter rows (always visible)
+    # Create 8 filter rows (expanded for Darcy Special)
     filters = []
     
-    for i in range(6):
+    for i in range(8):
         cols = st.columns([0.20, 0.08, 0.22, 0.35, 0.15])
         
         # Get default for this filter if exists
@@ -1110,7 +1154,7 @@ def run_theme_momentum_app(df_global=None):
         
         with cols[4]:
             # Logic connector (except for last filter)
-            if i < 5 and column is not None:
+            if i < 7 and column is not None:
                 logic = st.radio(
                     "Logic",
                     ["AND", "OR"],
