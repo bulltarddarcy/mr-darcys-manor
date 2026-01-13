@@ -327,6 +327,77 @@ def run_theme_momentum_app(df_global=None):
     st.markdown("---")
     
     st.subheader(f"📊 Stock Analysis")
+
+    # ==========================================
+    # 1. DEFINE CALLBACKS & INITIALIZE (MOVED UP)
+    # ==========================================
+    # We must define these and run initialization BEFORE widgets are drawn
+    # to avoid the "cannot be modified after instantiation" error.
+
+    def cb_set_defaults():
+        """Resets filters and settings to safe defaults."""
+        # Update settings checkboxes
+        st.session_state.opt_show_divergences = False
+        st.session_state.opt_show_mkt_caps = False
+        st.session_state.opt_show_biotech = False
+        
+        # Update filter flags
+        st.session_state.filters_were_cleared = False
+        st.session_state.default_filters_set = True
+        
+        # Set Default Filters
+        st.session_state.filter_defaults = {
+            0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0},
+            1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
+            2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+            3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
+            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf'},
+            5: {}, 6: {}, 7: {}
+        }
+        # Clear custom user inputs (keys starting with filter_)
+        for k in [k for k in st.session_state if k.startswith('filter_') and k != 'filter_defaults']:
+            del st.session_state[k]
+
+    def cb_darcy_special():
+        """Applies Darcy Special settings."""
+        # Enable settings
+        st.session_state.opt_show_divergences = True
+        st.session_state.opt_show_mkt_caps = True
+        
+        # Reset flags
+        st.session_state.filters_were_cleared = False
+        st.session_state.default_filters_set = True
+        
+        # Set Darcy Filters
+        st.session_state.filter_defaults = {
+            0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
+            1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
+            2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
+            3: {'column': 'Market Cap (B)', 'operator': '>=', 'type': 'Number', 'value': 5.0},
+            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
+            5: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf', 'logic': 'OR'},
+            6: {'column': 'Div', 'operator': '=', 'type': 'Categorical', 'value_cat': '🟢 Bullish'},
+            7: {}
+        }
+
+    def cb_clear_filters():
+        """Clears all filters."""
+        for k in [k for k in st.session_state if k.startswith('filter_') or k in ['filter_defaults', 'default_filters_set']]:
+            del st.session_state[k]
+        st.session_state.filters_were_cleared = True
+
+    # --- RUN INITIALIZATION NOW ---
+    # This must happen before the checkboxes below are rendered!
+    if 'filter_defaults' not in st.session_state:
+        st.session_state.filter_defaults = {i: {} for i in range(8)}
+    
+    if 'default_filters_set' not in st.session_state:
+        if not st.session_state.get('filters_were_cleared', False):
+            cb_set_defaults() # This is safe now because widgets aren't drawn yet
+
+    # ==========================================
+    # 2. RENDER UI (CONTROLS)
+    # ==========================================
     
     all_themes = ["All"] + sorted(filtered_map.keys())
     if 'sector_target' not in st.session_state: st.session_state.sector_target = "All"
@@ -341,11 +412,15 @@ def run_theme_momentum_app(df_global=None):
     with col_opt:
         st.caption("Additional Settings")
         c_opt1, c_opt2, c_opt3 = st.columns(3)
+        # These widgets will now pick up the state set by cb_set_defaults above
         show_divergences = c_opt1.checkbox("Show Divergences", key="opt_show_divergences", help="Slower: Scans RSI history for divergences.")
         show_mkt_caps = c_opt2.checkbox("Show Market Caps", key="opt_show_mkt_caps", help="Slower: Fetches live Market Cap.")
         show_biotech = c_opt3.checkbox("Show Biotech", key="opt_show_biotech", value=False, help="Include Biotech theme.")
 
-    # Prepare Data for Batch Analysis
+    # ==========================================
+    # 3. PROCESS DATA
+    # ==========================================
+
     # Create a map of Theme -> Display Category for the table
     theme_cat_map = {}
     for cat_list in categories.values():
@@ -374,7 +449,9 @@ def run_theme_momentum_app(df_global=None):
         st.info(f"No stocks found (or filtered by volume/Biotech setting).")
         return
     
-    # --- FILTER BUILDER ---
+    # ==========================================
+    # 4. FILTER BUILDER UI
+    # ==========================================
     st.markdown("### 🔍 Custom Filters")
     with st.expander("ℹ️ How are RVOL and Alpha calculated?"):
         st.markdown(r"""
@@ -394,59 +471,12 @@ def run_theme_momentum_app(df_global=None):
     
     st.caption("Build up to 8 filters. Filters apply automatically as you change them.")
     
-    # --- CALLBACKS FOR BUTTONS ---
-    def cb_set_defaults():
-        st.session_state.opt_show_divergences = False
-        st.session_state.opt_show_mkt_caps = False
-        st.session_state.opt_show_biotech = False
-        st.session_state.filters_were_cleared = False
-        st.session_state.default_filters_set = True
-        st.session_state.filter_defaults = {
-            0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 3.0},
-            1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3},
-            2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
-            3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
-            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf'},
-            5: {}, 6: {}, 7: {}
-        }
-        # Clear custom user inputs
-        for k in [k for k in st.session_state if k.startswith('filter_') and k != 'filter_defaults']:
-            del st.session_state[k]
-
-    def cb_darcy_special():
-        st.session_state.opt_show_divergences = True
-        st.session_state.opt_show_mkt_caps = True
-        st.session_state.filters_were_cleared = False
-        st.session_state.default_filters_set = True
-        st.session_state.filter_defaults = {
-            0: {'column': 'Alpha 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
-            1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.2},
-            2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d'},
-            3: {'column': 'Market Cap (B)', 'operator': '>=', 'type': 'Number', 'value': 5.0},
-            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
-            5: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf', 'logic': 'OR'},
-            6: {'column': 'Div', 'operator': '=', 'type': 'Categorical', 'value_cat': '🟢 Bullish'},
-            7: {}
-        }
-
-    def cb_clear_filters():
-        for k in [k for k in st.session_state if k.startswith('filter_') or k in ['filter_defaults', 'default_filters_set']]:
-            del st.session_state[k]
-        st.session_state.filters_were_cleared = True
-
     # Filter Buttons
     col_d, col_s, col_c = st.columns(3)
+    # Note: We don't need to define callbacks here anymore, they are defined at the top
     col_d.button("↺ Set to Defaults", type="secondary", use_container_width=True, on_click=cb_set_defaults)
     col_s.button("✨ Darcy Special", type="primary", use_container_width=True, on_click=cb_darcy_special)
     col_c.button("🗑️ Clear Filters", type="secondary", use_container_width=True, on_click=cb_clear_filters)
-    
-    # Init Defaults
-    if 'filter_defaults' not in st.session_state:
-        st.session_state.filter_defaults = {i: {} for i in range(8)}
-    
-    if 'default_filters_set' not in st.session_state:
-        if not st.session_state.get('filters_were_cleared', False):
-            cb_set_defaults() # Set initial defaults
     
     # Columns for filtering
     numeric_columns = ["Price", "Market Cap (B)", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
