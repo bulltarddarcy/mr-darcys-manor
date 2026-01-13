@@ -219,8 +219,35 @@ def run_theme_momentum_app(df_global=None):
         with st.expander("📖 How Categories Work", expanded=False):
             st.markdown("""
             ### Understanding Momentum & Performance Categories
+            
             Sectors are categorized based on their **10-day trend direction**:
-            ...
+            
+            **⬈ Gaining Momentum & Outperforming**
+            - Moving up AND right on RRG chart
+            - Both accelerating AND outperforming benchmark
+            → **Best opportunity** - sector gaining strength
+            
+            **⬉ Gaining Momentum & Underperforming**
+            - Moving up but still on left side
+            - Accelerating but still behind benchmark
+            → **Potential reversal** - watch for breakout
+            
+            **⬊ Losing Momentum & Outperforming**
+            - Moving down but still on right side
+            - Decelerating but still ahead of benchmark
+            → **Topping** - take profits, avoid new entries
+            
+            **⬋ Losing Momentum & Underperforming**
+            - Moving down AND left on RRG chart
+            - Both decelerating AND underperforming
+            → **Avoid** - sector in decline
+            
+            ---
+            
+            **5-Day Confirmation** shows if short-term trend supports the 10-day direction:
+            - "5d accelerating ahead" = Very strong ⭐⭐⭐
+            - "5d confirming trend" = Strong ⭐⭐
+            - "5d lagging behind" = Weak ⭐
             """)
             
     with col_guide2:
