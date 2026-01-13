@@ -291,7 +291,7 @@ def run_theme_momentum_app(df_global=None):
             1: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Number', 'value': 1.3, 'logic': 'AND'},
             2: {'column': 'RVOL 5d', 'operator': '>=', 'type': 'Column', 'value_column': 'RVOL 10d', 'logic': 'AND'},
             3: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬈ Gain Mom & Outperf', 'logic': 'OR'},
-            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf'},
+            4: {'column': 'Theme Category', 'operator': '=', 'type': 'Categorical', 'value_cat': '⬉ Gain Mom & Underperf', 'logic': 'OR'},
             5: {}, 6: {}, 7: {}
         }
     
