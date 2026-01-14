@@ -521,6 +521,7 @@ def run_theme_momentum_app(df_global=None):
     # ==========================================
     # DOWNLOAD SECTION
     # ==========================================
+    st.divider()
     st.subheader("📥 Download Sector History")
 
     with st.container():
@@ -539,24 +540,71 @@ def run_theme_momentum_app(df_global=None):
             # Logic to prepare theme download
             target_etf = theme_map.get(dl_theme)
             if target_etf and target_etf in etf_data_cache:
-                # Generate Data (with added metrics)
-                export_df = us.generate_sector_export(
-                    target_etf, 
-                    etf_data_cache, 
-                    st.session_state.sector_benchmark
-                )
                 
-                if not export_df.empty:
-                    csv = export_df.to_csv(index=True).encode('utf-8')
-                    st.download_button(
-                        label=f"⬇️ Download {dl_theme} ({target_etf})",
-                        data=csv,
-                        file_name=f"{dl_theme}_{target_etf}_History.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                else:
-                    st.warning("No data generated for theme.")
+                # Identify Stocks in this Theme
+                theme_stocks = []
+                # Use the 'stock_themes' map from fetch_and_process or re-derive
+                # Since fetch_and_process returns stock_themes which is Ticker -> [Themes], we reverse it or filter uni_df
+                # Filter uni_df is safer here since it's already loaded
+                theme_stocks = uni_df[
+                    (uni_df['Role'] == 'Stock') & 
+                    (uni_df['Theme'] == dl_theme)
+                ]['Ticker'].unique().tolist()
+
+                # --- 1. AI Training Data (Parquet) ---
+                if st.button(f"🧠 Generate AI Training Data for {dl_theme}", use_container_width=True):
+                    with st.spinner("Calculating extended windows (5-50d) & targets..."):
+                        training_df = us.generate_ai_training_data(
+                            target_etf,
+                            etf_data_cache,
+                            theme_stocks,
+                            dl_theme,
+                            st.session_state.sector_benchmark
+                        )
+                    
+                    if not training_df.empty:
+                        # Convert to Parquet buffer
+                        import io
+                        parquet_buffer = io.BytesIO()
+                        training_df.to_parquet(parquet_buffer, index=True)
+                        parquet_data = parquet_buffer.getvalue()
+                        
+                        st.download_button(
+                            label=f"⬇️ Download {dl_theme}_Training.parquet",
+                            data=parquet_data,
+                            file_name=f"{dl_theme}_AI_Training.parquet",
+                            mime="application/octet-stream",
+                            use_container_width=True
+                        )
+                        
+                        # Copy-Paste Context
+                        st.success("Training Data Generated! Copy the text below to your AI prompt:")
+                        schema_desc = f"""
+                            I have uploaded a Parquet file containing historical trading data for the '{dl_theme}' sector. 
+                            The data is designed to train/optimize a swing trading strategy.
+                            
+                            **Schema Description:**
+                            1. **Context Columns:**
+                               - `Theme_Category`: The status of the Sector ETF on that day (e.g., "Gaining Momentum & Outperforming").
+                               - `Days_In_Category`: How many consecutive days the ETF has been in that specific category.
+                            
+                            2. **Feature Columns (Predictors):**
+                               - `Metric_Alpha_[N]d`: The stock's excess return vs the ETF over N days (Windows: 5, 10, 15, 20, 30, 50).
+                               - `Metric_RVOL_[N]d`: The stock's Relative Volume over N days.
+                            
+                            3. **Target Columns (Outcomes):**
+                               - `Target_FwdRet_1d`: The stock's return on the NEXT day.
+                               - `Target_FwdRet_5d`: The stock's return over the NEXT 5 days.
+                               - `Target_FwdRet_10d`: The stock's return over the NEXT 10 days.
+                            
+                            **Goal:**
+                            Analyze the correlations between the `Theme_Category`, `Metric_Alpha`, and `Metric_RVOL` features against the `Target_FwdRet` columns.
+                            Find the optimal combination of Alpha and RVOL filters for each Theme Category to maximize forward returns.
+                                                    """
+                        st.code(schema_desc, language="markdown")
+                    else:
+                        st.error("No data generated. Check if stocks exist for this theme.")
+                        
             else:
                 st.warning("ETF data not found.")
 
