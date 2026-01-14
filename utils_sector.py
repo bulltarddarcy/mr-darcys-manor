@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import logging
-from io import StringIO
+from io import StringIO, BytesIO
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, List, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -675,69 +675,56 @@ def enrich_stock_data(df: pd.DataFrame, etf_data_cache: Dict, show_mkt_caps: boo
 
     return enriched_df
 
-def apply_stock_filters(df_stocks: pd.DataFrame, filters: List[Dict]) -> pd.DataFrame:
+def generate_benchmark_export(ticker: str, etf_data_cache: Dict) -> pd.DataFrame:
     """
-    Applies the list of dictionary filters (created by the UI) to the stocks dataframe.
+    Generates a clean price history dataframe for benchmarks (SPY/QQQ)
+    by removing internal weekly columns.
     """
-    if df_stocks.empty or not filters:
-        return df_stocks
+    df = etf_data_cache.get(ticker)
+    if df is None or df.empty: return pd.DataFrame()
+    export_df = df.copy()
+    cols_to_drop = [c for c in export_df.columns if c.startswith('W_')]
+    export_df.drop(columns=cols_to_drop, inplace=True, errors='ignore')
+    return export_df
 
-    df_filtered = df_stocks.copy()
-    
-    # Separate numeric and categorical
-    numeric_filters = [f for f in filters if f['value_type'] in ['Number', 'Column']]
-    categorical_filters = [f for f in filters if f['value_type'] == 'Categorical']
-    
-    # Build Numeric (AND logic)
-    numeric_conditions = []
-    for f in numeric_filters:
-        col, op = f['column'], f['operator']
-        
-        # Safety check for missing columns (e.g. Market Cap before enrichment)
-        if col not in df_filtered.columns:
-            continue
+# ==========================================
+# 7. EXPORT & AI TRAINING DATA GENERATION
+# ==========================================
 
-        if f['value_type'] == 'Number':
-            val = f['value']
-            cond = (df_filtered[col] >= val) if op == '>=' else (df_filtered[col] <= val)
+def calculate_theme_category_history(etf_df: pd.DataFrame) -> Tuple[pd.Series, pd.Series]:
+    """Calculates historical 'Theme Category' and 'Days in Category' for an ETF."""
+    if etf_df is None or etf_df.empty or 'RRG_Ratio_Med' not in etf_df.columns:
+        return pd.Series(index=etf_df.index, dtype='object'), pd.Series(index=etf_df.index, dtype='int')
+
+    # Vectorized logic: Compare today vs 3-day trailing avg (shifted by 1)
+    r_med = etf_df['RRG_Ratio_Med']
+    m_med = etf_df['RRG_Mom_Med']
+    
+    avg_r_prev3 = r_med.shift(1).rolling(window=3).mean()
+    avg_m_prev3 = m_med.shift(1).rolling(window=3).mean()
+    
+    is_outperf = r_med > avg_r_prev3
+    is_gaining = m_med > avg_m_prev3
+    
+    # Construct strings
+    cats = []
+    for i in range(len(etf_df)):
+        if pd.isna(avg_r_prev3.iloc[i]):
+            cats.append("Unknown")
         else:
-            val_col = f['value_column']
-            if val_col not in df_filtered.columns: continue
-            cond = (df_filtered[col] >= df_filtered[val_col]) if op == '>=' else (df_filtered[col] <= df_filtered[val_col])
-        numeric_conditions.append(cond)
-        
-    # Build Categorical (Mixed Logic)
-    categorical_conditions = []
-    for i, f in enumerate(categorical_filters):
-        col, val = f['column'], f['value_categorical']
-        if col not in df_filtered.columns: continue
-        
-        cond = (df_filtered[col] == val)
-        logic = f.get('logic', 'AND') if i > 0 else None
-        categorical_conditions.append((cond, logic))
-        
-    # Combine conditions
-    final_condition = None
+            perf = "Outperforming" if is_outperf.iloc[i] else "Underperforming"
+            mom = "Gaining Momentum" if is_gaining.iloc[i] else "Losing Momentum"
+            cats.append(f"{mom} & {perf}")
+            
+    cat_series = pd.Series(cats, index=etf_df.index, name="Theme_Category")
     
-    # Merge numeric
-    if numeric_conditions:
-        final_condition = numeric_conditions[0]
-        for c in numeric_conditions[1:]: final_condition = final_condition & c
-        
-    # Merge categorical
-    if categorical_conditions:
-        cat_combined = categorical_conditions[0][0]
-        for i in range(1, len(categorical_conditions)):
-            cond, logic = categorical_conditions[i]
-            if logic == 'OR': cat_combined = cat_combined | cond
-            else: cat_combined = cat_combined & cond
-        
-        final_condition = (final_condition & cat_combined) if final_condition is not None else cat_combined
-        
-    if final_condition is not None:
-        df_filtered = df_filtered[final_condition]
-        
-    return df_filtered
+    # Calculate Days
+    group_id = (cat_series != cat_series.shift()).cumsum()
+    days_series = etf_df.groupby(group_id).cumcount() + 1
+    days_series.loc[cat_series == "Unknown"] = 0
+    days_series.name = "Days_In_Category"
+    
+    return cat_series, days_series
 
 def generate_sector_export(
     etf_ticker: str,
@@ -745,7 +732,7 @@ def generate_sector_export(
     bench_ticker: str
 ) -> pd.DataFrame:
     """
-    Generates a downloadable dataframe for a specific sector ETF with:
+    Generates a simple CSV downloadable dataframe for a specific sector ETF with:
     - Weekly columns removed
     - Added RVOL 5/10/20
     - Added Alpha 5/10/20 (vs Benchmark)
@@ -794,49 +781,108 @@ def generate_sector_export(
     export_df.drop(columns=internal_cols, inplace=True, errors='ignore')
 
     # 5. Calculate Historical Theme Categories & Days (Vectorized)
-    if 'RRG_Ratio_Med' in export_df.columns and 'RRG_Mom_Med' in export_df.columns:
-        r_med = export_df['RRG_Ratio_Med']
-        m_med = export_df['RRG_Mom_Med']
-        
-        avg_r_prev3 = r_med.shift(1).rolling(window=3).mean()
-        avg_m_prev3 = m_med.shift(1).rolling(window=3).mean()
-        
-        is_outperf = r_med > avg_r_prev3
-        is_gaining = m_med > avg_m_prev3
-        
-        cats = []
-        for i in range(len(export_df)):
-            if pd.isna(avg_r_prev3.iloc[i]):
-                cats.append("Unknown")
-            else:
-                perf = "Outperforming" if is_outperf.iloc[i] else "Underperforming"
-                mom = "Gaining Momentum" if is_gaining.iloc[i] else "Losing Momentum"
-                cats.append(f"{mom} & {perf}")
-        
-        export_df['Theme Category'] = cats
-        
-        # Calculate Days in Category
-        cat_series = export_df['Theme Category']
-        group_id = (cat_series != cat_series.shift()).cumsum()
-        export_df['Days in Theme Category'] = export_df.groupby(group_id).cumcount() + 1
-        export_df.loc[export_df['Theme Category'] == "Unknown", 'Days in Theme Category'] = 0
+    cat_series, days_series = calculate_theme_category_history(export_df)
+    export_df['Theme Category'] = cat_series
+    export_df['Days in Theme Category'] = days_series
 
     return export_df
 
-def generate_benchmark_export(ticker: str, etf_data_cache: Dict) -> pd.DataFrame:
+def generate_ai_training_data(
+    etf_ticker: str,
+    etf_data_cache: Dict,
+    stock_tickers: List[str],
+    theme_name: str,
+    benchmark_ticker: str
+) -> pd.DataFrame:
     """
-    Generates a clean price history dataframe for benchmarks (SPY/QQQ)
-    by removing internal weekly columns.
+    Generates a 'Master Training Data' file for a theme.
+    Includes:
+    - Extended Windows (5, 10, 15, 20, 30, 50) for Alpha & RVOL.
+    - Forward Returns (1d, 5d, 10d) as Targets.
+    - Historical Theme Context (Category, Days).
     """
-    df = etf_data_cache.get(ticker)
-    if df is None or df.empty: return pd.DataFrame()
-    export_df = df.copy()
-    cols_to_drop = [c for c in export_df.columns if c.startswith('W_')]
-    export_df.drop(columns=cols_to_drop, inplace=True, errors='ignore')
-    return export_df
+    # 1. Prepare ETF Context
+    etf_df = etf_data_cache.get(etf_ticker)
+    if etf_df is None or etf_df.empty: return pd.DataFrame()
+    
+    cat_series, days_series = calculate_theme_category_history(etf_df)
+    etf_context = pd.concat([cat_series, days_series], axis=1) # Indexed by Date
+
+    # 2. Helper for metric calculation
+    parent_df = etf_df # Stocks are calculated relative to ETF
+    
+    windows = [5, 10, 15, 20, 30, 50]
+    
+    def process_stock_full_history(ticker):
+        df = etf_data_cache.get(ticker)
+        if df is None or df.empty: return None
+        
+        # Align with ETF
+        common_idx = df.index.intersection(etf_context.index)
+        if common_idx.empty: return None
+        
+        df = df.loc[common_idx].copy()
+        p_df = parent_df.loc[common_idx].copy()
+        
+        # Base Data
+        res = pd.DataFrame(index=df.index)
+        res['Ticker'] = ticker
+        res['Theme'] = theme_name
+        res['Role'] = 'Stock'
+        res['Close'] = df['Close']
+        
+        # Add ETF Context
+        res = res.join(etf_context)
+        
+        # Calculate Forward Returns (Targets)
+        res['Target_FwdRet_1d'] = df['Close'].shift(-1) / df['Close'] - 1
+        res['Target_FwdRet_5d'] = df['Close'].shift(-5) / df['Close'] - 1
+        res['Target_FwdRet_10d'] = df['Close'].shift(-10) / df['Close'] - 1
+        
+        # Calculate RVOL Spectrum
+        if 'Volume' in df.columns:
+            avg_vol = df['Volume'].rolling(window=20).mean()
+            rvol_base = df['Volume'] / avg_vol
+            for w in windows:
+                res[f'Metric_RVOL_{w}d'] = rvol_base.rolling(window=w).mean()
+        
+        # Calculate Alpha Spectrum
+        stock_pct = df['Close'].pct_change()
+        etf_pct = p_df['Close'].pct_change()
+        
+        rolling_cov = stock_pct.rolling(window=60).cov(etf_pct)
+        rolling_var = etf_pct.rolling(window=60).var()
+        beta = np.where(rolling_var > 1e-8, rolling_cov / rolling_var, 1.0)
+        
+        expected_ret = etf_pct * beta
+        alpha_daily = stock_pct - expected_ret
+        
+        for w in windows:
+            # Alpha is sum of daily alphas over window * 100
+            res[f'Metric_Alpha_{w}d'] = alpha_daily.rolling(window=w).sum() * 100
+            
+        return res
+
+    # 3. Process Stocks in Parallel
+    results = []
+    # Using simple loop with helper function which is clean for pickling
+    for ticker in stock_tickers:
+        res = process_stock_full_history(ticker)
+        if res is not None:
+            results.append(res)
+            
+    if not results: return pd.DataFrame()
+    
+    final_df = pd.concat(results)
+    
+    # Cleanup: Drop rows where we don't have enough history for the biggest window (50)
+    # or targets (10). But keep as much as possible.
+    final_df.dropna(subset=['Metric_Alpha_50d'], inplace=True)
+    
+    return final_df
 
 # ==========================================
-# 7. CORE LOGIC (CATEGORIES & DAYS)
+# 8. CORE LOGIC (CATEGORIES & DAYS)
 # ==========================================
 def calculate_days_in_category(df: pd.DataFrame) -> Dict[str, int]:
     if df is None or df.empty or len(df) < 4: return {'days': 0, 'category': 'Unknown'}
@@ -928,7 +974,7 @@ def get_quadrant_name(ratio: float, momentum: float) -> str:
     else: return "🔴 Lagging"
 
 # ==========================================
-# 8. VISUALIZATION & CLASSIFICATION
+# 9. VISUALIZATION & CLASSIFICATION
 # ==========================================
 def classify_setup(df: pd.DataFrame) -> Optional[str]:
     if df is None or df.empty: return None
@@ -1000,7 +1046,7 @@ def plot_simple_rrg(data_cache, target_map, view_key, show_trails):
     return fig
 
 # ==========================================
-# 9. ORCHESTRATOR
+# 10. ORCHESTRATOR
 # ==========================================
 @st.cache_data(ttl=ud.CACHE_TTL, show_spinner=False)
 def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
