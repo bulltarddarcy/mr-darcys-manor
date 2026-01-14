@@ -517,3 +517,75 @@ def run_theme_momentum_app(df_global=None):
     if not df_filtered.empty:
         st.caption("Copy tickers:")
         st.code(", ".join(df_filtered['Ticker'].unique().tolist()), language="text")
+
+    # ==========================================
+    # DOWNLOAD SECTION
+    # ==========================================
+    st.subheader("📥 Download Sector History")
+
+    with st.container():
+        # Layout: Dropdown for Themes | Buttons for Benchmarks
+        dl_col1, dl_col2 = st.columns([2, 1])
+        
+        # --- THEME DOWNLOADER ---
+        with dl_col1:
+            dl_theme = st.selectbox(
+                "Select Theme to Download", 
+                options=all_themes,
+                index=0,
+                key="dl_theme_selector"
+            )
+            
+            # Logic to prepare theme download
+            target_etf = theme_map.get(dl_theme)
+            if target_etf and target_etf in etf_data_cache:
+                # Generate Data (with added metrics)
+                export_df = us.generate_sector_export(
+                    target_etf, 
+                    etf_data_cache, 
+                    st.session_state.sector_benchmark
+                )
+                
+                if not export_df.empty:
+                    csv = export_df.to_csv(index=True).encode('utf-8')
+                    st.download_button(
+                        label=f"⬇️ Download {dl_theme} ({target_etf})",
+                        data=csv,
+                        file_name=f"{dl_theme}_{target_etf}_History.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("No data generated for theme.")
+            else:
+                st.warning("ETF data not found.")
+
+        # --- BENCHMARK DOWNLOADER ---
+        with dl_col2:
+            st.write("Benchmark Data (Price Only)")
+            
+            # Download SPY
+            if "SPY" in etf_data_cache:
+                spy_export = us.generate_benchmark_export("SPY", etf_data_cache)
+                if not spy_export.empty:
+                    st.download_button(
+                        label="⬇️ Download SPY",
+                        data=spy_export.to_csv(index=True).encode('utf-8'),
+                        file_name="SPY_History_Clean.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="dl_btn_spy"
+                    )
+            
+            # Download QQQ
+            if "QQQ" in etf_data_cache:
+                qqq_export = us.generate_benchmark_export("QQQ", etf_data_cache)
+                if not qqq_export.empty:
+                    st.download_button(
+                        label="⬇️ Download QQQ",
+                        data=qqq_export.to_csv(index=True).encode('utf-8'),
+                        file_name="QQQ_History_Clean.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="dl_btn_qqq"
+                    )
