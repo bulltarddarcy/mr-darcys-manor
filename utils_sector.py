@@ -675,6 +675,70 @@ def enrich_stock_data(df: pd.DataFrame, etf_data_cache: Dict, show_mkt_caps: boo
 
     return enriched_df
 
+def apply_stock_filters(df_stocks: pd.DataFrame, filters: List[Dict]) -> pd.DataFrame:
+    """
+    Applies the list of dictionary filters (created by the UI) to the stocks dataframe.
+    """
+    if df_stocks.empty or not filters:
+        return df_stocks
+
+    df_filtered = df_stocks.copy()
+    
+    # Separate numeric and categorical
+    numeric_filters = [f for f in filters if f['value_type'] in ['Number', 'Column']]
+    categorical_filters = [f for f in filters if f['value_type'] == 'Categorical']
+    
+    # Build Numeric (AND logic)
+    numeric_conditions = []
+    for f in numeric_filters:
+        col, op = f['column'], f['operator']
+        
+        # Safety check for missing columns (e.g. Market Cap before enrichment)
+        if col not in df_filtered.columns:
+            continue
+
+        if f['value_type'] == 'Number':
+            val = f['value']
+            cond = (df_filtered[col] >= val) if op == '>=' else (df_filtered[col] <= val)
+        else:
+            val_col = f['value_column']
+            if val_col not in df_filtered.columns: continue
+            cond = (df_filtered[col] >= df_filtered[val_col]) if op == '>=' else (df_filtered[col] <= df_filtered[val_col])
+        numeric_conditions.append(cond)
+        
+    # Build Categorical (Mixed Logic)
+    categorical_conditions = []
+    for i, f in enumerate(categorical_filters):
+        col, val = f['column'], f['value_categorical']
+        if col not in df_filtered.columns: continue
+        
+        cond = (df_filtered[col] == val)
+        logic = f.get('logic', 'AND') if i > 0 else None
+        categorical_conditions.append((cond, logic))
+        
+    # Combine conditions
+    final_condition = None
+    
+    # Merge numeric
+    if numeric_conditions:
+        final_condition = numeric_conditions[0]
+        for c in numeric_conditions[1:]: final_condition = final_condition & c
+        
+    # Merge categorical
+    if categorical_conditions:
+        cat_combined = categorical_conditions[0][0]
+        for i in range(1, len(categorical_conditions)):
+            cond, logic = categorical_conditions[i]
+            if logic == 'OR': cat_combined = cat_combined | cond
+            else: cat_combined = cat_combined & cond
+        
+        final_condition = (final_condition & cat_combined) if final_condition is not None else cat_combined
+        
+    if final_condition is not None:
+        df_filtered = df_filtered[final_condition]
+        
+    return df_filtered
+
 def generate_benchmark_export(ticker: str, etf_data_cache: Dict) -> pd.DataFrame:
     """
     Generates a clean price history dataframe for benchmarks (SPY/QQQ)
