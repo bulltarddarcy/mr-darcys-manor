@@ -521,66 +521,91 @@ def run_theme_momentum_app(df_global=None):
     # ==========================================
     # DOWNLOAD SECTION
     # ==========================================
-    st.divider()
     st.subheader("📥 Download Sector History")
 
+    # Initialize session state for generated data so buttons persist
+    if "gen_theme_df" not in st.session_state:
+        st.session_state.gen_theme_df = None
+    if "gen_theme_name" not in st.session_state:
+        st.session_state.gen_theme_name = ""
+
     with st.container():
-        # Layout: Dropdown for Themes | Buttons for Benchmarks
-        dl_col1, dl_col2 = st.columns([2, 1])
+        # --- 1. THEME DATA ---
+        st.markdown("#### 1. Theme Data (Training Sets)")
         
-        # --- THEME DOWNLOADER ---
-        with dl_col1:
-            dl_theme = st.selectbox(
-                "Select Theme to Download", 
-                options=all_themes,
-                index=0,
-                key="dl_theme_selector"
-            )
-            
-            # Logic to prepare theme download
+        dl_theme = st.selectbox(
+            "Select Theme to Download", 
+            options=all_themes,
+            index=0,
+            key="dl_theme_selector"
+        )
+        
+        # Generation Button
+        if st.button(f"🧠 Generate AI Training Data for {dl_theme}", use_container_width=True):
             target_etf = theme_map.get(dl_theme)
             if target_etf and target_etf in etf_data_cache:
-                
-                # Identify Stocks in this Theme
-                theme_stocks = []
-                # Use the 'stock_themes' map from fetch_and_process or re-derive
-                # Since fetch_and_process returns stock_themes which is Ticker -> [Themes], we reverse it or filter uni_df
-                # Filter uni_df is safer here since it's already loaded
+                # Identify Stocks
                 theme_stocks = uni_df[
                     (uni_df['Role'] == 'Stock') & 
                     (uni_df['Theme'] == dl_theme)
                 ]['Ticker'].unique().tolist()
 
-                # --- 1. AI Training Data (Parquet) ---
-                if st.button(f"🧠 Generate AI Training Data for {dl_theme}", use_container_width=True):
-                    with st.spinner("Calculating extended windows (5-50d) & targets..."):
-                        training_df = us.generate_ai_training_data(
-                            target_etf,
-                            etf_data_cache,
-                            theme_stocks,
-                            dl_theme,
-                            st.session_state.sector_benchmark
-                        )
-                    
-                    if not training_df.empty:
-                        # Convert to Parquet buffer
-                        import io
-                        parquet_buffer = io.BytesIO()
-                        training_df.to_parquet(parquet_buffer, index=True)
-                        parquet_data = parquet_buffer.getvalue()
-                        
-                        st.download_button(
-                            label=f"⬇️ Download {dl_theme}_Training.parquet",
-                            data=parquet_data,
-                            file_name=f"{dl_theme}_AI_Training.parquet",
-                            mime="application/octet-stream",
-                            use_container_width=True
-                        )
-                        
-                        # Copy-Paste Context
-                        st.success("Training Data Generated! Copy the text below to your AI prompt:")
-                        schema_desc = f"""
-I have uploaded a Parquet file containing historical trading data for the '{dl_theme}' sector. 
+                with st.spinner("Calculating extended windows (5-50d) & targets..."):
+                    # Generate and Store in Session State
+                    df_result = us.generate_ai_training_data(
+                        target_etf,
+                        etf_data_cache,
+                        theme_stocks,
+                        dl_theme,
+                        st.session_state.sector_benchmark
+                    )
+                    st.session_state.gen_theme_df = df_result
+                    st.session_state.gen_theme_name = dl_theme
+            else:
+                st.warning("ETF data not found.")
+                st.session_state.gen_theme_df = None
+
+        # Display Download Options (if data is generated)
+        if st.session_state.gen_theme_df is not None and not st.session_state.gen_theme_df.empty:
+            training_df = st.session_state.gen_theme_df
+            current_theme = st.session_state.gen_theme_name
+            
+            # Message
+            st.success(f"✅ Data Ready: {current_theme} ({len(training_df)} rows)")
+
+            # Two columns for the two formats
+            fmt_col1, fmt_col2 = st.columns(2)
+            
+            with fmt_col1:
+                # PARQUET
+                import io
+                parquet_buffer = io.BytesIO()
+                training_df.to_parquet(parquet_buffer, index=True)
+                parquet_data = parquet_buffer.getvalue()
+                
+                st.download_button(
+                    label=f"⬇️ {current_theme}.parquet",
+                    data=parquet_data,
+                    file_name=f"{current_theme}_AI_Training.parquet",
+                    mime="application/octet-stream",
+                    use_container_width=True
+                )
+
+            with fmt_col2:
+                # CSV
+                csv_data = training_df.to_csv(index=True).encode('utf-8')
+                st.download_button(
+                    label=f"⬇️ {current_theme}.csv",
+                    data=csv_data,
+                    file_name=f"{current_theme}_AI_Training.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
+            # Copy-Paste Context
+            with st.expander("📋 View AI Prompt Context"):
+                schema_desc = f"""
+I have uploaded a file containing historical trading data for the '{current_theme}' sector. 
 The data is designed to train/optimize a swing trading strategy.
 
 **Schema Description:**
@@ -600,19 +625,19 @@ The data is designed to train/optimize a swing trading strategy.
 **Goal:**
 Analyze the correlations between the `Theme_Category`, `Metric_Alpha`, and `Metric_RVOL` features against the `Target_FwdRet` columns.
 Find the optimal combination of Alpha and RVOL filters for each Theme Category to maximize forward returns.
-                        """
-                        st.code(schema_desc, language="markdown")
-                    else:
-                        st.error("No data generated. Check if stocks exist for this theme.")
-                        
-            else:
-                st.warning("ETF data not found.")
+                """
+                st.code(schema_desc, language="markdown")
 
-        # --- BENCHMARK DOWNLOADER ---
-        with dl_col2:
-            st.write("Benchmark Data (Price Only)")
-            
-            # Download SPY
+        st.markdown("---")
+        
+        # --- 2. BENCHMARK DATA ---
+        # Now in the same flow/column as requested
+        st.markdown("#### 2. Benchmark Data (Price Only)")
+        
+        bench_col1, bench_col2 = st.columns(2)
+        
+        # Download SPY
+        with bench_col1:
             if "SPY" in etf_data_cache:
                 spy_export = us.generate_benchmark_export("SPY", etf_data_cache)
                 if not spy_export.empty:
@@ -624,8 +649,9 @@ Find the optimal combination of Alpha and RVOL filters for each Theme Category t
                         use_container_width=True,
                         key="dl_btn_spy"
                     )
-            
-            # Download QQQ
+        
+        # Download QQQ
+        with bench_col2:
             if "QQQ" in etf_data_cache:
                 qqq_export = us.generate_benchmark_export("QQQ", etf_data_cache)
                 if not qqq_export.empty:
