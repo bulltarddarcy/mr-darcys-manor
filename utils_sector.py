@@ -116,7 +116,7 @@ class SectorDataManager:
             return pd.DataFrame(), [], {}
 
 # ==========================================
-# 3. HELPERS (NEWLY ADDED)
+# 3. HELPERS
 # ==========================================
 def get_ma_signal(price: float, ma_val: float) -> str:
     """Return emoji based on price vs moving average."""
@@ -246,7 +246,7 @@ class SectorAlphaCalculator:
         return df
 
 # ==========================================
-# 5. PATTERN DETECTION (PRESERVED)
+# 5. PATTERN DETECTION
 # ==========================================
 
 def detect_dip_buy_candidates(df: pd.DataFrame, theme_suffix: str) -> bool:
@@ -558,7 +558,7 @@ def calculate_consensus_theme_score(df: pd.DataFrame) -> Optional[Dict]:
     except Exception: return None
 
 # ==========================================
-# 6. ANALYSIS FUNCTIONS (NEWLY ADDED)
+# 6. ANALYSIS FUNCTIONS
 # ==========================================
 def analyze_stocks_batch(
     etf_data_cache: Dict,
@@ -678,7 +678,6 @@ def enrich_stock_data(df: pd.DataFrame, etf_data_cache: Dict, show_mkt_caps: boo
 def apply_stock_filters(df_stocks: pd.DataFrame, filters: List[Dict]) -> pd.DataFrame:
     """
     Applies the list of dictionary filters (created by the UI) to the stocks dataframe.
-    MOVED FROM MAIN to keep main clean.
     """
     if df_stocks.empty or not filters:
         return df_stocks
@@ -739,6 +738,102 @@ def apply_stock_filters(df_stocks: pd.DataFrame, filters: List[Dict]) -> pd.Data
         df_filtered = df_filtered[final_condition]
         
     return df_filtered
+
+def generate_sector_export(
+    etf_ticker: str,
+    etf_data_cache: Dict,
+    bench_ticker: str
+) -> pd.DataFrame:
+    """
+    Generates a downloadable dataframe for a specific sector ETF with:
+    - Weekly columns removed
+    - Added RVOL 5/10/20
+    - Added Alpha 5/10/20 (vs Benchmark)
+    - Added Theme Category (historical)
+    - Added Days in Category
+    """
+    # 1. Get ETF and Benchmark Data
+    df = etf_data_cache.get(etf_ticker)
+    bench_df = etf_data_cache.get(bench_ticker)
+    
+    if df is None or df.empty or bench_df is None or bench_df.empty:
+        return pd.DataFrame()
+    
+    # Work on a copy
+    export_df = df.copy()
+    
+    # 2. Drop Weekly Columns
+    cols_to_drop = [c for c in export_df.columns if c.startswith('W_')]
+    export_df.drop(columns=cols_to_drop, inplace=True, errors='ignore')
+
+    # 3. Ensure RVOL Columns Exist
+    rvol_map = {'RVOL_Short': 'RVOL 5', 'RVOL_Med': 'RVOL 10', 'RVOL_Long': 'RVOL 20'}
+    for old_col, new_col in rvol_map.items():
+        if old_col in export_df.columns:
+            export_df[new_col] = export_df[old_col]
+        else:
+            export_df[new_col] = np.nan
+
+    # 4. Calculate Alpha vs Benchmark (Treating ETF as the "Stock" and Bench as "Parent")
+    calc = SectorAlphaCalculator()
+    export_df = calc.calculate_stock_alpha_multi_theme(export_df, bench_df, "Bench")
+    
+    alpha_map = {
+        'Alpha_Short_Bench': 'Alpha 5', 
+        'Alpha_Med_Bench': 'Alpha 10', 
+        'Alpha_Long_Bench': 'Alpha 20'
+    }
+    for old_col, new_col in alpha_map.items():
+        if old_col in export_df.columns:
+            export_df[new_col] = export_df[old_col]
+        else:
+            export_df[new_col] = np.nan
+
+    # Clean up internal columns
+    internal_cols = [c for c in export_df.columns if c.endswith('_Bench')]
+    export_df.drop(columns=internal_cols, inplace=True, errors='ignore')
+
+    # 5. Calculate Historical Theme Categories & Days (Vectorized)
+    if 'RRG_Ratio_Med' in export_df.columns and 'RRG_Mom_Med' in export_df.columns:
+        r_med = export_df['RRG_Ratio_Med']
+        m_med = export_df['RRG_Mom_Med']
+        
+        avg_r_prev3 = r_med.shift(1).rolling(window=3).mean()
+        avg_m_prev3 = m_med.shift(1).rolling(window=3).mean()
+        
+        is_outperf = r_med > avg_r_prev3
+        is_gaining = m_med > avg_m_prev3
+        
+        cats = []
+        for i in range(len(export_df)):
+            if pd.isna(avg_r_prev3.iloc[i]):
+                cats.append("Unknown")
+            else:
+                perf = "Outperforming" if is_outperf.iloc[i] else "Underperforming"
+                mom = "Gaining Momentum" if is_gaining.iloc[i] else "Losing Momentum"
+                cats.append(f"{mom} & {perf}")
+        
+        export_df['Theme Category'] = cats
+        
+        # Calculate Days in Category
+        cat_series = export_df['Theme Category']
+        group_id = (cat_series != cat_series.shift()).cumsum()
+        export_df['Days in Theme Category'] = export_df.groupby(group_id).cumcount() + 1
+        export_df.loc[export_df['Theme Category'] == "Unknown", 'Days in Theme Category'] = 0
+
+    return export_df
+
+def generate_benchmark_export(ticker: str, etf_data_cache: Dict) -> pd.DataFrame:
+    """
+    Generates a clean price history dataframe for benchmarks (SPY/QQQ)
+    by removing internal weekly columns.
+    """
+    df = etf_data_cache.get(ticker)
+    if df is None or df.empty: return pd.DataFrame()
+    export_df = df.copy()
+    cols_to_drop = [c for c in export_df.columns if c.startswith('W_')]
+    export_df.drop(columns=cols_to_drop, inplace=True, errors='ignore')
+    return export_df
 
 # ==========================================
 # 7. CORE LOGIC (CATEGORIES & DAYS)
@@ -931,7 +1026,7 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
         # Set index using the column name (this moves it to index and removes it from columns)
         master_df = master_df.set_index('Date').sort_index()
 
-    needed = set(tickers) | set(theme_map.values()) | {benchmark_ticker}
+    needed = set(tickers) | set(theme_map.values()) | {benchmark_ticker, "SPY", "QQQ"} # Ensure SPY/QQQ are kept
     master_df = master_df[master_df['Ticker'].isin(needed)].copy()
     if master_df.empty: return {}, ["No tickers found"], theme_map, uni_df, {}
 
@@ -956,6 +1051,10 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
     if benchmark_ticker not in full_data_map: return {}, [f"Benchmark {benchmark_ticker} missing"], theme_map, uni_df, {}
     bench_df = full_data_map[benchmark_ticker].copy()
     data_cache[benchmark_ticker] = bench_df
+    
+    # Ensure SPY and QQQ are in cache even if not benchmark
+    for b in ["SPY", "QQQ"]:
+        if b in full_data_map: data_cache[b] = full_data_map[b]
 
     # Process ETFs
     for etf in theme_map.values():
