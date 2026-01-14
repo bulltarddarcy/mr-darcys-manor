@@ -580,27 +580,27 @@ def run_theme_momentum_app(df_global=None):
                         # Copy-Paste Context
                         st.success("Training Data Generated! Copy the text below to your AI prompt:")
                         schema_desc = f"""
-            I have uploaded a Parquet file containing historical trading data for the '{dl_theme}' sector. 
-            The data is designed to train/optimize a swing trading strategy.
-            
-            **Schema Description:**
-            1. **Context Columns:**
-               - `Theme_Category`: The status of the Sector ETF on that day (e.g., "Gaining Momentum & Outperforming").
-               - `Days_In_Category`: How many consecutive days the ETF has been in that specific category.
-            
-            2. **Feature Columns (Predictors):**
-               - `Metric_Alpha_[N]d`: The stock's excess return vs the ETF over N days (Windows: 5, 10, 15, 20, 30, 50).
-               - `Metric_RVOL_[N]d`: The stock's Relative Volume over N days.
-            
-            3. **Target Columns (Outcomes):**
-               - `Target_FwdRet_1d`: The stock's return on the NEXT day.
-               - `Target_FwdRet_5d`: The stock's return over the NEXT 5 days.
-               - `Target_FwdRet_10d`: The stock's return over the NEXT 10 days.
-            
-            **Goal:**
-            Analyze the correlations between the `Theme_Category`, `Metric_Alpha`, and `Metric_RVOL` features against the `Target_FwdRet` columns.
-            Find the optimal combination of Alpha and RVOL filters for each Theme Category to maximize forward returns.
-                                    """
+    I have uploaded a Parquet file containing historical trading data for the '{dl_theme}' sector. 
+    The data is designed to train/optimize a swing trading strategy.
+    
+    **Schema Description:**
+    1. **Context Columns:**
+       - `Theme_Category`: The status of the Sector ETF on that day (e.g., "Gaining Momentum & Outperforming").
+       - `Days_In_Category`: How many consecutive days the ETF has been in that specific category.
+    
+    2. **Feature Columns (Predictors):**
+       - `Metric_Alpha_[N]d`: The stock's excess return vs the ETF over N days (Windows: 5, 10, 15, 20, 30, 50).
+       - `Metric_RVOL_[N]d`: The stock's Relative Volume over N days.
+    
+    3. **Target Columns (Outcomes):**
+       - `Target_FwdRet_1d`: The stock's return on the NEXT day.
+       - `Target_FwdRet_5d`: The stock's return over the NEXT 5 days.
+       - `Target_FwdRet_10d`: The stock's return over the NEXT 10 days.
+    
+    **Goal:**
+    Analyze the correlations between the `Theme_Category`, `Metric_Alpha`, and `Metric_RVOL` features against the `Target_FwdRet` columns.
+    Find the optimal combination of Alpha and RVOL filters for each Theme Category to maximize forward returns.
+                            """
                         st.code(schema_desc, language="markdown")
                     else:
                         st.error("No data generated. Check if stocks exist for this theme.")
