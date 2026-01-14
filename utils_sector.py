@@ -941,7 +941,12 @@ def generate_ai_training_data(
     
     # Cleanup: Drop rows where we don't have enough history for the biggest window (50)
     # or targets (10). But keep as much as possible.
-    final_df.dropna(subset=['Metric_Alpha_50d'], inplace=True)
+
+    # OLD WAY: Deleted the first ~110 days
+    # final_df.dropna(subset=['Metric_Alpha_50d'], inplace=True)
+
+    # NEW WAY: Keep all days, filling the "warm-up" period with 0
+    final_df.fillna(0, inplace=True)
     
     return final_df
 
@@ -1196,3 +1201,4 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
 
     logger.info(f"Sync complete. {len(data_cache)} tickers.")
     return data_cache, missing_tickers, theme_map, uni_df, stock_themes_map
+
