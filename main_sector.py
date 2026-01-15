@@ -518,6 +518,7 @@ def run_theme_momentum_app(df_global=None):
         st.caption("Copy tickers:")
         st.code(", ".join(df_filtered['Ticker'].unique().tolist()), language="text")
 
+    # divider line between the outputs (above) and the admin inputs/configurations (below)
     st.markdown('<hr style="border-top: 4px solid black;">', unsafe_allow_html=True)
     
     # ==========================================
