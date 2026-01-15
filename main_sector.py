@@ -193,7 +193,7 @@ def run_theme_momentum_app(df_global=None):
     st.session_state.use_smart_opt = st.checkbox(
         "✨ Use Smart Optimization",
         value=st.session_state.use_smart_opt,
-        help="If checked, tables below use the statistically BEST timeframe per sector (from Admin Phase 2). If unchecked, they match the Chart Window."
+        help="If checked, tables below use the statistically BEST timeframe per sector (read from your Google Sheet). If unchecked, they match the Chart Window."
     )
     
     quadrant_meta = [
@@ -552,23 +552,42 @@ def run_admin_backtesting():
         df_comp = st.session_state.compass_df
         st.success(f"✅ Compass Generated ({len(df_comp)} rows)")
         
-        col_opt1, col_opt2 = st.columns(2)
+        # Download Only
+        csv_compass = df_comp.to_csv(index=True).encode('utf-8')
+        st.download_button(
+            label="⬇️ Download CSV",
+            data=csv_compass,
+            file_name="Compass_Logic_And_Timing_Master.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
         
-        with col_opt1:
-            if st.button("✨ Optimize & Save Settings", type="primary", use_container_width=True):
-                with st.spinner("Finding best logic per ETF and saving to file..."):
-                    optimized_dict, msg = us.optimize_compass_settings(df_comp)
-                    st.success(f"✅ Success! {len(optimized_dict)} ETFs optimized. The dashboard will now use these settings automatically.")
-                    
-        with col_opt2:
-            csv_compass = df_comp.to_csv(index=True).encode('utf-8')
-            st.download_button(
-                label="⬇️ Download CSV",
-                data=csv_compass,
-                file_name="Compass_Logic_And_Timing_Master.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+        # AI Prompt Context (RESTORED)
+        st.markdown("### 📋 AI Optimization Prompt")
+        st.markdown("""
+        **Copy this prompt to ChatGPT/Claude to optimize your strategy:**
+        
+        ```text
+        I have uploaded a 'Compass Master' file containing historical data for multiple Sector ETFs.
+        This file tests 6 different 'Trend Logics' (A through F) and includes Forward Returns (1d to 20d).
+
+        **Columns Guide:**
+        - Logic_X_Signal: 1 = The trend is 'Gaining Momentum & Outperforming'. 0 = It is not.
+        - Logic_X_Streak: How many consecutive days the signal has been active (1 = First Day).
+        - Target_Xd: The percent return of the ETF X days later.
+
+        **My Goal:**
+        I want to find the 'Golden Setup' for each Sector. 
+
+        **Please analyze the data and answer:**
+        1. Which Logic (A-F) has the highest correlation with positive 5-day and 10-day returns?
+        2. PERFORM A STREAK ANALYSIS: For the best Logic, is the Expected Value (EV) higher on Day 1 (Fresh) or Day 3 (Confirmed)?
+        3. Please provide a table with columns: Ticker, Window, Smooth. 
+           - If Best Logic is A (10d_3s) -> Window="Med", Smooth=3
+           - If Best Logic is E (5d_2s) -> Window="Short", Smooth=2
+           - etc.
+        ```
+        """)
             
     # ==========================================
     # PHASE 4: AI TRAINING DATA
