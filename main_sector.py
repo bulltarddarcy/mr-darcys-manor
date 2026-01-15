@@ -588,6 +588,75 @@ def run_theme_momentum_app(df_global=None):
             st.code(csv_data, language="csv")
 
     # ==========================================
+    # ADMIN: PHASE 2 & 3: THE COMPASS (LOGIC & TIMING)
+    # ==========================================
+    with st.expander("🛠️ Phase 2 & 3: The Compass (Optimize Logic & Timing)", expanded=False):
+        st.caption("Generate a master file to scientifically prove WHICH trend definition works best, and WHEN to enter.")
+        
+        # Initialize session state for this phase
+        if "compass_df" not in st.session_state:
+            st.session_state.compass_df = None
+
+        c_p2_1, c_p2_2 = st.columns([1.5, 1])
+        
+        with c_p2_1:
+            st.info("""
+            **This Single Export Solves Two Problems:**
+            
+            1.  **The Logic (Phase 2):** Tests 6 different mathematical definitions of "Gaining Momentum" (from Fast 5d scalps to Slow 20d trends).
+            2.  **The Timing (Phase 3):** Includes a **"Streak Counter"** for every logic. This lets AI compare buying on **Day 1** (Aggressive) vs **Day 3** (Confirmed).
+            """)
+            
+        with c_p2_2:
+            if st.button("🧭 Generate Compass Data", use_container_width=True):
+                # Ensure universe is loaded
+                if 'theme_map' not in locals() or not theme_map:
+                     _, _, theme_map, _, _ = us.SectorDataManager().load_universe()
+                
+                with st.spinner("Calculating 6 Logics x Streak Counts for all ETFs..."):
+                    df_compass = us.generate_compass_data(etf_data_cache, theme_map)
+                    st.session_state.compass_df = df_compass
+                    
+        # Display Download & Prompt if Data Exists
+        if st.session_state.compass_df is not None and not st.session_state.compass_df.empty:
+            df_comp = st.session_state.compass_df
+            st.success(f"✅ Generated {len(df_comp)} rows of optimization data!")
+            
+            # Download Button
+            csv_compass = df_comp.to_csv(index=True).encode('utf-8')
+            st.download_button(
+                label="⬇️ Download Compass_Master.csv",
+                data=csv_compass,
+                file_name="Compass_Logic_And_Timing_Master.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+            
+            # AI Prompt Context
+            with st.expander("📋 View AI Prompt Context"):
+                st.markdown("""
+                **Copy this prompt to ChatGPT/Claude to optimize your strategy:**
+                
+                ```text
+                I have uploaded a 'Compass Master' file containing historical data for multiple Sector ETFs.
+                This file tests 6 different 'Trend Logics' (A through F) and includes Forward Returns (1d to 20d).
+
+                **Columns Guide:**
+                - Logic_X_Signal: 1 = The trend is 'Gaining Momentum & Outperforming'. 0 = It is not.
+                - Logic_X_Streak: How many consecutive days the signal has been active (1 = First Day).
+                - Target_Xd: The percent return of the ETF X days later.
+
+                **My Goal:**
+                I want to find the 'Golden Setup' for each Sector. 
+
+                **Please analyze the data and answer:**
+                1. Which Logic (A-F) has the highest correlation with positive 5-day and 10-day returns?
+                2. PERFORM A STREAK ANALYSIS: For the best Logic, is the Expected Value (EV) higher on Day 1 (Fresh) or Day 3 (Confirmed)?
+                3. Are there specific sectors (e.g., Semis vs Utilities) that require different Logics (e.g., Fast vs Slow)?
+                ```
+                """)
+  
+    # ==========================================
     # ADMIN: PHASE 4: DOWNLOAD SECTOR HISTORY
     # ==========================================
     with st.expander("🛠️ Phase 4: Download Sector History", expanded=False):
