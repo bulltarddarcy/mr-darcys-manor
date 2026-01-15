@@ -518,172 +518,31 @@ def run_theme_momentum_app(df_global=None):
         st.caption("Copy tickers:")
         st.code(", ".join(df_filtered['Ticker'].unique().tolist()), language="text")
 
-    # ==========================================
-    # DOWNLOAD SECTION
-    # ==========================================
-    st.subheader("📥 Download Sector History")
-
-    # Initialize session state for generated data so buttons persist
-    if "gen_theme_df" not in st.session_state:
-        st.session_state.gen_theme_df = None
-    if "gen_theme_name" not in st.session_state:
-        st.session_state.gen_theme_name = ""
-
-    with st.container():
-        # --- 1. THEME DATA ---
-        st.markdown("#### 1. Theme Data (training sets use 10d trend rel to benchmark selected above)")
-        
-        dl_theme = st.selectbox(
-            "Select Theme to Download", 
-            options=all_themes,
-            index=0,
-            key="dl_theme_selector"
-        )
-        
-        # Generation Button
-        if st.button(f"🧠 Generate AI Training Data for {dl_theme}", use_container_width=True):
-            target_etf = theme_map.get(dl_theme)
-            if target_etf and target_etf in etf_data_cache:
-                # Identify Stocks
-                theme_stocks = uni_df[
-                    (uni_df['Role'] == 'Stock') & 
-                    (uni_df['Theme'] == dl_theme)
-                ]['Ticker'].unique().tolist()
-
-                with st.spinner("Calculating extended windows (5-50d) & targets..."):
-                    # Generate and Store in Session State
-                    df_result = us.generate_ai_training_data(
-                        target_etf,
-                        etf_data_cache,
-                        theme_stocks,
-                        dl_theme,
-                        st.session_state.sector_benchmark
-                    )
-                    st.session_state.gen_theme_df = df_result
-                    st.session_state.gen_theme_name = dl_theme
-            else:
-                st.warning("ETF data not found.")
-                st.session_state.gen_theme_df = None
-
-        # Display Download Options (if data is generated)
-        if st.session_state.gen_theme_df is not None and not st.session_state.gen_theme_df.empty:
-            training_df = st.session_state.gen_theme_df
-            current_theme = st.session_state.gen_theme_name
-            
-            # Message
-            st.success(f"✅ Data Ready: {current_theme} ({len(training_df)} rows)")
-
-            # Two columns for the two formats
-            fmt_col1, fmt_col2 = st.columns(2)
-            
-            with fmt_col1:
-                # PARQUET
-                import io
-                parquet_buffer = io.BytesIO()
-                training_df.to_parquet(parquet_buffer, index=True)
-                parquet_data = parquet_buffer.getvalue()
-                
-                st.download_button(
-                    label=f"⬇️ {current_theme}.parquet",
-                    data=parquet_data,
-                    file_name=f"{current_theme}_AI_Training.parquet",
-                    mime="application/octet-stream",
-                    use_container_width=True
-                )
-
-            with fmt_col2:
-                # CSV
-                csv_data = training_df.to_csv(index=True).encode('utf-8')
-                st.download_button(
-                    label=f"⬇️ {current_theme}.csv",
-                    data=csv_data,
-                    file_name=f"{current_theme}_AI_Training.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            
-            # Copy-Paste Context
-            with st.expander("📋 View AI Prompt Context"):
-                schema_desc = f"""
-I have uploaded a file containing historical trading data for the '{current_theme}' sector. 
-The data is designed to train/optimize a swing trading strategy.
-
-**Schema Description:**
-1. **Context Columns:**
-   - `Theme_Category`: The status of the Sector ETF on that day (e.g., "Gaining Momentum & Outperforming").
-   - `Days_In_Category`: How many consecutive days the ETF has been in that specific category.
-
-2. **Feature Columns (Predictors):**
-   - `Metric_Alpha_[N]d`: The stock's excess return vs the ETF over N days (Windows: 5, 10, 15, 20, 30, 50).
-   - `Metric_RVOL_[N]d`: The stock's Relative Volume over N days.
-
-3. **Target Columns (Outcomes):**
-   - `Target_FwdRet_1d`: The stock's return on the NEXT day.
-   - `Target_FwdRet_5d`: The stock's return over the NEXT 5 days.
-   - `Target_FwdRet_10d`: The stock's return over the NEXT 10 days.
-
-**Goal:**
-Analyze the correlations between the `Theme_Category`, `Metric_Alpha`, and `Metric_RVOL` features against the `Target_FwdRet` columns.
-Find the optimal combination of Alpha and RVOL filters for each Theme Category to maximize forward returns.
-                """
-                st.code(schema_desc, language="markdown")
-
-        st.markdown("---")
-        
-        # --- 2. BENCHMARK DATA ---
-        # Now in the same flow/column as requested
-        st.markdown("#### 2. Benchmark Data (Price Only)")
-        
-        bench_col1, bench_col2 = st.columns(2)
-        
-        # Download SPY
-        with bench_col1:
-            if "SPY" in etf_data_cache:
-                spy_export = us.generate_benchmark_export("SPY", etf_data_cache)
-                if not spy_export.empty:
-                    st.download_button(
-                        label="⬇️ Download SPY",
-                        data=spy_export.to_csv(index=True).encode('utf-8'),
-                        file_name="SPY_History_Clean.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                        key="dl_btn_spy"
-                    )
-        
-        # Download QQQ
-        with bench_col2:
-            if "QQQ" in etf_data_cache:
-                qqq_export = us.generate_benchmark_export("QQQ", etf_data_cache)
-                if not qqq_export.empty:
-                    st.download_button(
-                        label="⬇️ Download QQQ",
-                        data=qqq_export.to_csv(index=True).encode('utf-8'),
-                        file_name="QQQ_History_Clean.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                        key="dl_btn_qqq"
-                    )
 
 
     # ==========================================
-    # SECTOR UNIVERSE GENERATOR UI
+    # ADMIN: PHASE 1: GENERATE NEW UNIVERSE
     # ==========================================
-    with st.expander("🛠️ Admin: Generate New Universe", expanded=False):
+    with st.expander("🛠️ Phase 1: Generate New Universe", expanded=False):
         st.caption("Use this tool to mathematically generate a universe based on ETF holdings.")
         
         # 1. Inputs
-        c_gen1, c_gen2, c_gen3 = st.columns(3)
-        with c_gen1:
-            target_weight = st.slider("Target Cumulative Weight %", 0.1, 1.0, 0.6, 0.05, 
-                help="We will keep pulling tickers until they account for this % of the ETF's weight.")
-        with c_gen2:
-            qty_cap = st.number_input("Max Tickers per Sector", min_value=0, value=0, 
-                help="Hard cap on count. Leave 0 for no limit.")
-            # Handle 0 as None
-            qty_cap_val = None if qty_cap == 0 else qty_cap
-        with c_gen3:
-            min_vol_input = st.number_input("Min $ Volume (Daily)", value=10_000_000, step=1_000_000, format="%d",
-                help="Filter out illiquid stocks.")
+            c_gen1, c_gen2, c_gen3 = st.columns(3)
+            with c_gen1:
+                # CHANGED: Slider -> Number Input
+                target_weight = st.number_input(
+                    "Target Cumulative Weight %", 
+                    min_value=0.05, max_value=1.0, value=0.60, step=0.05, format="%.2f",
+                    help="We will keep pulling tickers until they account for this % of the ETF's weight."
+                )
+            with c_gen2:
+                qty_cap = st.number_input("Max Tickers per Sector", min_value=0, value=0, 
+                    help="Hard cap on count. Leave 0 for no limit.")
+                # Handle 0 as None
+                qty_cap_val = None if qty_cap == 0 else qty_cap
+            with c_gen3:
+                min_vol_input = st.number_input("Min $ Volume (Daily)", value=10_000_000, step=1_000_000, format="%d",
+                    help="Filter out illiquid stocks.")
     
         # 2. Action
         if st.button("🚀 Generate Universe", type="primary"):
@@ -726,3 +585,157 @@ Find the optimal combination of Alpha and RVOL filters for each Theme Category t
             st.subheader("Your New Universe CSV")
             st.caption("Copy this and paste it into your Google Sheet 'SECTOR_UNIVERSE'")
             st.code(csv_data, language="csv")
+
+    
+    # ==========================================
+    # ADMIN: PHASE 4: DOWNLOAD SECTOR HISTORY FOR AI OPTIMISATION
+    # ==========================================
+    with st.expander("🛠️ Phase 4: SECTOR HISTORY DOWNLOAD", expanded=False):
+        st.caption("Use this tool to download sector history for AI to choose the best RVOL and Alpha variables by theme.")
+    
+        # Initialize session state for generated data so buttons persist
+        if "gen_theme_df" not in st.session_state:
+            st.session_state.gen_theme_df = None
+        if "gen_theme_name" not in st.session_state:
+            st.session_state.gen_theme_name = ""
+    
+        with st.container():
+            # --- 1. THEME DATA ---
+            st.markdown("#### 1. Theme Data (training sets use 10d trend rel to benchmark selected above)")
+            
+            dl_theme = st.selectbox(
+                "Select Theme to Download", 
+                options=all_themes,
+                index=0,
+                key="dl_theme_selector"
+            )
+            
+            # Generation Button
+            if st.button(f"🧠 Generate AI Training Data for {dl_theme}", use_container_width=True):
+                target_etf = theme_map.get(dl_theme)
+                if target_etf and target_etf in etf_data_cache:
+                    # Identify Stocks
+                    theme_stocks = uni_df[
+                        (uni_df['Role'] == 'Stock') & 
+                        (uni_df['Theme'] == dl_theme)
+                    ]['Ticker'].unique().tolist()
+    
+                    with st.spinner("Calculating extended windows (5-50d) & targets..."):
+                        # Generate and Store in Session State
+                        df_result = us.generate_ai_training_data(
+                            target_etf,
+                            etf_data_cache,
+                            theme_stocks,
+                            dl_theme,
+                            st.session_state.sector_benchmark
+                        )
+                        st.session_state.gen_theme_df = df_result
+                        st.session_state.gen_theme_name = dl_theme
+                else:
+                    st.warning("ETF data not found.")
+                    st.session_state.gen_theme_df = None
+    
+            # Display Download Options (if data is generated)
+            if st.session_state.gen_theme_df is not None and not st.session_state.gen_theme_df.empty:
+                training_df = st.session_state.gen_theme_df
+                current_theme = st.session_state.gen_theme_name
+                
+                # Message
+                st.success(f"✅ Data Ready: {current_theme} ({len(training_df)} rows)")
+    
+                # Two columns for the two formats
+                fmt_col1, fmt_col2 = st.columns(2)
+                
+                with fmt_col1:
+                    # PARQUET
+                    import io
+                    parquet_buffer = io.BytesIO()
+                    training_df.to_parquet(parquet_buffer, index=True)
+                    parquet_data = parquet_buffer.getvalue()
+                    
+                    st.download_button(
+                        label=f"⬇️ {current_theme}.parquet",
+                        data=parquet_data,
+                        file_name=f"{current_theme}_AI_Training.parquet",
+                        mime="application/octet-stream",
+                        use_container_width=True
+                    )
+    
+                with fmt_col2:
+                    # CSV
+                    csv_data = training_df.to_csv(index=True).encode('utf-8')
+                    st.download_button(
+                        label=f"⬇️ {current_theme}.csv",
+                        data=csv_data,
+                        file_name=f"{current_theme}_AI_Training.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                
+                # Copy-Paste Context
+                with st.expander("📋 View AI Prompt Context"):
+                    schema_desc = f"""
+    I have uploaded a file containing historical trading data for the '{current_theme}' sector. 
+    The data is designed to train/optimize a swing trading strategy.
+    
+    **Schema Description:**
+    1. **Context Columns:**
+       - `Theme_Category`: The status of the Sector ETF on that day (e.g., "Gaining Momentum & Outperforming").
+       - `Days_In_Category`: How many consecutive days the ETF has been in that specific category.
+    
+    2. **Feature Columns (Predictors):**
+       - `Metric_Alpha_[N]d`: The stock's excess return vs the ETF over N days (Windows: 5, 10, 15, 20, 30, 50).
+       - `Metric_RVOL_[N]d`: The stock's Relative Volume over N days.
+    
+    3. **Target Columns (Outcomes):**
+       - `Target_FwdRet_1d`: The stock's return on the NEXT day.
+       - `Target_FwdRet_5d`: The stock's return over the NEXT 5 days.
+       - `Target_FwdRet_10d`: The stock's return over the NEXT 10 days.
+    
+    **Goal:**
+    Analyze the correlations between the `Theme_Category`, `Metric_Alpha`, and `Metric_RVOL` features against the `Target_FwdRet` columns.
+    Find the optimal combination of Alpha and RVOL filters for each Theme Category to maximize forward returns.
+                    """
+                    st.code(schema_desc, language="markdown")
+    
+            st.markdown("---")
+            
+            # --- 2. BENCHMARK DATA ---
+            # Now in the same flow/column as requested
+            st.markdown("#### 2. Benchmark Data (Price Only)")
+            
+            bench_col1, bench_col2 = st.columns(2)
+            
+            # Download SPY
+            with bench_col1:
+                if "SPY" in etf_data_cache:
+                    spy_export = us.generate_benchmark_export("SPY", etf_data_cache)
+                    if not spy_export.empty:
+                        st.download_button(
+                            label="⬇️ Download SPY",
+                            data=spy_export.to_csv(index=True).encode('utf-8'),
+                            file_name="SPY_History_Clean.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                            key="dl_btn_spy"
+                        )
+            
+            # Download QQQ
+            with bench_col2:
+                if "QQQ" in etf_data_cache:
+                    qqq_export = us.generate_benchmark_export("QQQ", etf_data_cache)
+                    if not qqq_export.empty:
+                        st.download_button(
+                            label="⬇️ Download QQQ",
+                            data=qqq_export.to_csv(index=True).encode('utf-8'),
+                            file_name="QQQ_History_Clean.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                            key="dl_btn_qqq"
+                        )
+    
+    
+
+
+
+
