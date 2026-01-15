@@ -663,3 +663,66 @@ Find the optimal combination of Alpha and RVOL filters for each Theme Category t
                         use_container_width=True,
                         key="dl_btn_qqq"
                     )
+
+
+# ==========================================
+# SECTOR UNIVERSE GENERATOR UI
+# ==========================================
+with st.expander("🛠️ Admin: Generate New Universe", expanded=False):
+    st.caption("Use this tool to mathematically generate a universe based on ETF holdings.")
+    
+    # 1. Inputs
+    c_gen1, c_gen2, c_gen3 = st.columns(3)
+    with c_gen1:
+        target_weight = st.slider("Target Cumulative Weight %", 0.1, 1.0, 0.6, 0.05, 
+            help="We will keep pulling tickers until they account for this % of the ETF's weight.")
+    with c_gen2:
+        qty_cap = st.number_input("Max Tickers per Sector", min_value=0, value=0, 
+            help="Hard cap on count. Leave 0 for no limit.")
+        # Handle 0 as None
+        qty_cap_val = None if qty_cap == 0 else qty_cap
+    with c_gen3:
+        min_vol_input = st.number_input("Min $ Volume (Daily)", value=10_000_000, step=1_000_000, format="%d",
+            help="Filter out illiquid stocks.")
+
+    # 2. Action
+    if st.button("🚀 Generate Universe", type="primary"):
+        # Check if we have theme map
+        if 'theme_map' not in locals() or not theme_map:
+            # Fallback for when button is pressed without main load
+            _, _, theme_map, _, _ = us.SectorDataManager().load_universe()
+            
+        generator = us.UniverseGenerator()
+        
+        with st.spinner("Fetching holdings and validating volume... (This may take 30s)"):
+            csv_data, stats_df = generator.generate_universe(
+                theme_map, 
+                target_cumulative_weight=target_weight,
+                max_tickers_per_sector=qty_cap_val,
+                min_dollar_volume=min_vol_input
+            )
+        
+        # 3. Output - Summary Table
+        st.subheader("Generation Results")
+        
+        # Add color highlighting to the status
+        def color_status(val):
+            color = '#ff4b4b' if 'No Data' in val else '#ffa700' if 'Limit' in val else '#21c354'
+            return f'color: {color}'
+
+        st.dataframe(
+            stats_df.style.map(color_status, subset=['Status']),
+            use_container_width=True,
+            column_config={
+                "Weight Pulled": st.column_config.NumberColumn("ETF Weight %", format="%.1f%%"),
+                "Tickers Selected": st.column_config.NumberColumn("Tickers Added"),
+            }
+        )
+        
+        if any("Limit" in s for s in stats_df['Status'].values):
+            st.warning("⚠️ **Data Limitation:** Some sectors only returned Top 10 holdings (approx 10-20% weight). This is a limitation of free data sources. For full 60% coverage, you may need to manually import holdings for equal-weight ETFs like XBI.")
+
+        # 4. Output - Copy/Paste Area
+        st.subheader("Your New Universe CSV")
+        st.caption("Copy this and paste it into your Google Sheet 'SECTOR_UNIVERSE'")
+        st.code(csv_data, language="csv")
