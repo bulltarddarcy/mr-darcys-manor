@@ -1,6 +1,8 @@
 """
-Sector Rotation App - REFACTORED VERSION
-With multi-theme support, smart filters, and comprehensive scoring.
+Sector Rotation App - SPLIT VERSION
+Contains two separate apps:
+1. run_theme_momentum_app: User-facing dashboard (Charts, Signals, Analysis)
+2. run_admin_backtesting: Admin tools (Universe Gen, Compass, AI Data)
 """
 
 import streamlit as st
@@ -8,12 +10,12 @@ import pandas as pd
 import utils_sector as us
 
 # ==========================================
-# MAIN PAGE FUNCTION
+# APP 1: THE TRADING DASHBOARD
 # ==========================================
 def run_theme_momentum_app(df_global=None):
     """
-    Main entry point for Sector Rotation application.
-    Features: RRG quadrant analysis, Multi-timeframe views, Stock-level alpha analysis.
+    The 'Front End' for traders. 
+    Focus: Visualizing momentum, finding setups, analyzing stocks.
     """
     st.title("🔄 Theme Momentum")
     
@@ -70,12 +72,6 @@ def run_theme_momentum_app(df_global=None):
             * `< 100`: Losing speed (Deceleration)
         
         *Calculations use Weighted Regression (recent days weighted 3x more)*
-        
-        **📊 Quadrant Guide**
-        * 🟢 **LEADING (Top Right):** Strong trend + accelerating. The winners.
-        * 🟡 **WEAKENING (Bottom Right):** Strong trend but losing steam. Take profits.
-        * 🔴 **LAGGING (Bottom Left):** Weak trend + decelerating. The losers.
-        * 🔵 **IMPROVING (Top Left):** Weak trend but momentum building. Turnarounds.
         """)
 
     # Controls
@@ -214,27 +210,6 @@ def run_theme_momentum_app(df_global=None):
     # --- 7. THEME CATEGORIES DISPLAY ---
     st.subheader("📊 Theme Categories")
     
-    col_guide1, col_guide2 = st.columns([1, 1], gap="small")
-    with col_guide1:
-        with st.expander("📖 How Categories Work", expanded=False):
-            st.markdown("""
-            ### Understanding Momentum & Performance Categories
-            Sectors are categorized based on their **10-day trend direction**:
-            ...
-            """)
-            
-    with col_guide2:
-        if st.button("📖 View All Possible Combinations", use_container_width=True):
-            st.session_state.show_full_guide = True
-            st.rerun()
-    
-    if st.session_state.get('show_full_guide', False):
-        with st.expander("📖 All 12 Possible Combinations", expanded=True):
-            if st.button("✖️ Close Guide"):
-                st.session_state.show_full_guide = False
-                st.rerun()
-            st.markdown("""## Complete Category Guide ... (Content Preserved) ...""")
-
     quadrant_meta = [
         ('gaining_mom_outperforming', '⬈ GAIN MOM & OUTPERF', 'success', '✅ Best Opportunities - Sectors accelerating...'),
         ('gaining_mom_underperforming', '⬉ GAIN MOM & UNDERPERF', 'info', '🔄 Potential Reversals - Sectors bottoming...'),
@@ -318,7 +293,6 @@ def run_theme_momentum_app(df_global=None):
         return
 
     # Run Analysis - FAST MODE (No expensive columns yet)
-    # FIX: Only pass 4 arguments here
     df_stocks = us.analyze_stocks_batch(
         etf_data_cache, 
         stock_theme_pairs, 
@@ -461,7 +435,6 @@ def run_theme_momentum_app(df_global=None):
         st.checkbox("Show Biotech", key="opt_show_biotech", value=False, help="Include Biotech theme.")
 
     # --- ENRICH DATA ---
-    # Only run enrichment if checkboxes are checked (and logic ensures they are unchecked on filter apply)
     df_filtered = us.enrich_stock_data(
         df_filtered, 
         etf_data_cache, 
@@ -492,8 +465,6 @@ def run_theme_momentum_app(df_global=None):
     st.dataframe(df_filtered, use_container_width=True, hide_index=True, column_config=column_config)
 
     # --- TICKER LOOKUP ---
-    
-    # Text input for ticker
     lookup_ticker = st.text_input(
         "Enter a ticker to see its sectors:", 
         placeholder="e.g. AAPL",
@@ -501,12 +472,9 @@ def run_theme_momentum_app(df_global=None):
     ).upper().strip()
 
     if lookup_ticker:
-        # Check against the universe dataframe loaded at the start
         if not uni_df.empty and 'Ticker' in uni_df.columns:
             matches = uni_df[uni_df['Ticker'] == lookup_ticker]
-            
             if not matches.empty:
-                # Get unique themes for this ticker
                 found_themes = sorted(matches['Theme'].unique().tolist())
                 st.success(f"✅ **{lookup_ticker}** is mapped to: **{', '.join(found_themes)}**")
             else:
@@ -518,19 +486,45 @@ def run_theme_momentum_app(df_global=None):
         st.caption("Copy tickers:")
         st.code(", ".join(df_filtered['Ticker'].unique().tolist()), language="text")
 
-    # divider line between the outputs (above) and the admin inputs/configurations (below)
-    st.markdown('<hr style="border-top: 4px solid black;">', unsafe_allow_html=True)
+
+# ==========================================
+# APP 2: THE ADMIN & BACKTESTING SUITE
+# ==========================================
+def run_admin_backtesting():
+    """
+    The 'Back End' for optimization.
+    Focus: Generating universe, testing logic (Compass), creating AI datasets.
+    """
+    st.title("🛠️ Sector Admin & Backtesting")
     
+    # --- SHARED DATA FETCH (Required for Admin tools too) ---
+    if "sector_benchmark" not in st.session_state:
+        st.session_state.sector_benchmark = "SPY"
+        
+    st.caption(f"Loaded Universe Benchmark: **{st.session_state.sector_benchmark}**")
+    
+    # We allow changing benchmark here too, as AI training depends on it
+    new_bench = st.radio("Benchmark Source:", ["SPY", "QQQ"], horizontal=True, key="admin_bench_radio")
+    if new_bench != st.session_state.sector_benchmark:
+        st.session_state.sector_benchmark = new_bench
+        st.cache_data.clear()
+        st.rerun()
+
+    with st.spinner(f"Loading Sector Data for Admin Tools..."):
+        etf_data_cache, _, theme_map, uni_df, _ = \
+            us.fetch_and_process_universe(st.session_state.sector_benchmark)
+            
+    all_themes = sorted(list(theme_map.keys()))
+
     # ==========================================
-    # ADMIN: PHASE 1: GENERATE NEW UNIVERSE
+    # PHASE 1: GENERATE NEW UNIVERSE
     # ==========================================
+    st.markdown('<hr style="border-top: 2px solid #bbb;">', unsafe_allow_html=True)
     with st.expander("🛠️ Phase 1: Generate New Universe", expanded=False):
         st.caption("Use this tool to mathematically generate a universe based on ETF holdings.")
         
-        # 1. Inputs
         c_gen1, c_gen2, c_gen3 = st.columns(3)
         with c_gen1:
-            # CHANGED: Slider -> Number Input
             target_weight = st.number_input(
                 "Target Cumulative Weight %", 
                 min_value=0.05, max_value=1.0, value=0.60, step=0.05, format="%.2f",
@@ -539,21 +533,13 @@ def run_theme_momentum_app(df_global=None):
         with c_gen2:
             qty_cap = st.number_input("Max Tickers per Sector", min_value=0, value=0, 
                 help="Hard cap on count. Leave 0 for no limit.")
-            # Handle 0 as None
             qty_cap_val = None if qty_cap == 0 else qty_cap
         with c_gen3:
             min_vol_input = st.number_input("Min $ Volume (Daily)", value=10_000_000, step=1_000_000, format="%d",
                 help="Filter out illiquid stocks.")
 
-        # 2. Action
         if st.button("🚀 Generate Universe", type="primary"):
-            # Check if we have theme map
-            if 'theme_map' not in locals() or not theme_map:
-                # Fallback for when button is pressed without main load
-                _, _, theme_map, _, _ = us.SectorDataManager().load_universe()
-                
             generator = us.UniverseGenerator()
-            
             with st.spinner("Fetching holdings and validating volume... (This may take 30s)"):
                 csv_data, stats_df = generator.generate_universe(
                     theme_map, 
@@ -562,10 +548,7 @@ def run_theme_momentum_app(df_global=None):
                     min_dollar_volume=min_vol_input
                 )
             
-            # 3. Output - Summary Table
             st.subheader("Generation Results")
-            
-            # Add color highlighting to the status
             def color_status(val):
                 color = '#ff4b4b' if 'No Data' in val else '#ffa700' if 'Limit' in val else '#21c354'
                 return f'color: {color}'
@@ -580,49 +563,39 @@ def run_theme_momentum_app(df_global=None):
             )
             
             if any("Limit" in s for s in stats_df['Status'].values):
-                st.warning("⚠️ **Data Limitation:** Some sectors only returned Top 10 holdings (approx 10-20% weight). This is a limitation of free data sources. For full 60% coverage, you may need to manually import holdings for equal-weight ETFs like XBI.")
+                st.warning("⚠️ **Data Limitation:** Some sectors only returned Top 10 holdings.")
 
-            # 4. Output - Copy/Paste Area
             st.subheader("Your New Universe CSV")
-            st.caption("Copy this and paste it into your Google Sheet 'SECTOR_UNIVERSE'")
             st.code(csv_data, language="csv")
 
     # ==========================================
-    # ADMIN: PHASE 2 & 3: OPTIMISE GAIN MOM & OUTPERFORMING SIGNALS BY SECTOR ETF
+    # PHASE 2 & 3: OPTIMISE GAIN MOM & OUTPERFORMING SIGNALS BY SECTOR ETF
     # ==========================================
-    with st.expander("🛠️ Phase 2 & 3: Optimise Gain Mom & Outperf Signal by Sector ETF)", expanded=False):
-        st.caption("Generate a master file to scientifically prove WHICH trend definition works best, and WHEN to enter.")
+    st.markdown('<hr style="border-top: 2px solid #bbb;">', unsafe_allow_html=True)
+    with st.expander("🛠️ Phase 2 & 3: Optimise Gain Mom & Outperf Signal by Theme ETF", expanded=False):
+        st.caption("Generate a master file to scientifically prove WHICH trend definition works best, and WHEN to enter, by Theme ETF.")
         
-        # Initialize session state for this phase
         if "compass_df" not in st.session_state:
             st.session_state.compass_df = None
 
         c_p2_1, c_p2_2 = st.columns([1.5, 1])
-        
         with c_p2_1:
             st.info("""
-            **This Single Export Solves Two Problems:**
-            
-            1.  **The Logic (Phase 2):** Tests 6 different mathematical definitions of "Gaining Momentum" (from Fast 5d scalps to Slow 20d trends).
-            2.  **The Timing (Phase 3):** Includes a **"Streak Counter"** for every logic. This lets AI compare buying on **Day 1** (Aggressive) vs **Day 3** (Confirmed).
+            **Solves Two Problems:**
+            1. **Logic (Phase 2):** Tests 6 definitions of "Gaining Momentum" (Fast vs Slow).
+            2. **Timing (Phase 3):** Tests "Streak Counter" (Day 1 vs Day 3 Entry).
             """)
-            
         with c_p2_2:
             if st.button("🧭 Generate Compass Data", use_container_width=True):
-                # Ensure universe is loaded
-                if 'theme_map' not in locals() or not theme_map:
-                     _, _, theme_map, _, _ = us.SectorDataManager().load_universe()
-                
                 with st.spinner("Calculating 6 Logics x Streak Counts for all ETFs..."):
                     df_compass = us.generate_compass_data(etf_data_cache, theme_map)
                     st.session_state.compass_df = df_compass
                     
-        # Display Download & Prompt if Data Exists
+        # Display Download (No Expander for Prompt)
         if st.session_state.compass_df is not None and not st.session_state.compass_df.empty:
             df_comp = st.session_state.compass_df
             st.success(f"✅ Generated {len(df_comp)} rows of optimization data!")
             
-            # Download Button
             csv_compass = df_comp.to_csv(index=True).encode('utf-8')
             st.download_button(
                 label="⬇️ Download Compass_Master.csv",
@@ -632,7 +605,6 @@ def run_theme_momentum_app(df_global=None):
                 use_container_width=True
             )
             
-            # AI Prompt Context (Directly Visible)
             st.markdown("---")
             st.markdown("### 📋 AI Optimization Prompt")
             st.markdown("""
@@ -656,150 +628,57 @@ def run_theme_momentum_app(df_global=None):
             3. Are there specific sectors (e.g., Semis vs Utilities) that require different Logics (e.g., Fast vs Slow)?
             ```
             """)
-  
+
     # ==========================================
-    # ADMIN: PHASE 4: DOWNLOAD SECTOR HISTORY
+    # PHASE 4: AI TRAINING DATA
     # ==========================================
+    st.markdown('<hr style="border-top: 2px solid #bbb;">', unsafe_allow_html=True)
     with st.expander("🛠️ Phase 4: Download Sector History", expanded=False):
-        st.caption("Use this tool to download sector history for AI to choose the best RVOL and Alpha variables by theme.")
+        st.caption("Download deep history for specific themes to train AI on Alpha/RVOL metrics.")
     
-        # Initialize session state for generated data so buttons persist
         if "gen_theme_df" not in st.session_state:
             st.session_state.gen_theme_df = None
         if "gen_theme_name" not in st.session_state:
             st.session_state.gen_theme_name = ""
     
-        with st.container():
-            # --- 1. THEME DATA ---
-            st.markdown("#### 1. Theme Data (training sets use 10d trend rel to benchmark selected above)")
-            
-            dl_theme = st.selectbox(
-                "Select Theme to Download", 
-                options=all_themes,
-                index=0,
-                key="dl_theme_selector"
-            )
-            
-            # Generation Button
-            if st.button(f"🧠 Generate AI Training Data for {dl_theme}", use_container_width=True):
-                target_etf = theme_map.get(dl_theme)
-                if target_etf and target_etf in etf_data_cache:
-                    # Identify Stocks
-                    theme_stocks = uni_df[
-                        (uni_df['Role'] == 'Stock') & 
-                        (uni_df['Theme'] == dl_theme)
-                    ]['Ticker'].unique().tolist()
-    
-                    with st.spinner("Calculating extended windows (5-50d) & targets..."):
-                        # Generate and Store in Session State
-                        df_result = us.generate_ai_training_data(
-                            target_etf,
-                            etf_data_cache,
-                            theme_stocks,
-                            dl_theme,
-                            st.session_state.sector_benchmark
-                        )
-                        st.session_state.gen_theme_df = df_result
-                        st.session_state.gen_theme_name = dl_theme
-                else:
-                    st.warning("ETF data not found.")
-                    st.session_state.gen_theme_df = None
-    
-            # Display Download Options (if data is generated)
-            if st.session_state.gen_theme_df is not None and not st.session_state.gen_theme_df.empty:
-                training_df = st.session_state.gen_theme_df
-                current_theme = st.session_state.gen_theme_name
-                
-                # Message
-                st.success(f"✅ Data Ready: {current_theme} ({len(training_df)} rows)")
-    
-                # Two columns for the two formats
-                fmt_col1, fmt_col2 = st.columns(2)
-                
-                with fmt_col1:
-                    # PARQUET
-                    import io
-                    parquet_buffer = io.BytesIO()
-                    training_df.to_parquet(parquet_buffer, index=True)
-                    parquet_data = parquet_buffer.getvalue()
-                    
-                    st.download_button(
-                        label=f"⬇️ {current_theme}.parquet",
-                        data=parquet_data,
-                        file_name=f"{current_theme}_AI_Training.parquet",
-                        mime="application/octet-stream",
-                        use_container_width=True
+        st.markdown("#### 1. Theme Data (Training Sets)")
+        dl_theme = st.selectbox("Select Theme", options=all_themes, index=0, key="dl_theme_selector")
+        
+        if st.button(f"🧠 Generate AI Training Data for {dl_theme}", use_container_width=True):
+            target_etf = theme_map.get(dl_theme)
+            if target_etf and target_etf in etf_data_cache:
+                theme_stocks = uni_df[(uni_df['Role']=='Stock') & (uni_df['Theme']==dl_theme)]['Ticker'].unique().tolist()
+                with st.spinner("Calculating extended windows..."):
+                    df_result = us.generate_ai_training_data(
+                        target_etf, etf_data_cache, theme_stocks, dl_theme, st.session_state.sector_benchmark
                     )
-    
-                with fmt_col2:
-                    # CSV
-                    csv_data = training_df.to_csv(index=True).encode('utf-8')
-                    st.download_button(
-                        label=f"⬇️ {current_theme}.csv",
-                        data=csv_data,
-                        file_name=f"{current_theme}_AI_Training.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                
-                # Copy-Paste Context
-                with st.expander("📋 View AI Prompt Context"):
-                    schema_desc = f"""
-    I have uploaded a file containing historical trading data for the '{current_theme}' sector. 
-    The data is designed to train/optimize a swing trading strategy.
-    
-    **Schema Description:**
-    1. **Context Columns:**
-       - `Theme_Category`: The status of the Sector ETF on that day (e.g., "Gaining Momentum & Outperforming").
-       - `Days_In_Category`: How many consecutive days the ETF has been in that specific category.
-    
-    2. **Feature Columns (Predictors):**
-       - `Metric_Alpha_[N]d`: The stock's excess return vs the ETF over N days (Windows: 5, 10, 15, 20, 30, 50).
-       - `Metric_RVOL_[N]d`: The stock's Relative Volume over N days.
-    
-    3. **Target Columns (Outcomes):**
-       - `Target_FwdRet_1d`: The stock's return on the NEXT day.
-       - `Target_FwdRet_5d`: The stock's return over the NEXT 5 days.
-       - `Target_FwdRet_10d`: The stock's return over the NEXT 10 days.
-    
-    **Goal:**
-    Analyze the correlations between the `Theme_Category`, `Metric_Alpha`, and `Metric_RVOL` features against the `Target_FwdRet` columns.
-    Find the optimal combination of Alpha and RVOL filters for each Theme Category to maximize forward returns.
-                    """
-                    st.code(schema_desc, language="markdown")
-    
-            st.markdown("---")
-            
-            # --- 2. BENCHMARK DATA ---
-            # Now in the same flow/column as requested
-            st.markdown("#### 2. Benchmark Data (Price Only)")
-            
-            bench_col1, bench_col2 = st.columns(2)
-            
-            # Download SPY
-            with bench_col1:
-                if "SPY" in etf_data_cache:
-                    spy_export = us.generate_benchmark_export("SPY", etf_data_cache)
-                    if not spy_export.empty:
-                        st.download_button(
-                            label="⬇️ Download SPY",
-                            data=spy_export.to_csv(index=True).encode('utf-8'),
-                            file_name="SPY_History_Clean.csv",
-                            mime="text/csv",
-                            use_container_width=True,
-                            key="dl_btn_spy"
-                        )
-            
-            # Download QQQ
-            with bench_col2:
-                if "QQQ" in etf_data_cache:
-                    qqq_export = us.generate_benchmark_export("QQQ", etf_data_cache)
-                    if not qqq_export.empty:
-                        st.download_button(
-                            label="⬇️ Download QQQ",
-                            data=qqq_export.to_csv(index=True).encode('utf-8'),
-                            file_name="QQQ_History_Clean.csv",
-                            mime="text/csv",
-                            use_container_width=True,
-                            key="dl_btn_qqq"
-                        )
+                    st.session_state.gen_theme_df = df_result
+                    st.session_state.gen_theme_name = dl_theme
+            else:
+                st.warning("ETF data not found.")
+                st.session_state.gen_theme_df = None
+
+        if st.session_state.gen_theme_df is not None and not st.session_state.gen_theme_df.empty:
+            training_df = st.session_state.gen_theme_df
+            st.success(f"✅ Data Ready: {st.session_state.gen_theme_name}")
+
+            fmt_col1, fmt_col2 = st.columns(2)
+            with fmt_col1:
+                import io
+                parquet_buffer = io.BytesIO()
+                training_df.to_parquet(parquet_buffer, index=True)
+                st.download_button(
+                    label=f"⬇️ Parquet",
+                    data=parquet_buffer.getvalue(),
+                    file_name=f"{st.session_state.gen_theme_name}_AI.parquet",
+                    mime="application/octet-stream",
+                    use_container_width=True
+                )
+            with fmt_col2:
+                st.download_button(
+                    label=f"⬇️ CSV",
+                    data=training_df.to_csv(index=True).encode('utf-8'),
+                    file_name=f"{st.session_state.gen_theme_name}_AI.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
