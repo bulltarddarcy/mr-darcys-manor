@@ -99,7 +99,10 @@ try:
         st.Page(lambda: main_darcy.run_rsi_scanner_app(df_global), title="RSI Scanner", icon="🤖", url_path="rsi_scanner"),
         st.Page(lambda: main_darcy.run_seasonality_app(df_global), title="Seasonality", icon="📅", url_path="seasonality"),
         st.Page(lambda: main_darcy.run_ema_distance_app(df_global), title="EMA Distance", icon="📏", url_path="ema_distance"),
+        
+        # SECTOR APPS (Split into User vs Admin)
         st.Page(lambda: main_sector.run_theme_momentum_app(df_global), title="Theme Momentum", icon="🔄", url_path="theme_momentum"),
+        st.Page(lambda: main_sector.run_admin_backtesting(), title="Theme Admin", icon="🛠️", url_path="theme_admin"),
     ])
 
     # --- 4. SIDEBAR INFO ---
