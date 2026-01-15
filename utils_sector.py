@@ -478,9 +478,93 @@ def get_quadrant_name(ratio: float, momentum: float) -> str:
     else: return "🔴 Lagging"
 
 # ==========================================
-# 7. EXPORT & GENERATORS
+# 7. ORCHESTRATOR (The Missing Function Restored!)
 # ==========================================
-# [UniverseGenerator kept as is]
+@st.cache_data(ttl=ud.CACHE_TTL, show_spinner=False)
+def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
+    dm = SectorDataManager()
+    uni_df, tickers, theme_map = dm.load_universe(benchmark_ticker)
+    if uni_df.empty: return {}, ["SECTOR_UNIVERSE is empty"], theme_map, uni_df, {}
+
+    db_url = st.secrets.get("PARQUET_SECTOR_ROTATION")
+    if not db_url: return {}, ["PARQUET secret missing"], theme_map, uni_df, {}
+
+    try:
+        buffer = ud.get_gdrive_binary_data(db_url)
+        master_df = pd.read_parquet(buffer)
+    except Exception as e: return {}, [f"Error reading Parquet: {e}"], theme_map, uni_df, {}
+
+    # Standardize & Filter
+    master_df.columns = [c.strip().title() for c in master_df.columns]
+    if 'Symbol' in master_df.columns: master_df.rename(columns={'Symbol': 'Ticker'}, inplace=True)
+    master_df['Ticker'] = master_df['Ticker'].str.upper().str.strip()
+    if 'Date' in master_df.columns:
+        master_df['Date'] = pd.to_datetime(master_df['Date'])
+        master_df = master_df.set_index('Date').sort_index()
+
+    needed = set(tickers) | set(theme_map.values()) | {benchmark_ticker, "SPY", "QQQ"} 
+    master_df = master_df[master_df['Ticker'].isin(needed)].copy()
+    if master_df.empty: return {}, ["No tickers found"], theme_map, uni_df, {}
+
+    # Vectorized Calcs
+    master_df.sort_values(['Ticker', 'Date'], inplace=True)
+    master_df['Pct_Change'] = master_df.groupby('Ticker')['Close'].pct_change()
+    
+    if 'Volume' in master_df.columns:
+        avg_vol = master_df.groupby('Ticker')['Volume'].transform(lambda x: x.rolling(window=AVG_VOLUME_WINDOW).mean())
+        master_df['RVOL'] = master_df['Volume'] / avg_vol
+        for label, time_window in TIMEFRAMES.items():
+            master_df[f"RVOL_{label}"] = master_df.groupby('Ticker')['RVOL'].transform(lambda x: x.rolling(window=time_window).mean())
+            
+    if 'Close' not in master_df.columns and 'Adj Close' in master_df.columns: master_df['Close'] = master_df['Adj Close']
+
+    # Cache Building
+    calc = SectorAlphaCalculator()
+    data_cache = {}
+    missing_tickers = []
+    full_data_map = {t: df for t, df in master_df.groupby('Ticker')}
+
+    if benchmark_ticker not in full_data_map: return {}, [f"Benchmark {benchmark_ticker} missing"], theme_map, uni_df, {}
+    bench_df = full_data_map[benchmark_ticker].copy()
+    data_cache[benchmark_ticker] = bench_df
+    
+    for b in ["SPY", "QQQ"]:
+        if b in full_data_map: data_cache[b] = full_data_map[b]
+
+    # Process ETFs
+    for etf in theme_map.values():
+        if etf in full_data_map:
+            data_cache[etf] = calc.calculate_rrg_metrics(full_data_map[etf].copy(), bench_df)
+        else: missing_tickers.append(etf)
+
+    # Process Stocks (Parallel)
+    stocks = uni_df[uni_df['Role'] == 'Stock']
+    stock_themes_map = stocks.groupby('Ticker')['Theme'].apply(list).to_dict()
+    
+    def process_stock_worker(ticker, themes_list):
+        if ticker not in full_data_map: return ticker, None, True
+        try:
+            df = full_data_map[ticker].copy()
+            for theme in themes_list:
+                parent_df = data_cache.get(theme_map.get(theme), bench_df)
+                if parent_df is not None: df = calc.calculate_stock_alpha_multi_theme(df, parent_df, theme)
+            return ticker, df, False
+        except: return ticker, None, False
+
+    if stock_themes_map:
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            future_to_stock = {executor.submit(process_stock_worker, t, stock_themes_map[t]): t for t in stock_themes_map.keys()}
+            for future in as_completed(future_to_stock):
+                t, res, is_miss = future.result()
+                if is_miss: missing_tickers.append(t)
+                elif res is not None: data_cache[t] = res
+
+    logger.info(f"Sync complete. {len(data_cache)} tickers.")
+    return data_cache, missing_tickers, theme_map, uni_df, stock_themes_map
+
+# ==========================================
+# 8. EXPORT & GENERATORS (PHASE 1)
+# ==========================================
 class UniverseGenerator:
     def fetch_etf_holdings(self, etf_ticker: str) -> List[Dict]:
         try:
@@ -553,7 +637,9 @@ class UniverseGenerator:
         df_final = pd.DataFrame(final_rows).sort_values(['Theme', 'Role', 'Ticker'])
         return df_final.to_csv(index=False), pd.DataFrame(summary_stats)
 
-# [Compass Generator kept as is]
+# ==========================================
+# 9. COMPASS GENERATOR (PHASE 2 & 3)
+# ==========================================
 def generate_compass_data(etf_data_cache, theme_map):
     results = []
     etf_to_theme = {v: k for k, v in theme_map.items()}
@@ -598,37 +684,6 @@ def generate_compass_data(etf_data_cache, theme_map):
     if not results: return pd.DataFrame()
     return pd.concat(results)
 
-def plot_simple_rrg(data_cache, target_map, view_key, show_trails):
-    if not target_map: return go.Figure()
-    fig = go.Figure()
-    all_x, all_y = [], []
-    for theme, ticker in target_map.items():
-        df = data_cache.get(ticker)
-        if df is None or df.empty: continue
-        col_x, col_y = f"RRG_Ratio_{view_key}", f"RRG_Mom_{view_key}"
-        data_slice = df.tail(3) if show_trails else df.tail(1)
-        if data_slice.empty: continue
-        x_vals, y_vals = data_slice[col_x].tolist(), data_slice[col_y].tolist()
-        all_x.extend(x_vals); all_y.extend(y_vals)
-        last_x, last_y = x_vals[-1], y_vals[-1]
-        color = '#00CC96' if last_x > 100 and last_y > 100 else '#636EFA' if last_x < 100 and last_y > 100 else '#FFA15A' if last_x > 100 else '#EF553B'
-        n = len(x_vals)
-        fig.add_trace(go.Scatter(x=x_vals, y=y_vals, mode='lines+markers+text', name=theme, text=[""]*(n-1)+[theme], customdata=[theme]*n,
-            textposition="top center", marker=dict(size=[MARKER_SIZE_TRAIL]*(n-1)+[MARKER_SIZE_CURRENT], color=color, opacity=[TRAIL_OPACITY]*(n-1)+[CURRENT_OPACITY], line=dict(width=1, color='white')),
-            line=dict(color=color, width=1 if show_trails else 0, shape='spline', smoothing=1.3), hoverinfo='text+name'))
-    limit_x = max(max([abs(x - 100) for x in all_x]) * 1.1, 2.0) if all_x else 2.0
-    limit_y = max(max([abs(y - 100) for y in all_y]) * 1.1, 2.0) if all_y else 2.0
-    fig.add_hline(y=100, line_width=1, line_color="gray", line_dash="dash")
-    fig.add_vline(x=100, line_width=1, line_color="gray", line_dash="dash")
-    fig.update_layout(xaxis=dict(title="Relative Trend", showgrid=False, range=[100-limit_x, 100+limit_x]), 
-                      yaxis=dict(title="Relative Momentum", showgrid=False, range=[100-limit_y, 100+limit_y]),
-                      height=750, showlegend=False, template="plotly_dark", margin=dict(l=40, r=40, t=40, b=40))
-    return fig
-
-# ==========================================
-# 8. COMPASS & OPTIMIZATION TOOLS
-# ==========================================
-
 def optimize_compass_settings(compass_df: pd.DataFrame) -> Tuple[Dict, str]:
     """
     Analyzes Compass Data to find the Logic with the highest 5-day Win Rate per Ticker.
@@ -662,13 +717,41 @@ def optimize_compass_settings(compass_df: pd.DataFrame) -> Tuple[Dict, str]:
     
     return config_dict, "Optimization Complete & Saved to 'sector_optimized_config.json'"
 
-# ... [generate_ai_training_data kept as is] ...
+def plot_simple_rrg(data_cache, target_map, view_key, show_trails):
+    if not target_map: return go.Figure()
+    fig = go.Figure()
+    all_x, all_y = [], []
+    for theme, ticker in target_map.items():
+        df = data_cache.get(ticker)
+        if df is None or df.empty: continue
+        col_x, col_y = f"RRG_Ratio_{view_key}", f"RRG_Mom_{view_key}"
+        data_slice = df.tail(3) if show_trails else df.tail(1)
+        if data_slice.empty: continue
+        x_vals, y_vals = data_slice[col_x].tolist(), data_slice[col_y].tolist()
+        all_x.extend(x_vals); all_y.extend(y_vals)
+        last_x, last_y = x_vals[-1], y_vals[-1]
+        color = '#00CC96' if last_x > 100 and last_y > 100 else '#636EFA' if last_x < 100 and last_y > 100 else '#FFA15A' if last_x > 100 else '#EF553B'
+        n = len(x_vals)
+        fig.add_trace(go.Scatter(x=x_vals, y=y_vals, mode='lines+markers+text', name=theme, text=[""]*(n-1)+[theme], customdata=[theme]*n,
+            textposition="top center", marker=dict(size=[MARKER_SIZE_TRAIL]*(n-1)+[MARKER_SIZE_CURRENT], color=color, opacity=[TRAIL_OPACITY]*(n-1)+[CURRENT_OPACITY], line=dict(width=1, color='white')),
+            line=dict(color=color, width=1 if show_trails else 0, shape='spline', smoothing=1.3), hoverinfo='text+name'))
+    limit_x = max(max([abs(x - 100) for x in all_x]) * 1.1, 2.0) if all_x else 2.0
+    limit_y = max(max([abs(y - 100) for y in all_y]) * 1.1, 2.0) if all_y else 2.0
+    fig.add_hline(y=100, line_width=1, line_color="gray", line_dash="dash")
+    fig.add_vline(x=100, line_width=1, line_color="gray", line_dash="dash")
+    fig.update_layout(xaxis=dict(title="Relative Trend", showgrid=False, range=[100-limit_x, 100+limit_x]), 
+                      yaxis=dict(title="Relative Momentum", showgrid=False, range=[100-limit_y, 100+limit_y]),
+                      height=750, showlegend=False, template="plotly_dark", margin=dict(l=40, r=40, t=40, b=40))
+    return fig
+
+# ==========================================
+# 10. AI TRAINING DATA & EXPORTS (PHASE 4)
+# ==========================================
 def generate_ai_training_data(etf_ticker, etf_data_cache, stock_tickers, theme_name, benchmark_ticker):
     etf_df = etf_data_cache.get(etf_ticker)
     if etf_df is None or etf_df.empty: return pd.DataFrame()
     
     # We use basic cat calculation for training data export
-    # (Since this data is for training the model to FIND the best logic)
     r_med = etf_df['RRG_Ratio_Med']
     m_med = etf_df['RRG_Mom_Med']
     avg_r_prev3 = r_med.shift(1).rolling(window=3).mean()
