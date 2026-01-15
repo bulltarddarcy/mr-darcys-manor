@@ -214,28 +214,46 @@ def run_theme_momentum_app(df_global=None):
         for theme_info in items:
             days = theme_info['days_in_category']
             days_display = "🆕 Day 1" if days == 1 else "⭐ Day 2" if days == 2 else f"Day {days}"
+            
+            # Check for Streak Hit
+            target = theme_info.get('target_streak', 1)
+            is_hit = days >= target
+            
+            if is_hit:
+                days_display = f"🎯 {days_display}" # Mark hit
+            
             data.append({
                 "Sector": theme_info['theme'],
                 "Days": days_display,
-                "5d": theme_info['quadrant_5d'],
-                "Reason": theme_info['reason']
+                "Reason": theme_info['reason'],
+                "_is_hit": is_hit, # Hidden column for styling
+                "_days_val": days  # Hidden sort helper
             })
+        
         df = pd.DataFrame(data)
-        # Sort by Days (Newest first)
-        df['_days_sort'] = df['Days'].str.extract(r'(\d+)').astype(float).fillna(0)
-        df = df.sort_values('_days_sort').drop('_days_sort', axis=1)
+        if df.empty: return df
+        
+        # Sort: Hit Target first, then by days
+        df = df.sort_values(['_is_hit', '_days_val'], ascending=[False, True]).drop(['_is_hit', '_days_val'], axis=1)
         return df
 
     # Prepare Data
     df_std = prepare_display_df(cats_standard.get(target_bucket, []))
     df_opt = prepare_display_df(cats_optimized.get(target_bucket, []))
     
-    # Calculate Height to remove scrollbar (approx 35px per row + 38px header)
+    # Calculate Height to remove scrollbar
     def get_height(df):
         rows = len(df)
         if rows == 0: return 38
         return (rows + 1) * 35 + 3
     
+    # Styling function for optimized rows
+    def highlight_hits(row):
+        # Look for the target icon we added
+        if '🎯' in str(row['Days']):
+            return ['background-color: rgba(33, 195, 84, 0.15)'] * len(row)
+        return [''] * len(row)
+
     col_std, col_opt = st.columns(2)
     
     with col_std:
@@ -258,7 +276,7 @@ def run_theme_momentum_app(df_global=None):
         st.markdown("**✨ Smart Optimized**")
         if not df_opt.empty:
             st.dataframe(
-                df_opt, 
+                df_opt.style.apply(highlight_hits, axis=1), 
                 hide_index=True, 
                 use_container_width=True, 
                 height=get_height(df_opt),
@@ -297,9 +315,6 @@ def run_theme_momentum_app(df_global=None):
         }
     
     # --- 3. PROCESS DATA (Using Global Filters) ---
-    # For Stock Analysis, which category map should we use?
-    # Usually safer to use the Standard one to avoid confusion, or offer a choice.
-    # Defaulting to Standard (Chart Timeframe) for consistency with the filter labels.
     theme_cat_map = {}
     for cat_list in cats_standard.values():
         for t in cat_list:
@@ -610,8 +625,7 @@ def run_admin_backtesting():
                 use_container_width=True
             )
             
-        # AI Prompt Context (RESTORED)
-        st.markdown("### 📋 AI Optimization Prompt")
+        st.markdown("### 📋 AI Prompt Context")
         st.markdown("""
         **Copy this prompt to ChatGPT/Claude to optimize your strategy:**
         
