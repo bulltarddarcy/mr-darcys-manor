@@ -518,196 +518,204 @@ def run_admin_backtesting():
     # ==========================================
     # PHASE 1: GENERATE NEW UNIVERSE
     # ==========================================
-    st.markdown('<hr style="border-top: 2px solid #bbb;">', unsafe_allow_html=True)
-    with st.expander("🛠️ Phase 1: Generate New Universe", expanded=False):
-        st.caption("Use this tool to mathematically generate a universe based on ETF holdings.")
+    st.header("Phase 1: Generate New Universe")
+    st.caption("Use this tool to mathematically generate a universe based on ETF holdings.")
+    
+    c_gen1, c_gen2, c_gen3 = st.columns(3)
+    with c_gen1:
+        # UPDATED: Input as integer (e.g. 60) instead of decimal
+        target_weight_input = st.number_input(
+            "Target Cumulative Weight %", 
+            min_value=5.0, max_value=100.0, value=60.0, step=5.0, format="%.1f",
+            help="We will keep pulling tickers until they account for this % of the ETF's weight."
+        )
+    with c_gen2:
+        qty_cap = st.number_input("Max Tickers per Sector", min_value=0, value=0, 
+            help="Hard cap on count. Leave 0 for no limit.")
+        qty_cap_val = None if qty_cap == 0 else qty_cap
+    with c_gen3:
+        min_vol_input = st.number_input("Min $ Volume (Daily)", value=10_000_000, step=1_000_000, format="%d",
+            help="Filter out illiquid stocks.")
+
+    if st.button("🚀 Generate Universe", type="primary", use_container_width=True):
+        generator = us.UniverseGenerator()
+        with st.spinner("Fetching holdings and validating volume... (This may take 30s)"):
+            # Convert integer input (60) to decimal (0.60) for the logic
+            csv_data, stats_df = generator.generate_universe(
+                theme_map, 
+                target_cumulative_weight=(target_weight_input / 100.0),
+                max_tickers_per_sector=qty_cap_val,
+                min_dollar_volume=min_vol_input
+            )
         
-        c_gen1, c_gen2, c_gen3 = st.columns(3)
-        with c_gen1:
-            target_weight = st.number_input(
-                "Target Cumulative Weight %", 
-                min_value=0.05, max_value=1.0, value=0.60, step=0.05, format="%.2f",
-                help="We will keep pulling tickers until they account for this % of the ETF's weight."
-            )
-        with c_gen2:
-            qty_cap = st.number_input("Max Tickers per Sector", min_value=0, value=0, 
-                help="Hard cap on count. Leave 0 for no limit.")
-            qty_cap_val = None if qty_cap == 0 else qty_cap
-        with c_gen3:
-            min_vol_input = st.number_input("Min $ Volume (Daily)", value=10_000_000, step=1_000_000, format="%d",
-                help="Filter out illiquid stocks.")
+        st.subheader("Generation Results")
+        def color_status(val):
+            color = '#ff4b4b' if 'No Data' in val else '#ffa700' if 'Limit' in val else '#21c354'
+            return f'color: {color}'
 
-        if st.button("🚀 Generate Universe", type="primary"):
-            generator = us.UniverseGenerator()
-            with st.spinner("Fetching holdings and validating volume... (This may take 30s)"):
-                csv_data, stats_df = generator.generate_universe(
-                    theme_map, 
-                    target_cumulative_weight=target_weight,
-                    max_tickers_per_sector=qty_cap_val,
-                    min_dollar_volume=min_vol_input
-                )
-            
-            st.subheader("Generation Results")
-            def color_status(val):
-                color = '#ff4b4b' if 'No Data' in val else '#ffa700' if 'Limit' in val else '#21c354'
-                return f'color: {color}'
+        st.dataframe(
+            stats_df.style.map(color_status, subset=['Status']),
+            use_container_width=True,
+            column_config={
+                "Weight Pulled": st.column_config.NumberColumn("ETF Weight %", format="%.1f%%"),
+                "Tickers Selected": st.column_config.NumberColumn("Tickers Added"),
+            }
+        )
+        
+        if any("Limit" in s for s in stats_df['Status'].values):
+            st.warning("⚠️ **Data Limitation:** Some sectors only returned Top 10 holdings.")
 
-            st.dataframe(
-                stats_df.style.map(color_status, subset=['Status']),
-                use_container_width=True,
-                column_config={
-                    "Weight Pulled": st.column_config.NumberColumn("ETF Weight %", format="%.1f%%"),
-                    "Tickers Selected": st.column_config.NumberColumn("Tickers Added"),
-                }
-            )
-            
-            if any("Limit" in s for s in stats_df['Status'].values):
-                st.warning("⚠️ **Data Limitation:** Some sectors only returned Top 10 holdings.")
-
-            st.subheader("Your New Universe CSV")
-            st.code(csv_data, language="csv")
+        st.subheader("Your New Universe CSV")
+        st.code(csv_data, language="csv")
 
     # ==========================================
     # PHASE 2 & 3: THE COMPASS
     # ==========================================
-    st.markdown('<hr style="border-top: 2px solid #bbb;">', unsafe_allow_html=True)
-    with st.expander("🛠️ Phase 2 & 3: The Compass (Optimize Logic & Timing)", expanded=False):
-        st.caption("Generate a master file to scientifically prove WHICH trend definition works best, and WHEN to enter.")
-        
-        if "compass_df" not in st.session_state:
-            st.session_state.compass_df = None
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.header("Phase 2 & 3: The Compass (Optimize Logic & Timing)")
+    st.caption("Generate a master file to scientifically prove WHICH trend definition works best, and WHEN to enter.")
+    
+    if "compass_df" not in st.session_state:
+        st.session_state.compass_df = None
 
-        c_p2_1, c_p2_2 = st.columns([1.5, 1])
-        with c_p2_1:
-            st.info("""
-            **Solves Two Problems:**
-            1. **Logic (Phase 2):** Tests 6 definitions of "Gaining Momentum" (Fast vs Slow).
-            2. **Timing (Phase 3):** Tests "Streak Counter" (Day 1 vs Day 3 Entry).
-            """)
-        with c_p2_2:
-            if st.button("🧭 Generate Compass Data", use_container_width=True):
-                with st.spinner("Calculating 6 Logics x Streak Counts for all ETFs..."):
-                    df_compass = us.generate_compass_data(etf_data_cache, theme_map)
-                    st.session_state.compass_df = df_compass
-                    
-        if st.session_state.compass_df is not None and not st.session_state.compass_df.empty:
-            df_comp = st.session_state.compass_df
-            st.success(f"✅ Generated {len(df_comp)} rows of optimization data!")
+    # UPDATED: Detailed Matrix Explanation
+    st.info("""
+    **This export creates a 'Matrix of Truth' testing 30 different strategy combinations per day.**
+    
+    **The Buckets (Variables Tested):**
+    1.  **6 Logic Definitions:**
+        * `Logic A`: 10d Trend / 3d Smooth (Standard)
+        * `Logic B`: 10d Trend / 5d Smooth (Smoother)
+        * `Logic C`: 20d Trend / 3d Smooth (Slow)
+        * `Logic D`: 20d Trend / 5d Smooth (Slowest)
+        * `Logic E`: 5d Trend / 2d Smooth (Fast Scalp)
+        * `Logic F`: 5d Trend / 3d Smooth (Fast Smooth)
+    2.  **Entry Timing:** `Streak Counter` (Test EV of buying Day 1 vs Day 2 vs Day 3).
+    3.  **Forward Returns:** `1d`, `3d`, `5d`, `10d`, `20d` (Did the signal work?).
+    """)
+    
+    # UPDATED: Button is now standalone below text
+    if st.button("🧭 Generate Compass Data", type="primary", use_container_width=True):
+        with st.spinner("Calculating 6 Logics x Streak Counts for all ETFs..."):
+            df_compass = us.generate_compass_data(etf_data_cache, theme_map)
+            st.session_state.compass_df = df_compass
             
-            csv_compass = df_comp.to_csv(index=True).encode('utf-8')
+    if st.session_state.compass_df is not None and not st.session_state.compass_df.empty:
+        df_comp = st.session_state.compass_df
+        st.success(f"✅ Generated {len(df_comp)} rows of optimization data!")
+        
+        csv_compass = df_comp.to_csv(index=True).encode('utf-8')
+        st.download_button(
+            label="⬇️ Download Compass_Master.csv",
+            data=csv_compass,
+            file_name="Compass_Logic_And_Timing_Master.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+        
+        st.markdown("### 📋 AI Optimization Prompt")
+        st.markdown("""
+        **Copy this prompt to ChatGPT/Claude to optimize your strategy:**
+        
+        ```text
+        I have uploaded a 'Compass Master' file containing historical data for multiple Sector ETFs.
+        This file tests 6 different 'Trend Logics' (A through F) and includes Forward Returns (1d to 20d).
+
+        **Columns Guide:**
+        - Logic_X_Signal: 1 = The trend is 'Gaining Momentum & Outperforming'. 0 = It is not.
+        - Logic_X_Streak: How many consecutive days the signal has been active (1 = First Day).
+        - Target_Xd: The percent return of the ETF X days later.
+
+        **My Goal:**
+        I want to find the 'Golden Setup' for each Sector. 
+
+        **Please analyze the data and answer:**
+        1. Which Logic (A-F) has the highest correlation with positive 5-day and 10-day returns?
+        2. PERFORM A STREAK ANALYSIS: For the best Logic, is the Expected Value (EV) higher on Day 1 (Fresh) or Day 3 (Confirmed)?
+        3. Are there specific sectors (e.g., Semis vs Utilities) that require different Logics (e.g., Fast vs Slow)?
+        ```
+        """)
+
+    # ==========================================
+    # PHASE 4: AI TRAINING DATA
+    # ==========================================
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.header("Phase 4: Download Sector History")
+    st.caption("Download deep history for specific themes to train AI on Alpha/RVOL metrics.")
+
+    if "gen_theme_df" not in st.session_state:
+        st.session_state.gen_theme_df = None
+    if "gen_theme_name" not in st.session_state:
+        st.session_state.gen_theme_name = ""
+
+    st.markdown("#### Theme Data (Training Sets)")
+    dl_theme = st.selectbox("Select Theme", options=all_themes, index=0, key="dl_theme_selector")
+    
+    if st.button(f"🧠 Generate AI Training Data for {dl_theme}", type="primary", use_container_width=True):
+        target_etf = theme_map.get(dl_theme)
+        if target_etf and target_etf in etf_data_cache:
+            theme_stocks = uni_df[(uni_df['Role']=='Stock') & (uni_df['Theme']==dl_theme)]['Ticker'].unique().tolist()
+            with st.spinner("Calculating extended windows..."):
+                df_result = us.generate_ai_training_data(
+                    target_etf, etf_data_cache, theme_stocks, dl_theme, st.session_state.sector_benchmark
+                )
+                st.session_state.gen_theme_df = df_result
+                st.session_state.gen_theme_name = dl_theme
+        else:
+            st.warning("ETF data not found.")
+            st.session_state.gen_theme_df = None
+
+    if st.session_state.gen_theme_df is not None and not st.session_state.gen_theme_df.empty:
+        training_df = st.session_state.gen_theme_df
+        current_theme = st.session_state.gen_theme_name
+        st.success(f"✅ Data Ready: {current_theme} ({len(training_df)} rows)")
+
+        # Download Buttons
+        fmt_col1, fmt_col2 = st.columns(2)
+        with fmt_col1:
+            import io
+            parquet_buffer = io.BytesIO()
+            training_df.to_parquet(parquet_buffer, index=True)
             st.download_button(
-                label="⬇️ Download Compass_Master.csv",
-                data=csv_compass,
-                file_name="Compass_Logic_And_Timing_Master.csv",
+                label=f"⬇️ {current_theme}.parquet",
+                data=parquet_buffer.getvalue(),
+                file_name=f"{current_theme}_AI_Training.parquet",
+                mime="application/octet-stream",
+                use_container_width=True
+            )
+        with fmt_col2:
+            st.download_button(
+                label=f"⬇️ {current_theme}.csv",
+                data=training_df.to_csv(index=True).encode('utf-8'),
+                file_name=f"{current_theme}_AI_Training.csv",
                 mime="text/csv",
                 use_container_width=True
             )
-            
-            st.markdown("---")
-            st.markdown("### 📋 AI Optimization Prompt")
-            st.markdown("""
-            **Copy this prompt to ChatGPT/Claude to optimize your strategy:**
-            
-            ```text
-            I have uploaded a 'Compass Master' file containing historical data for multiple Sector ETFs.
-            This file tests 6 different 'Trend Logics' (A through F) and includes Forward Returns (1d to 20d).
 
-            **Columns Guide:**
-            - Logic_X_Signal: 1 = The trend is 'Gaining Momentum & Outperforming'. 0 = It is not.
-            - Logic_X_Streak: How many consecutive days the signal has been active (1 = First Day).
-            - Target_Xd: The percent return of the ETF X days later.
-
-            **My Goal:**
-            I want to find the 'Golden Setup' for each Sector. 
-
-            **Please analyze the data and answer:**
-            1. Which Logic (A-F) has the highest correlation with positive 5-day and 10-day returns?
-            2. PERFORM A STREAK ANALYSIS: For the best Logic, is the Expected Value (EV) higher on Day 1 (Fresh) or Day 3 (Confirmed)?
-            3. Are there specific sectors (e.g., Semis vs Utilities) that require different Logics (e.g., Fast vs Slow)?
-            ```
-            """)
-
-    # ==========================================
-    # PHASE 4: AI TRAINING DATA (Cleaned)
-    # ==========================================
-    st.markdown('<hr style="border-top: 2px solid #bbb;">', unsafe_allow_html=True)
-    with st.expander("🛠️ Phase 4: Download Sector History", expanded=False):
-        st.caption("Download deep history for specific themes to train AI on Alpha/RVOL metrics.")
-    
-        if "gen_theme_df" not in st.session_state:
-            st.session_state.gen_theme_df = None
-        if "gen_theme_name" not in st.session_state:
-            st.session_state.gen_theme_name = ""
-    
-        st.markdown("#### Theme Data (Training Sets)")
-        dl_theme = st.selectbox("Select Theme", options=all_themes, index=0, key="dl_theme_selector")
+        st.markdown("### 📋 AI Prompt Context")
+        st.markdown(f"""
+        **Copy this prompt to ChatGPT/Claude:**
         
-        if st.button(f"🧠 Generate AI Training Data for {dl_theme}", use_container_width=True):
-            target_etf = theme_map.get(dl_theme)
-            if target_etf and target_etf in etf_data_cache:
-                theme_stocks = uni_df[(uni_df['Role']=='Stock') & (uni_df['Theme']==dl_theme)]['Ticker'].unique().tolist()
-                with st.spinner("Calculating extended windows..."):
-                    df_result = us.generate_ai_training_data(
-                        target_etf, etf_data_cache, theme_stocks, dl_theme, st.session_state.sector_benchmark
-                    )
-                    st.session_state.gen_theme_df = df_result
-                    st.session_state.gen_theme_name = dl_theme
-            else:
-                st.warning("ETF data not found.")
-                st.session_state.gen_theme_df = None
+        ```text
+        I have uploaded a file containing historical trading data for the '{current_theme}' sector. 
+        The data is designed to train/optimize a swing trading strategy.
 
-        if st.session_state.gen_theme_df is not None and not st.session_state.gen_theme_df.empty:
-            training_df = st.session_state.gen_theme_df
-            current_theme = st.session_state.gen_theme_name
-            st.success(f"✅ Data Ready: {current_theme} ({len(training_df)} rows)")
+        **Schema Description:**
+        1. **Context Columns:**
+           - `Theme_Category`: The status of the Sector ETF on that day (e.g., "Gaining Momentum & Outperforming").
+           - `Days_In_Category`: How many consecutive days the ETF has been in that specific category.
 
-            # Download Buttons
-            fmt_col1, fmt_col2 = st.columns(2)
-            with fmt_col1:
-                import io
-                parquet_buffer = io.BytesIO()
-                training_df.to_parquet(parquet_buffer, index=True)
-                st.download_button(
-                    label=f"⬇️ {current_theme}.parquet",
-                    data=parquet_buffer.getvalue(),
-                    file_name=f"{current_theme}_AI_Training.parquet",
-                    mime="application/octet-stream",
-                    use_container_width=True
-                )
-            with fmt_col2:
-                st.download_button(
-                    label=f"⬇️ {current_theme}.csv",
-                    data=training_df.to_csv(index=True).encode('utf-8'),
-                    file_name=f"{current_theme}_AI_Training.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
+        2. **Feature Columns (Predictors):**
+           - `Metric_Alpha_[N]d`: The stock's excess return vs the ETF over N days (Windows: 5, 10, 15, 20, 30, 50).
+           - `Metric_RVOL_[N]d`: The stock's Relative Volume over N days.
 
-            st.markdown("---")
-            st.markdown("### 📋 AI Prompt Context")
-            st.markdown(f"""
-            **Copy this prompt to ChatGPT/Claude:**
-            
-            ```text
-            I have uploaded a file containing historical trading data for the '{current_theme}' sector. 
-            The data is designed to train/optimize a swing trading strategy.
+        3. **Target Columns (Outcomes):**
+           - `Target_FwdRet_1d`: The stock's return on the NEXT day.
+           - `Target_FwdRet_5d`: The stock's return over the NEXT 5 days.
+           - `Target_FwdRet_10d`: The stock's return over the NEXT 10 days.
 
-            **Schema Description:**
-            1. **Context Columns:**
-               - `Theme_Category`: The status of the Sector ETF on that day (e.g., "Gaining Momentum & Outperforming").
-               - `Days_In_Category`: How many consecutive days the ETF has been in that specific category.
-
-            2. **Feature Columns (Predictors):**
-               - `Metric_Alpha_[N]d`: The stock's excess return vs the ETF over N days (Windows: 5, 10, 15, 20, 30, 50).
-               - `Metric_RVOL_[N]d`: The stock's Relative Volume over N days.
-
-            3. **Target Columns (Outcomes):**
-               - `Target_FwdRet_1d`: The stock's return on the NEXT day.
-               - `Target_FwdRet_5d`: The stock's return over the NEXT 5 days.
-               - `Target_FwdRet_10d`: The stock's return over the NEXT 10 days.
-
-            **Goal:**
-            Analyze the correlations between the `Theme_Category`, `Metric_Alpha`, and `Metric_RVOL` features against the `Target_FwdRet` columns.
-            Find the optimal combination of Alpha and RVOL filters for each Theme Category to maximize forward returns.
-            ```
-            """)
+        **Goal:**
+        Analyze the correlations between the `Theme_Category`, `Metric_Alpha`, and `Metric_RVOL` features against the `Target_FwdRet` columns.
+        Find the optimal combination of Alpha and RVOL filters for each Theme Category to maximize forward returns.
+        ```
+        """)
