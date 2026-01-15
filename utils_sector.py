@@ -1202,3 +1202,171 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
     logger.info(f"Sync complete. {len(data_cache)} tickers.")
     return data_cache, missing_tickers, theme_map, uni_df, stock_themes_map
 
+# ==========================================
+# 11. UNIVERSE GENERATOR (NEW)
+# ==========================================
+class UniverseGenerator:
+    """Generates a valid sector universe from ETF holdings."""
+    
+    def fetch_etf_holdings(self, etf_ticker: str) -> List[Dict]:
+        """
+        Fetches holdings. 
+        NOTE: yfinance often limits this to Top 10. 
+        In a production env, replace this with a paid FMP/Polygon API call.
+        """
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(etf_ticker)
+            
+            # Try new funds_data API first (Top 10 usually)
+            try:
+                holdings = ticker.funds_data.top_holdings.reset_index()
+                # Standardize columns: 'Symbol', 'Holding Percent'
+                holdings.rename(columns={'Symbol': 'ticker', 'Holding Percent': 'weight'}, inplace=True)
+                return holdings.to_dict('records')
+            except:
+                pass
+                
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching holdings for {etf_ticker}: {e}")
+            return []
+
+    def generate_universe(
+        self, 
+        theme_map: Dict[str, str], 
+        target_cumulative_weight: float = 0.60, 
+        max_tickers_per_sector: int = None,
+        min_dollar_volume: float = 10_000_000
+    ) -> Tuple[str, pd.DataFrame]:
+        """
+        Main generation logic.
+        target_cumulative_weight: 0.60 = 60%
+        """
+        
+        all_rows = []
+        summary_stats = []
+        
+        # 1. Collect Raw Candidates per Sector
+        raw_candidates = {} # {ticker: [theme, theme...]}
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        items = list(theme_map.items())
+        total_steps = len(items) + 1
+        
+        for i, (theme, etf) in enumerate(items):
+            status_text.text(f"Scanning {theme} ({etf})...")
+            progress_bar.progress(i / total_steps)
+            
+            holdings = self.fetch_etf_holdings(etf)
+            if not holdings:
+                summary_stats.append({
+                    "Sector": theme, "ETF": etf, "Tickers Found": 0, 
+                    "Weight Pulled": 0.0, "Status": "❌ No Data"
+                })
+                continue
+                
+            # Sort by weight desc
+            holdings.sort(key=lambda x: x['weight'], reverse=True)
+            
+            # Cumulative Sum Logic
+            selected = []
+            current_weight = 0.0
+            
+            for h in holdings:
+                # Stop if we hit caps
+                if current_weight >= target_cumulative_weight:
+                    break
+                if max_tickers_per_sector and len(selected) >= max_tickers_per_sector:
+                    break
+                    
+                selected.append(h)
+                current_weight += h['weight']
+            
+            # Add to raw list
+            for s in selected:
+                t = s['ticker']
+                if t not in raw_candidates: raw_candidates[t] = []
+                raw_candidates[t].append(theme)
+                
+            summary_stats.append({
+                "Sector": theme, "ETF": etf, 
+                "Tickers Found": len(holdings),
+                "Tickers Selected": len(selected),
+                "Weight Pulled": round(current_weight * 100, 1),
+                "Status": "⚠️ Top 10 Limit" if len(holdings) <= 10 and current_weight < 0.20 else "✅ OK"
+            })
+
+        # 2. Batch Volume Filter
+        status_text.text("Validating Liquidity (Batch Download)...")
+        progress_bar.progress(0.9)
+        
+        unique_tickers = list(raw_candidates.keys())
+        if not unique_tickers:
+            return "", pd.DataFrame(summary_stats)
+            
+        # Download 5d history for volume check
+        try:
+            import yfinance as yf
+            # Chunking to prevent URL too long errors
+            chunk_size = 100
+            valid_tickers = set()
+            
+            for i in range(0, len(unique_tickers), chunk_size):
+                chunk = unique_tickers[i:i+chunk_size]
+                data = yf.download(chunk, period="5d", progress=False)['Volume']
+                
+                # Handle single ticker result vs dataframe
+                if isinstance(data, pd.Series): data = data.to_frame()
+                
+                # Calculate Dollar Volume (Approximation using Close is better, but Volume check is decent)
+                # To be precise, we need Price. Let's assume Price > $1 for safety or fetch Close too.
+                # Re-fetch with Close to be safe for Dollar Volume
+                df_vol = yf.download(chunk, period="5d", progress=False)
+                
+                # Check structure (Multi-index vs Single)
+                if 'Close' in df_vol and 'Volume' in df_vol:
+                     for t in chunk:
+                        try:
+                            # Handle weird yfinance multi-index
+                            if len(chunk) > 1:
+                                closes = df_vol['Close'][t]
+                                vols = df_vol['Volume'][t]
+                            else:
+                                closes = df_vol['Close']
+                                vols = df_vol['Volume']
+                                
+                            avg_dollar_vol = (closes * vols).mean()
+                            if avg_dollar_vol >= min_dollar_volume:
+                                valid_tickers.add(t)
+                        except:
+                            continue
+                            
+        except Exception as e:
+            logger.error(f"Volume filter error: {e}")
+            valid_tickers = set(unique_tickers) # Fallback: accept all
+
+        # 3. Build Final CSV
+        final_rows = []
+        for ticker, themes in raw_candidates.items():
+            if ticker in valid_tickers:
+                # If a stock is in multiple themes, pick the first one or duplicate? 
+                # Usually standard practice is one row per ticker-theme pair
+                for theme in themes:
+                    final_rows.append({"Ticker": ticker, "Theme": theme, "Role": "Stock"})
+        
+        # Add ETFs themselves
+        for theme, etf in theme_map.items():
+            final_rows.append({"Ticker": etf, "Theme": theme, "Role": "Etf"})
+            
+        df_final = pd.DataFrame(final_rows).sort_values(['Theme', 'Role', 'Ticker'])
+        csv_string = df_final.to_csv(index=False)
+        
+        progress_bar.progress(1.0)
+        status_text.text("Done!")
+        
+        return csv_string, pd.DataFrame(summary_stats)
+
+
