@@ -208,19 +208,20 @@ def run_theme_momentum_app(df_global=None):
     target_bucket = 'gaining_mom_outperforming'
     
     # Helper to prepare dataframe
-    def prepare_display_df(items):
+    def prepare_display_df(items, is_optimized=False):
         if not items: return pd.DataFrame()
         data = []
         for theme_info in items:
             days = theme_info['days_in_category']
             days_display = "🆕 Day 1" if days == 1 else "⭐ Day 2" if days == 2 else f"Day {days}"
             
-            # Check for Streak Hit
-            target = theme_info.get('target_streak', 1)
-            is_hit = days >= target
-            
-            if is_hit:
-                days_display = f"🎯 {days_display}" # Mark hit
+            # Check for Streak Hit (Only relevant for optimized)
+            is_hit = False
+            if is_optimized:
+                target = theme_info.get('target_streak', 1)
+                is_hit = days >= target
+                if is_hit:
+                    days_display = f"🎯 {days_display}" # Mark hit
             
             data.append({
                 "Sector": theme_info['theme'],
@@ -233,13 +234,14 @@ def run_theme_momentum_app(df_global=None):
         df = pd.DataFrame(data)
         if df.empty: return df
         
-        # Sort: Hit Target first, then by days
-        df = df.sort_values(['_is_hit', '_days_val'], ascending=[False, True]).drop(['_is_hit', '_days_val'], axis=1)
+        # Sort: Always by Days Ascending (1, 2, 3...)
+        # We don't sort by hit status anymore, just visual highlighting
+        df = df.sort_values('_days_val', ascending=True).drop(['_is_hit', '_days_val'], axis=1)
         return df
 
     # Prepare Data
-    df_std = prepare_display_df(cats_standard.get(target_bucket, []))
-    df_opt = prepare_display_df(cats_optimized.get(target_bucket, []))
+    df_std = prepare_display_df(cats_standard.get(target_bucket, []), is_optimized=False)
+    df_opt = prepare_display_df(cats_optimized.get(target_bucket, []), is_optimized=True)
     
     # Calculate Height to remove scrollbar
     def get_height(df):
@@ -247,11 +249,12 @@ def run_theme_momentum_app(df_global=None):
         if rows == 0: return 38
         return (rows + 1) * 35 + 3
     
-    # Styling function for optimized rows
+    # Styling function: Gentle Green Highlight for Hits
     def highlight_hits(row):
         # Look for the target icon we added
         if '🎯' in str(row['Days']):
-            return ['background-color: rgba(33, 195, 84, 0.15)'] * len(row)
+            # Gentle Green Background
+            return ['background-color: rgba(46, 204, 113, 0.1)'] * len(row)
         return [''] * len(row)
 
     col_std, col_opt = st.columns(2)
