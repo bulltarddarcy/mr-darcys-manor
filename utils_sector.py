@@ -1209,24 +1209,16 @@ class UniverseGenerator:
     """Generates a valid sector universe from ETF holdings."""
     
     def fetch_etf_holdings(self, etf_ticker: str) -> List[Dict]:
-        """
-        Fetches holdings. 
-        NOTE: yfinance often limits this to Top 10. 
-        In a production env, replace this with a paid FMP/Polygon API call.
-        """
+        """Fetches holdings. yfinance often limits this to Top 10."""
         try:
             import yfinance as yf
             ticker = yf.Ticker(etf_ticker)
-            
-            # Try new funds_data API first (Top 10 usually)
             try:
                 holdings = ticker.funds_data.top_holdings.reset_index()
-                # Standardize columns: 'Symbol', 'Holding Percent'
                 holdings.rename(columns={'Symbol': 'ticker', 'Holding Percent': 'weight'}, inplace=True)
                 return holdings.to_dict('records')
             except:
                 pass
-                
             return []
         except Exception as e:
             logger.error(f"Error fetching holdings for {etf_ticker}: {e}")
@@ -1239,16 +1231,9 @@ class UniverseGenerator:
         max_tickers_per_sector: int = None,
         min_dollar_volume: float = 10_000_000
     ) -> Tuple[str, pd.DataFrame]:
-        """
-        Main generation logic.
-        target_cumulative_weight: 0.60 = 60%
-        """
         
-        all_rows = []
         summary_stats = []
-        
-        # 1. Collect Raw Candidates per Sector
-        raw_candidates = {} # {ticker: [theme, theme...]}
+        raw_candidates = {} 
         
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -1268,24 +1253,17 @@ class UniverseGenerator:
                 })
                 continue
                 
-            # Sort by weight desc
             holdings.sort(key=lambda x: x['weight'], reverse=True)
             
-            # Cumulative Sum Logic
             selected = []
             current_weight = 0.0
             
             for h in holdings:
-                # Stop if we hit caps
-                if current_weight >= target_cumulative_weight:
-                    break
-                if max_tickers_per_sector and len(selected) >= max_tickers_per_sector:
-                    break
-                    
+                if current_weight >= target_cumulative_weight: break
+                if max_tickers_per_sector and len(selected) >= max_tickers_per_sector: break
                 selected.append(h)
                 current_weight += h['weight']
             
-            # Add to raw list
             for s in selected:
                 t = s['ticker']
                 if t not in raw_candidates: raw_candidates[t] = []
@@ -1299,7 +1277,6 @@ class UniverseGenerator:
                 "Status": "⚠️ Top 10 Limit" if len(holdings) <= 10 and current_weight < 0.20 else "✅ OK"
             })
 
-        # 2. Batch Volume Filter
         status_text.text("Validating Liquidity (Batch Download)...")
         progress_bar.progress(0.9)
         
@@ -1307,30 +1284,20 @@ class UniverseGenerator:
         if not unique_tickers:
             return "", pd.DataFrame(summary_stats)
             
-        # Download 5d history for volume check
         try:
             import yfinance as yf
-            # Chunking to prevent URL too long errors
             chunk_size = 100
             valid_tickers = set()
             
             for i in range(0, len(unique_tickers), chunk_size):
                 chunk = unique_tickers[i:i+chunk_size]
-                data = yf.download(chunk, period="5d", progress=False)['Volume']
                 
-                # Handle single ticker result vs dataframe
-                if isinstance(data, pd.Series): data = data.to_frame()
-                
-                # Calculate Dollar Volume (Approximation using Close is better, but Volume check is decent)
-                # To be precise, we need Price. Let's assume Price > $1 for safety or fetch Close too.
-                # Re-fetch with Close to be safe for Dollar Volume
+                # Fetch Close and Volume to calculate Dollar Volume
                 df_vol = yf.download(chunk, period="5d", progress=False)
                 
-                # Check structure (Multi-index vs Single)
                 if 'Close' in df_vol and 'Volume' in df_vol:
                      for t in chunk:
                         try:
-                            # Handle weird yfinance multi-index
                             if len(chunk) > 1:
                                 closes = df_vol['Close'][t]
                                 vols = df_vol['Volume'][t]
@@ -1342,22 +1309,17 @@ class UniverseGenerator:
                             if avg_dollar_vol >= min_dollar_volume:
                                 valid_tickers.add(t)
                         except:
-                            continue
-                            
+                            continue     
         except Exception as e:
             logger.error(f"Volume filter error: {e}")
-            valid_tickers = set(unique_tickers) # Fallback: accept all
+            valid_tickers = set(unique_tickers)
 
-        # 3. Build Final CSV
         final_rows = []
         for ticker, themes in raw_candidates.items():
             if ticker in valid_tickers:
-                # If a stock is in multiple themes, pick the first one or duplicate? 
-                # Usually standard practice is one row per ticker-theme pair
                 for theme in themes:
                     final_rows.append({"Ticker": ticker, "Theme": theme, "Role": "Stock"})
         
-        # Add ETFs themselves
         for theme, etf in theme_map.items():
             final_rows.append({"Ticker": etf, "Theme": theme, "Role": "Etf"})
             
@@ -1366,94 +1328,79 @@ class UniverseGenerator:
         
         progress_bar.progress(1.0)
         status_text.text("Done!")
-        
         return csv_string, pd.DataFrame(summary_stats)
 
-    # ==========================================
-    # 12. COMPASS GENERATOR (PHASE 2 & 3 COMBINED)
-    # ==========================================
-    def generate_compass_data(etf_data_cache: Dict, theme_map: Dict) -> pd.DataFrame:
-        """
-        Generates a master file testing 6 'Momentum Logics' AND their 'Streak Lengths'
-        against 5 Forward Return periods. Covers both Phase 2 (Logic) and Phase 3 (Timing).
-        """
-        results = []
+
+# ==========================================
+# 12. COMPASS GENERATOR (PHASE 2 & 3 COMBINED)
+# ==========================================
+# THIS FUNCTION MUST BE FLUSH LEFT (NOT INDENTED)
+def generate_compass_data(etf_data_cache: Dict, theme_map: Dict) -> pd.DataFrame:
+    """
+    Generates a master file testing 6 'Momentum Logics' AND their 'Streak Lengths'
+    against 5 Forward Return periods. Covers both Phase 2 (Logic) and Phase 3 (Timing).
+    """
+    results = []
+    
+    etf_to_theme = {v: k for k, v in theme_map.items()}
+    unique_etfs = list(set(theme_map.values()))
+    
+    for ticker in unique_etfs:
+        if ticker not in etf_data_cache: continue
         
-        # Reverse map: Get friendly theme name (e.g. "Semiconductors")
-        etf_to_theme = {v: k for k, v in theme_map.items()}
-        unique_etfs = list(set(theme_map.values()))
+        df = etf_data_cache[ticker]
+        if df is None or df.empty: continue
         
-        for ticker in unique_etfs:
-            if ticker not in etf_data_cache: continue
-            
-            df = etf_data_cache[ticker]
-            if df is None or df.empty: continue
-            
-            # Work on a copy of the full history
-            d = df.copy().sort_index()
-            
-            # --- 1. DEFINE LOGIC VARIATIONS ---
-            # Format: (Ratio Column, Momentum Column, Smoothing Window)
-            variations = {
-                'Logic_A_10d_3s': ('RRG_Ratio_Med',   'RRG_Mom_Med',   3), # Standard
-                'Logic_B_10d_5s': ('RRG_Ratio_Med',   'RRG_Mom_Med',   5), # Smooth
-                'Logic_C_20d_3s': ('RRG_Ratio_Long',  'RRG_Mom_Long',  3), # Slow
-                'Logic_D_20d_5s': ('RRG_Ratio_Long',  'RRG_Mom_Long',  5), # Slowest
-                'Logic_E_5d_2s':  ('RRG_Ratio_Short', 'RRG_Mom_Short', 2), # Fast/Scalp
-                'Logic_F_5d_3s':  ('RRG_Ratio_Short', 'RRG_Mom_Short', 3), # Fast/Smooth
-            }
-            
-            for label, (col_r, col_m, smooth) in variations.items():
-                if col_r not in d.columns or col_m not in d.columns:
-                    d[f'{label}_Signal'] = 0
-                    d[f'{label}_Streak'] = 0
-                    continue
-                    
-                # Compare Today vs Smoothed Previous Average
-                prev_r_avg = d[col_r].shift(1).rolling(window=smooth).mean()
-                prev_m_avg = d[col_m].shift(1).rolling(window=smooth).mean()
+        d = df.copy().sort_index()
+        
+        variations = {
+            'Logic_A_10d_3s': ('RRG_Ratio_Med',   'RRG_Mom_Med',   3),
+            'Logic_B_10d_5s': ('RRG_Ratio_Med',   'RRG_Mom_Med',   5),
+            'Logic_C_20d_3s': ('RRG_Ratio_Long',  'RRG_Mom_Long',  3),
+            'Logic_D_20d_5s': ('RRG_Ratio_Long',  'RRG_Mom_Long',  5),
+            'Logic_E_5d_2s':  ('RRG_Ratio_Short', 'RRG_Mom_Short', 2),
+            'Logic_F_5d_3s':  ('RRG_Ratio_Short', 'RRG_Mom_Short', 3),
+        }
+        
+        for label, (col_r, col_m, smooth) in variations.items():
+            if col_r not in d.columns or col_m not in d.columns:
+                d[f'{label}_Signal'] = 0
+                d[f'{label}_Streak'] = 0
+                continue
                 
-                # SIGNAL: Momentum Increasing & Ratio Increasing
-                is_bullish = (d[col_m] > prev_m_avg) & (d[col_r] > prev_r_avg)
-                
-                # 1. Binary Signal (0 or 1)
-                d[f'{label}_Signal'] = is_bullish.astype(int)
-                
-                # 2. Streak Counter (Phase 3 Requirement)
-                # Counts consecutive days the signal has been 1
-                # Logic: Group by changes in signal, then count cumulative size
-                group_id = (d[f'{label}_Signal'] != d[f'{label}_Signal'].shift()).cumsum()
-                d[f'{label}_Streak'] = d.groupby(group_id).cumcount() + 1
-                # Zero out streak if the signal itself is 0
-                d.loc[d[f'{label}_Signal'] == 0, f'{label}_Streak'] = 0
-    
-            # --- 2. CALCULATE 5 FORWARD RETURN TARGETS ---
-            d['Target_1d'] = d['Close'].shift(-1) / d['Close'] - 1
-            d['Target_3d'] = d['Close'].shift(-3) / d['Close'] - 1
-            d['Target_5d'] = d['Close'].shift(-5) / d['Close'] - 1
-            d['Target_10d'] = d['Close'].shift(-10) / d['Close'] - 1
-            d['Target_20d'] = d['Close'].shift(-20) / d['Close'] - 1
+            prev_r_avg = d[col_r].shift(1).rolling(window=smooth).mean()
+            prev_m_avg = d[col_m].shift(1).rolling(window=smooth).mean()
             
-            # --- 3. CONTEXT ---
-            if 'Sma50' in d.columns:
-                d['Context_Above50'] = (d['Close'] > d['Sma50']).astype(int)
-            else:
-                d['Context_Above50'] = 0
-    
-            # --- 4. EXPORT PREPARATION ---
-            # We now export Logic (Signal) AND Logic (Streak)
-            cols_logic = [c for c in d.columns if 'Logic_' in c]
-            cols_target = [c for c in d.columns if 'Target_' in c]
-            cols_context = ['Context_Above50']
+            is_bullish = (d[col_m] > prev_m_avg) & (d[col_r] > prev_r_avg)
             
-            export_chunk = d[['Close'] + cols_context + cols_target + cols_logic].copy()
-            export_chunk['Ticker'] = ticker
-            export_chunk['Theme'] = etf_to_theme.get(ticker, ticker)
+            d[f'{label}_Signal'] = is_bullish.astype(int)
             
-            # Drop only rows with NO future data at all
-            export_chunk.dropna(subset=['Target_1d'], inplace=True)
-            
-            results.append(export_chunk)
-    
-        if not results: return pd.DataFrame()
-        return pd.concat(results)
+            group_id = (d[f'{label}_Signal'] != d[f'{label}_Signal'].shift()).cumsum()
+            d[f'{label}_Streak'] = d.groupby(group_id).cumcount() + 1
+            d.loc[d[f'{label}_Signal'] == 0, f'{label}_Streak'] = 0
+
+        d['Target_1d'] = d['Close'].shift(-1) / d['Close'] - 1
+        d['Target_3d'] = d['Close'].shift(-3) / d['Close'] - 1
+        d['Target_5d'] = d['Close'].shift(-5) / d['Close'] - 1
+        d['Target_10d'] = d['Close'].shift(-10) / d['Close'] - 1
+        d['Target_20d'] = d['Close'].shift(-20) / d['Close'] - 1
+        
+        if 'Sma50' in d.columns:
+            d['Context_Above50'] = (d['Close'] > d['Sma50']).astype(int)
+        else:
+            d['Context_Above50'] = 0
+
+        cols_logic = [c for c in d.columns if 'Logic_' in c]
+        cols_target = [c for c in d.columns if 'Target_' in c]
+        cols_context = ['Context_Above50']
+        
+        export_chunk = d[['Close'] + cols_context + cols_target + cols_logic].copy()
+        export_chunk['Ticker'] = ticker
+        export_chunk['Theme'] = etf_to_theme.get(ticker, ticker)
+        
+        export_chunk.dropna(subset=['Target_1d'], inplace=True)
+        
+        results.append(export_chunk)
+
+    if not results: return pd.DataFrame()
+    return pd.concat(results)
