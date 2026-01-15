@@ -57,12 +57,12 @@ def run_theme_momentum_app(df_global=None):
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
 
-    # --- 4. CONFIGURATION & INPUTS ---
-    st.subheader("⚙️ Inputs & Filters")
+    # --- 4. TOP CONFIGURATION ---
+    st.subheader("⚙️ Configuration")
     
-    c_in1, c_in2 = st.columns(2)
+    c_conf1, c_conf2 = st.columns(2)
     
-    with c_in1:
+    with c_conf1:
         st.markdown("**Benchmark Ticker**")
         new_benchmark = st.radio(
             "Benchmark",
@@ -78,54 +78,31 @@ def run_theme_momentum_app(df_global=None):
             st.cache_data.clear()
             st.rerun()
 
-    with c_in2:
-        st.markdown("**Timeframe Window (Chart)**")
-        st.session_state.sector_view = st.radio(
-            "Timeframe Window",
-            ["5 Days", "10 Days", "20 Days"],
-            horizontal=True,
-            key="timeframe_radio",
-            label_visibility="collapsed"
-        )
-    
-    # Toggle Row
-    c_tog1, c_tog2 = st.columns(2)
-    with c_tog1:
-        st.session_state.use_smart_opt = st.checkbox(
-            "✨ Use Smart Optimization",
-            value=st.session_state.use_smart_opt,
-            help="If checked, tables below use the statistically BEST timeframe per sector. If unchecked, they match the Chart Window."
-        )
-    with c_tog2:
-        st.session_state.sector_trails = st.checkbox(
-            "Show 3-Day Trails (Chart)",
-            value=st.session_state.sector_trails
-        )
-
-    # Sector Filter Expander
-    with st.expander("🔎 Filter Sectors Shown", expanded=False):
-        btn_col1, btn_col2, btn_col3 = st.columns(3)
-        with btn_col1:
-            if st.button("➕ Everything", use_container_width=True):
-                st.session_state.sector_theme_filter_widget = all_themes
-                st.rerun()
-        with btn_col2:
-            if st.button("⭐ Big 11", use_container_width=True):
-                big_11 = ["Comms", "Cons Discr", "Cons Staples", "Energy", "Financials", "Healthcare", "Industrials", "Materials", "Real Estate", "Technology", "Utilities"]
-                valid = [t for t in big_11 if t in all_themes]
-                st.session_state.sector_theme_filter_widget = valid
-                st.rerun()
-        with btn_col3:
-            if st.button("➖ Clear", use_container_width=True):
-                st.session_state.sector_theme_filter_widget = []
-                st.rerun()
-        
-        sel_themes = st.multiselect(
-            "Select Themes",
-            all_themes,
-            key="sector_theme_filter_widget",
-            label_visibility="collapsed"
-        )
+    with c_conf2:
+        st.markdown("**Sector Filter**")
+        with st.expander("🔎 Select Sectors to View", expanded=False):
+            btn_col1, btn_col2, btn_col3 = st.columns(3)
+            with btn_col1:
+                if st.button("➕ Everything", use_container_width=True):
+                    st.session_state.sector_theme_filter_widget = all_themes
+                    st.rerun()
+            with btn_col2:
+                if st.button("⭐ Big 11", use_container_width=True):
+                    big_11 = ["Comms", "Cons Discr", "Cons Staples", "Energy", "Financials", "Healthcare", "Industrials", "Materials", "Real Estate", "Technology", "Utilities"]
+                    valid = [t for t in big_11 if t in all_themes]
+                    st.session_state.sector_theme_filter_widget = valid
+                    st.rerun()
+            with btn_col3:
+                if st.button("➖ Clear", use_container_width=True):
+                    st.session_state.sector_theme_filter_widget = []
+                    st.rerun()
+            
+            sel_themes = st.multiselect(
+                "Select Themes",
+                all_themes,
+                key="sector_theme_filter_widget",
+                label_visibility="collapsed"
+            )
 
     # --- GLOBAL FILTER APPLICATION ---
     filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
@@ -133,8 +110,6 @@ def run_theme_momentum_app(df_global=None):
     view_key = timeframe_map[st.session_state.sector_view]
 
     # --- 6. CATEGORIZATION LOGIC ---
-    # If Smart Opt is ON, force_tf is None (let utils decide per sector).
-    # If Smart Opt is OFF, force_tf is the Chart Timeframe (e.g. "Med").
     force_tf = None if st.session_state.use_smart_opt else view_key
     categories = us.get_momentum_performance_categories(
         etf_data_cache, 
@@ -146,9 +121,29 @@ def run_theme_momentum_app(df_global=None):
 
     # --- CHART SECTION (IN EXPANDER) ---
     with st.expander("🗺️ Rotation Quadrant Graphic", expanded=False):
+        
+        # MOVED CONTROLS INSIDE HERE
+        c_chart1, c_chart2 = st.columns(2)
+        with c_chart1:
+            st.markdown("**Timeframe Window (Chart Only)**")
+            st.session_state.sector_view = st.radio(
+                "Timeframe Window",
+                ["5 Days", "10 Days", "20 Days"],
+                horizontal=True,
+                key="timeframe_radio",
+                label_visibility="collapsed"
+            )
+        with c_chart2:
+            st.markdown("**Visual Options**")
+            st.session_state.sector_trails = st.checkbox(
+                "Show 3-Day Trails",
+                value=st.session_state.sector_trails
+            )
+
+        st.markdown("---")
         st.markdown("**Filter Chart by Category:**")
         if st.session_state.use_smart_opt:
-            st.caption("ℹ️ *Categories below are based on Optimized Timeframes, not the Chart.*")
+            st.caption("ℹ️ *Note: Table categories below use 'Smart Opt', but this Chart always uses the Timeframe Window selected above.*")
         
         btn_cols = st.columns(5)
         filter_config = [
@@ -191,10 +186,16 @@ def run_theme_momentum_app(df_global=None):
             elif "text" in point:
                 st.session_state.sector_target = point["text"]
 
-    # --- 7. THEME CATEGORIES DISPLAY (ONLY GAIN MOM & OUTPERF) ---
+    # --- 7. THEME CATEGORIES DISPLAY ---
     st.subheader("📊 Theme Categories")
     
-    # Only showing the bullish category as requested
+    # MOVED CHECKBOX HERE
+    st.session_state.use_smart_opt = st.checkbox(
+        "✨ Use Smart Optimization",
+        value=st.session_state.use_smart_opt,
+        help="If checked, tables below use the statistically BEST timeframe per sector (from Admin Phase 2). If unchecked, they match the Chart Window."
+    )
+    
     quadrant_meta = [
         ('gaining_mom_outperforming', '⬈ GAIN MOM & OUTPERF', 'success', '✅ Best Opportunities - Sectors accelerating...')
     ]
@@ -205,7 +206,6 @@ def run_theme_momentum_app(df_global=None):
         
         if items:
             style_func(f"**{title}** ({len(items)} sectors)")
-            # st.caption(caption)
             
             data = []
             for theme_info in items:
