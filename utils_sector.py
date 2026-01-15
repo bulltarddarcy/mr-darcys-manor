@@ -1248,8 +1248,10 @@ class UniverseGenerator:
             holdings = self.fetch_etf_holdings(etf)
             if not holdings:
                 summary_stats.append({
-                    "Sector": theme, "ETF": etf, "Tickers Found": 0, 
-                    "Weight Pulled": 0.0, "Status": "❌ No Data"
+                    "Sector": theme, "ETF": etf, 
+                    "Tickers Selected": 0,
+                    "Weight Pulled": 0.0, 
+                    "Status": "❌ No Data"
                 })
                 continue
                 
@@ -1269,12 +1271,14 @@ class UniverseGenerator:
                 if t not in raw_candidates: raw_candidates[t] = []
                 raw_candidates[t].append(theme)
                 
+            # Limit Logic: Warning if we hit API limit (10) AND didn't reach target weight
+            is_limited = (len(holdings) <= 10) and (current_weight < target_cumulative_weight - 0.01)
+            
             summary_stats.append({
                 "Sector": theme, "ETF": etf, 
-                "Tickers Found": len(holdings),
                 "Tickers Selected": len(selected),
                 "Weight Pulled": round(current_weight * 100, 1),
-                "Status": "⚠️ Top 10 Limit" if len(holdings) <= 10 and current_weight < 0.20 else "✅ OK"
+                "Status": "⚠️ Top 10 Limit" if is_limited else "✅ OK"
             })
 
         status_text.text("Validating Liquidity (Batch Download)...")
@@ -1404,3 +1408,4 @@ def generate_compass_data(etf_data_cache: Dict, theme_map: Dict) -> pd.DataFrame
 
     if not results: return pd.DataFrame()
     return pd.concat(results)
+
