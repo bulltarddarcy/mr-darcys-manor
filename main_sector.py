@@ -497,13 +497,12 @@ def run_admin_backtesting():
     """
     st.title("🛠️ Sector Admin & Backtesting")
     
-    # --- SHARED DATA FETCH (Required for Admin tools too) ---
+    # --- SHARED DATA FETCH ---
     if "sector_benchmark" not in st.session_state:
         st.session_state.sector_benchmark = "SPY"
         
     st.caption(f"Loaded Universe Benchmark: **{st.session_state.sector_benchmark}**")
     
-    # We allow changing benchmark here too, as AI training depends on it
     new_bench = st.radio("Benchmark Source:", ["SPY", "QQQ"], horizontal=True, key="admin_bench_radio")
     if new_bench != st.session_state.sector_benchmark:
         st.session_state.sector_benchmark = new_bench
@@ -569,11 +568,11 @@ def run_admin_backtesting():
             st.code(csv_data, language="csv")
 
     # ==========================================
-    # PHASE 2 & 3: OPTIMISE GAIN MOM & OUTPERFORMING SIGNALS BY SECTOR ETF
+    # PHASE 2 & 3: THE COMPASS
     # ==========================================
     st.markdown('<hr style="border-top: 2px solid #bbb;">', unsafe_allow_html=True)
-    with st.expander("🛠️ Phase 2 & 3: Optimise Gain Mom & Outperf Signal by Theme ETF", expanded=False):
-        st.caption("Generate a master file to scientifically prove WHICH trend definition works best, and WHEN to enter, by Theme ETF.")
+    with st.expander("🛠️ Phase 2 & 3: The Compass (Optimize Logic & Timing)", expanded=False):
+        st.caption("Generate a master file to scientifically prove WHICH trend definition works best, and WHEN to enter.")
         
         if "compass_df" not in st.session_state:
             st.session_state.compass_df = None
@@ -591,7 +590,6 @@ def run_admin_backtesting():
                     df_compass = us.generate_compass_data(etf_data_cache, theme_map)
                     st.session_state.compass_df = df_compass
                     
-        # Display Download (No Expander for Prompt)
         if st.session_state.compass_df is not None and not st.session_state.compass_df.empty:
             df_comp = st.session_state.compass_df
             st.success(f"✅ Generated {len(df_comp)} rows of optimization data!")
@@ -630,7 +628,7 @@ def run_admin_backtesting():
             """)
 
     # ==========================================
-    # PHASE 4: AI TRAINING DATA
+    # PHASE 4: AI TRAINING DATA (Cleaned)
     # ==========================================
     st.markdown('<hr style="border-top: 2px solid #bbb;">', unsafe_allow_html=True)
     with st.expander("🛠️ Phase 4: Download Sector History", expanded=False):
@@ -641,7 +639,7 @@ def run_admin_backtesting():
         if "gen_theme_name" not in st.session_state:
             st.session_state.gen_theme_name = ""
     
-        st.markdown("#### 1. Theme Data (Training Sets)")
+        st.markdown("#### Theme Data (Training Sets)")
         dl_theme = st.selectbox("Select Theme", options=all_themes, index=0, key="dl_theme_selector")
         
         if st.button(f"🧠 Generate AI Training Data for {dl_theme}", use_container_width=True):
@@ -660,25 +658,56 @@ def run_admin_backtesting():
 
         if st.session_state.gen_theme_df is not None and not st.session_state.gen_theme_df.empty:
             training_df = st.session_state.gen_theme_df
-            st.success(f"✅ Data Ready: {st.session_state.gen_theme_name}")
+            current_theme = st.session_state.gen_theme_name
+            st.success(f"✅ Data Ready: {current_theme} ({len(training_df)} rows)")
 
+            # Download Buttons
             fmt_col1, fmt_col2 = st.columns(2)
             with fmt_col1:
                 import io
                 parquet_buffer = io.BytesIO()
                 training_df.to_parquet(parquet_buffer, index=True)
                 st.download_button(
-                    label=f"⬇️ Parquet",
+                    label=f"⬇️ {current_theme}.parquet",
                     data=parquet_buffer.getvalue(),
-                    file_name=f"{st.session_state.gen_theme_name}_AI.parquet",
+                    file_name=f"{current_theme}_AI_Training.parquet",
                     mime="application/octet-stream",
                     use_container_width=True
                 )
             with fmt_col2:
                 st.download_button(
-                    label=f"⬇️ CSV",
+                    label=f"⬇️ {current_theme}.csv",
                     data=training_df.to_csv(index=True).encode('utf-8'),
-                    file_name=f"{st.session_state.gen_theme_name}_AI.csv",
+                    file_name=f"{current_theme}_AI_Training.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
+
+            st.markdown("---")
+            st.markdown("### 📋 AI Prompt Context")
+            st.markdown(f"""
+            **Copy this prompt to ChatGPT/Claude:**
+            
+            ```text
+            I have uploaded a file containing historical trading data for the '{current_theme}' sector. 
+            The data is designed to train/optimize a swing trading strategy.
+
+            **Schema Description:**
+            1. **Context Columns:**
+               - `Theme_Category`: The status of the Sector ETF on that day (e.g., "Gaining Momentum & Outperforming").
+               - `Days_In_Category`: How many consecutive days the ETF has been in that specific category.
+
+            2. **Feature Columns (Predictors):**
+               - `Metric_Alpha_[N]d`: The stock's excess return vs the ETF over N days (Windows: 5, 10, 15, 20, 30, 50).
+               - `Metric_RVOL_[N]d`: The stock's Relative Volume over N days.
+
+            3. **Target Columns (Outcomes):**
+               - `Target_FwdRet_1d`: The stock's return on the NEXT day.
+               - `Target_FwdRet_5d`: The stock's return over the NEXT 5 days.
+               - `Target_FwdRet_10d`: The stock's return over the NEXT 10 days.
+
+            **Goal:**
+            Analyze the correlations between the `Theme_Category`, `Metric_Alpha`, and `Metric_RVOL` features against the `Target_FwdRet` columns.
+            Find the optimal combination of Alpha and RVOL filters for each Theme Category to maximize forward returns.
+            ```
+            """)
