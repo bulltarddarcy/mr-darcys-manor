@@ -1369,4 +1369,86 @@ class UniverseGenerator:
         
         return csv_string, pd.DataFrame(summary_stats)
 
-
+    # ==========================================
+    # 12. COMPASS GENERATOR (PHASE 2 - COMPREHENSIVE)
+    # ==========================================
+    def generate_compass_data(etf_data_cache: Dict, theme_map: Dict) -> pd.DataFrame:
+        """
+        Generates a master file testing 6 distinct 'Momentum Logic' variations
+        against 5 different Forward Return periods.
+        """
+        results = []
+        
+        # Create a reverse map to label rows with the friendly Theme Name (e.g. "Semiconductors")
+        etf_to_theme = {v: k for k, v in theme_map.items()}
+        unique_etfs = list(set(theme_map.values()))
+        
+        for ticker in unique_etfs:
+            if ticker not in etf_data_cache: continue
+            
+            df = etf_data_cache[ticker]
+            if df is None or df.empty: continue
+            
+            # Work on a copy of the full history
+            d = df.copy().sort_index()
+            
+            # --- 1. DEFINE THE 6 LOGIC VARIATIONS ---
+            # Format: (Ratio Column, Momentum Column, Smoothing Window)
+            variations = {
+                'Logic_A_10d_3s': ('RRG_Ratio_Med',   'RRG_Mom_Med',   3), # Standard
+                'Logic_B_10d_5s': ('RRG_Ratio_Med',   'RRG_Mom_Med',   5), # Smooth
+                'Logic_C_20d_3s': ('RRG_Ratio_Long',  'RRG_Mom_Long',  3), # Slow
+                'Logic_D_20d_5s': ('RRG_Ratio_Long',  'RRG_Mom_Long',  5), # Slowest
+                'Logic_E_5d_2s':  ('RRG_Ratio_Short', 'RRG_Mom_Short', 2), # Fast/Scalp
+                'Logic_F_5d_3s':  ('RRG_Ratio_Short', 'RRG_Mom_Short', 3), # Fast/Smooth
+            }
+            
+            for label, (col_r, col_m, smooth) in variations.items():
+                # Skip if columns don't exist (e.g. not enough history)
+                if col_r not in d.columns or col_m not in d.columns:
+                    d[f'{label}_Signal'] = 0
+                    continue
+                    
+                # Compare Today's Raw Value vs Smoothed Previous Average
+                # We shift(1) the average to ensure we are comparing to "Yesterday's Moving Average"
+                prev_r_avg = d[col_r].shift(1).rolling(window=smooth).mean()
+                prev_m_avg = d[col_m].shift(1).rolling(window=smooth).mean()
+                
+                # THE SIGNAL: Momentum Increasing & Ratio Increasing (The "Arrow" is pointing North-East)
+                is_bullish = (d[col_m] > prev_m_avg) & (d[col_r] > prev_r_avg)
+                d[f'{label}_Signal'] = is_bullish.astype(int)
+    
+            # --- 2. CALCULATE 5 FORWARD RETURN TARGETS ---
+            # "If I bought at Close today, what is my return X days later?"
+            d['Target_1d'] = d['Close'].shift(-1) / d['Close'] - 1
+            d['Target_3d'] = d['Close'].shift(-3) / d['Close'] - 1
+            d['Target_5d'] = d['Close'].shift(-5) / d['Close'] - 1
+            d['Target_10d'] = d['Close'].shift(-10) / d['Close'] - 1
+            d['Target_20d'] = d['Close'].shift(-20) / d['Close'] - 1
+            
+            # --- 3. CONTEXT (OPTIONAL) ---
+            # Simple Regime Filter: Is Price > 50 SMA? (1=Bull, 0=Bear)
+            if 'Sma50' in d.columns:
+                d['Context_Above50'] = (d['Close'] > d['Sma50']).astype(int)
+            else:
+                d['Context_Above50'] = 0
+    
+            # --- 4. EXPORT PREPARATION ---
+            cols_logic = [c for c in d.columns if 'Logic_' in c]
+            cols_target = [c for c in d.columns if 'Target_' in c]
+            cols_context = ['Context_Above50']
+            
+            # Select only the columns we need for AI analysis
+            export_chunk = d[['Close'] + cols_context + cols_target + cols_logic].copy()
+            export_chunk['Ticker'] = ticker
+            export_chunk['Theme'] = etf_to_theme.get(ticker, ticker)
+            
+            # Drop only the very last day where we have ZERO future data
+            export_chunk.dropna(subset=['Target_1d'], inplace=True)
+            
+            results.append(export_chunk)
+    
+        if not results: return pd.DataFrame()
+        return pd.concat(results)
+    
+    
