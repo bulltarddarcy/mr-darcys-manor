@@ -1,6 +1,6 @@
 """
-Sector rotation utilities - AUTO-SAVE & MANUAL CONFIG VERSION
-Automatically loads optimized settings from JSON, or falls back to manual config.
+Sector rotation utilities - GSHEET CONFIG VERSION
+Loads optimized settings directly from a Google Sheet tab (SECTOR_CONFIG).
 """
 
 import streamlit as st
@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import logging
 import json
 import os
+import re
 from io import StringIO, BytesIO
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, List, Dict
@@ -22,67 +23,85 @@ logger = logging.getLogger(__name__)
 import utils_darcy as ud
 
 # ==========================================
-# 0. SMART CONFIGURATION
+# 0. SMART CONFIGURATION (GSHEET LOADER)
 # ==========================================
-CONFIG_FILENAME = "sector_optimized_config.json"
-
-# --- MANUAL OVERRIDE (Optional) ---
-# The app will look for 'sector_optimized_config.json' first.
-# If you want to hardcode values, put them here.
-SECTOR_CONFIG = {}
-
-def load_dynamic_config() -> Dict:
-    """
-    Loads settings. Priority:
-    1. Local JSON file (from Admin 'Save' button)
-    2. SECTOR_CONFIG dictionary (Manual paste)
-    3. Google Sheet (Secrets) - optional if you added it, otherwise just these two
-    """
-    # 1. Try JSON
-    if os.path.exists(CONFIG_FILENAME):
-        try:
-            with open(CONFIG_FILENAME, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading config: {e}")
-    
-    # 2. Try Google Sheet (if configured in secrets)
-    config_url = st.secrets.get("SECTOR_CONFIG")
-    if config_url:
-        try:
-            if "docs.google.com/spreadsheets" in config_url:
-                df = pd.read_csv(config_url)
-            else:
-                df = pd.read_csv(StringIO(config_url))
-                
-            config_dict = {}
-            for _, row in df.iterrows():
-                # Flexible parsing
-                t = str(row.get('Ticker', '')).strip().upper()
-                w = str(row.get('Window', 'Med')).strip().capitalize()
-                try: s = int(row.get('Smooth', 3))
-                except: s = 3
-                if t: config_dict[t] = (w, s)
-            return config_dict
-        except: pass
-
-    # 3. Fallback to Manual Dict
-    if SECTOR_CONFIG:
-        return SECTOR_CONFIG
-        
-    return {}
-
-def save_dynamic_config(config_dict: Dict):
-    """Saves optimized settings to local JSON file."""
-    try:
-        with open(CONFIG_FILENAME, 'w') as f:
-            json.dump(config_dict, f, indent=4)
-    except Exception as e:
-        logger.error(f"Error saving config: {e}")
-
 # Default Fallback
 DEFAULT_WINDOW = 'Med'   # 10 Days
 DEFAULT_SMOOTH = 3       # 3 Days
+DEFAULT_STREAK = 1       # Day 1
+
+# OPTIONAL: Hardcode here if GSHEET fails or for testing
+SECTOR_CONFIG = {}
+
+@st.cache_data(ttl=300) # Cache for 5 mins so we don't hit GSheets constantly
+def load_dynamic_config() -> Dict:
+    """
+    Loads optimized settings from the Google Sheet defined in secrets.
+    Expected Columns: [Ticker, Window, Smooth, Best Streak]
+    Returns: Dict {'SMH': ('Short', 2, 1), ...}
+    """
+    # 1. Check Hardcoded First
+    if SECTOR_CONFIG:
+        return SECTOR_CONFIG
+
+    # 2. Check Secrets
+    config_url = st.secrets.get("SECTOR_CONFIG")
+    
+    if not config_url:
+        return {} # No secret, use defaults
+        
+    try:
+        # Handle Google Sheet Links or Raw CSV
+        if config_url.strip().startswith("http"):
+            if "docs.google.com/spreadsheets" in config_url:
+                df = pd.read_csv(config_url)
+            else:
+                df = pd.read_csv(config_url)
+        else:
+            return {}
+
+        # Basic Validation
+        if 'Ticker' not in df.columns or 'Window' not in df.columns:
+            logger.error(f"Config Sheet missing required columns. Found: {df.columns}")
+            return {}
+
+        # Identify Streak Column (flexible naming)
+        streak_col = next((c for c in df.columns if 'streak' in c.lower()), None)
+
+        # Convert to Dictionary
+        config_dict = {}
+        for _, row in df.iterrows():
+            # Flexible parsing
+            t = str(row.get('Ticker', '')).strip().upper()
+            w = str(row.get('Window', 'Med')).strip().capitalize()
+            
+            # Normalize Window
+            if '5' in w: w = 'Short'
+            elif '10' in w: w = 'Med'
+            elif '20' in w: w = 'Long'
+            elif w not in ['Short', 'Med', 'Long']: w = DEFAULT_WINDOW
+            
+            # Parse Smooth
+            try: s = int(row.get('Smooth', DEFAULT_SMOOTH))
+            except: s = DEFAULT_SMOOTH
+            
+            # Parse Best Streak (e.g. "Day 1" -> 1)
+            ms = DEFAULT_STREAK
+            if streak_col:
+                try:
+                    val = str(row[streak_col])
+                    match = re.search(r'(\d+)', val)
+                    if match:
+                        ms = int(match.group(1))
+                except: pass
+                
+            if t: config_dict[t] = (w, s, ms)
+            
+        return config_dict
+
+    except Exception as e:
+        logger.error(f"Error loading SECTOR_CONFIG: {e}")
+        return {}
 
 # ==========================================
 # 1. CONSTANTS
@@ -113,15 +132,6 @@ MARKER_SIZE_TRAIL = 8
 MARKER_SIZE_CURRENT = 15
 TRAIL_OPACITY = 0.4
 CURRENT_OPACITY = 1.0
-
-# Pattern Detection Thresholds
-JHOOK_MIN_SHIFT = 2.0
-ALPHA_DIP_BUY_THRESHOLD = 2.0
-ALPHA_NEUTRAL_RANGE = 0.5
-ALPHA_BREAKOUT_THRESHOLD = 1.0
-ALPHA_FADING_THRESHOLD = 3.0
-RVOL_HIGH_THRESHOLD = 1.3
-RVOL_BREAKOUT_THRESHOLD = 1.3
 
 # ==========================================
 # 2. DATA MANAGER
@@ -459,20 +469,30 @@ def get_momentum_performance_categories(
             is_optimized = False
             source_label = "Def"
             
+            # Defaults
+            win_key = DEFAULT_WINDOW
+            smooth_win = DEFAULT_SMOOTH
+            target_streak = DEFAULT_STREAK
+            
             if force_timeframe:
-                # Manual Override (e.g. User unchecked "Smart Optimization")
+                # Manual Override
                 win_key = force_timeframe
                 smooth_win = 3 
                 source_label = "Man"
             else:
-                # Optimized Logic (User checked "Smart Optimization")
+                # Optimized Logic
                 if ticker in dynamic_config:
                     settings = dynamic_config[ticker]
-                    win_key, smooth_win = settings[0], int(settings[1])
+                    # Handle tuple size differences (2 or 3 items)
+                    if len(settings) == 3:
+                        win_key, smooth_win, target_streak = settings[0], int(settings[1]), int(settings[2])
+                    else:
+                        win_key, smooth_win = settings[0], int(settings[1])
+                    
                     source_label = "✨ Opt"
                     is_optimized = True
                 else:
-                    # STRICT MODE: If optimizing but no config found, SKIP this ticker
+                    # STRICT MODE: If optimizing but no config, SKIP
                     continue
             
             # 3. Calculation
@@ -507,7 +527,8 @@ def get_momentum_performance_categories(
                 'quadrant_10d': get_quadrant_name(r10, m10), 
                 'quadrant_20d': get_quadrant_name(r20, m20),
                 'reason': f"{source_label}: {win_key}/{smooth_win}d", 
-                'days_in_category': streak_info['days']
+                'days_in_category': streak_info['days'],
+                'target_streak': target_streak
             }
             categories[bucket_key].append(theme_info)
         except: continue
@@ -530,7 +551,6 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
     uni_df, tickers, theme_map = dm.load_universe(benchmark_ticker)
     if uni_df.empty: return {}, ["SECTOR_UNIVERSE is empty"], theme_map, uni_df, {}
 
-    # CHANGED: Use PARQUET_SECTOR_ROTATION
     db_url = st.secrets.get("PARQUET_SECTOR_ROTATION")
     if not db_url: return {}, ["PARQUET secret missing"], theme_map, uni_df, {}
 
@@ -608,7 +628,7 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
     return data_cache, missing_tickers, theme_map, uni_df, stock_themes_map
 
 # ==========================================
-# 8. EXPORT & GENERATORS (PHASE 1)
+# 8. EXPORT & GENERATORS
 # ==========================================
 class UniverseGenerator:
     def fetch_etf_holdings(self, etf_ticker: str) -> List[Dict]:
@@ -682,9 +702,6 @@ class UniverseGenerator:
         df_final = pd.DataFrame(final_rows).sort_values(['Theme', 'Role', 'Ticker'])
         return df_final.to_csv(index=False), pd.DataFrame(summary_stats)
 
-# ==========================================
-# 9. COMPASS GENERATOR (PHASE 2 & 3)
-# ==========================================
 def generate_compass_data(etf_data_cache, theme_map):
     results = []
     etf_to_theme = {v: k for k, v in theme_map.items()}
@@ -730,36 +747,26 @@ def generate_compass_data(etf_data_cache, theme_map):
     return pd.concat(results)
 
 def optimize_compass_settings(compass_df: pd.DataFrame) -> Tuple[Dict, str]:
-    """
-    Analyzes Compass Data to find the Logic with the highest 5-day Win Rate per Ticker.
-    Returns Dictionary and saves it to JSON via save_dynamic_config().
-    """
     if compass_df is None or compass_df.empty: return {}, "No data"
     results = []
     logics = [c.replace('_Signal', '') for c in compass_df.columns if '_Signal' in c]
-    
     for ticker, group in compass_df.groupby('Ticker'):
         best_score = -999; best_logic = None
         for logic in logics:
             signal_col = f"{logic}_Signal"
             hits = group[group[signal_col] == 1]
             if len(hits) < 3: continue
-            score = hits['Target_5d'].mean() # Metric: Average 5d Return
+            score = hits['Target_5d'].mean() 
             if score > best_score: best_score = score; best_logic = logic
         if best_logic:
             win = 'Short' if '5d' in best_logic else 'Med' if '10d' in best_logic else 'Long'
             smooth = int(best_logic.split('_')[-1].replace('s', ''))
             results.append({'Ticker': ticker, 'Best_Logic': best_logic, 'Avg_Return_5d': best_score, 'Window': win, 'Smooth': smooth})
-            
     if not results: return {}, "No valid results found."
-    
     config_dict = {}
     for _, row in pd.DataFrame(results).iterrows():
         config_dict[row['Ticker']] = (row['Window'], row['Smooth'])
-        
-    # AUTO-SAVE TO JSON
     save_dynamic_config(config_dict)
-    
     return config_dict, "Optimization Complete & Saved to 'sector_optimized_config.json'"
 
 def plot_simple_rrg(data_cache, target_map, view_key, show_trails):
@@ -789,14 +796,9 @@ def plot_simple_rrg(data_cache, target_map, view_key, show_trails):
                       height=750, showlegend=False, template="plotly_dark", margin=dict(l=40, r=40, t=40, b=40))
     return fig
 
-# ==========================================
-# 10. AI TRAINING DATA & EXPORTS (PHASE 4)
-# ==========================================
 def generate_ai_training_data(etf_ticker, etf_data_cache, stock_tickers, theme_name, benchmark_ticker):
     etf_df = etf_data_cache.get(etf_ticker)
     if etf_df is None or etf_df.empty: return pd.DataFrame()
-    
-    # We use basic cat calculation for training data export
     r_med = etf_df['RRG_Ratio_Med']
     m_med = etf_df['RRG_Mom_Med']
     avg_r_prev3 = r_med.shift(1).rolling(window=3).mean()
@@ -814,10 +816,8 @@ def generate_ai_training_data(etf_ticker, etf_data_cache, stock_tickers, theme_n
     group_id = (etf_context['Theme_Category'] != etf_context['Theme_Category'].shift()).cumsum()
     etf_context['Days_In_Category'] = etf_context.groupby(group_id).cumcount() + 1
     etf_context.loc[etf_context['Theme_Category']=="Unknown", 'Days_In_Category'] = 0
-
     parent_df = etf_df
     windows = [5, 10, 15, 20, 30, 50]
-    
     def process_stock_full_history(ticker):
         df = etf_data_cache.get(ticker)
         if df is None or df.empty: return None
@@ -825,18 +825,15 @@ def generate_ai_training_data(etf_ticker, etf_data_cache, stock_tickers, theme_n
         if common_idx.empty: return None
         df = df.loc[common_idx].copy()
         p_df = parent_df.loc[common_idx].copy()
-        
         res = pd.DataFrame(index=df.index)
         res['Ticker'] = ticker; res['Theme'] = theme_name; res['Role'] = 'Stock'; res['Close'] = df['Close']
         res = res.join(etf_context)
         res['Target_FwdRet_1d'] = df['Close'].shift(-1) / df['Close'] - 1
         res['Target_FwdRet_5d'] = df['Close'].shift(-5) / df['Close'] - 1
         res['Target_FwdRet_10d'] = df['Close'].shift(-10) / df['Close'] - 1
-        
         if 'Volume' in df.columns:
             rvol_base = df['Volume'] / df['Volume'].rolling(window=20).mean()
             for w in windows: res[f'Metric_RVOL_{w}d'] = rvol_base.rolling(window=w).mean()
-        
         stock_pct = df['Close'].pct_change()
         etf_pct = p_df['Close'].pct_change()
         rolling_cov = stock_pct.rolling(window=60).cov(etf_pct)
@@ -845,7 +842,6 @@ def generate_ai_training_data(etf_ticker, etf_data_cache, stock_tickers, theme_n
         alpha_daily = stock_pct - (etf_pct * beta)
         for w in windows: res[f'Metric_Alpha_{w}d'] = alpha_daily.rolling(window=w).sum() * 100
         return res
-
     results = []
     for ticker in stock_tickers:
         res = process_stock_full_history(ticker)
