@@ -590,7 +590,7 @@ def run_theme_momentum_app(df_global=None):
     # ==========================================
     # ADMIN: PHASE 2 & 3: OPTIMISE GAIN MOM & OUTPERFORMING SIGNALS BY SECTOR ETF
     # ==========================================
-    with st.expander("🛠️ Phase 2 & 3: Optimise What is "Gaining Mom & Outperforming" by Sector ETF)", expanded=False):
+    with st.expander("🛠️ Phase 2 & 3: Optimise Gain Mom & Outperf Signal by Sector ETF)", expanded=False):
         st.caption("Generate a master file to scientifically prove WHICH trend definition works best, and WHEN to enter.")
         
         # Initialize session state for this phase
