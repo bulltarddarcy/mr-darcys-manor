@@ -196,6 +196,11 @@ def run_theme_momentum_app(df_global=None):
         help="If checked, tables below use the statistically BEST timeframe per sector (read from your Google Sheet). If unchecked, they match the Chart Window."
     )
     
+    # NEW: Warning if Smart Opt is ON but no data is returned (User hasn't populated Google Sheet yet)
+    has_any_smart_data = any(len(v) > 0 for v in categories.values())
+    if st.session_state.use_smart_opt and not has_any_smart_data:
+        st.error("⚠️ **Optimization Config Missing:** You checked 'Smart Optimization' but no configuration was found in the Google Sheet (or `SECTOR_CONFIG` in secrets). Please populate the 'Settings' tab in your Google Sheet with columns: Ticker, Window, Smooth.")
+    
     quadrant_meta = [
         ('gaining_mom_outperforming', '⬈ GAIN MOM & OUTPERF', 'success', '✅ Best Opportunities - Sectors accelerating...')
     ]
@@ -231,7 +236,8 @@ def run_theme_momentum_app(df_global=None):
                 column_config={"Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")}
             )
         else:
-            style_func(f"**{title}** - No sectors currently in this category")
+            if not st.session_state.use_smart_opt or has_any_smart_data:
+                style_func(f"**{title}** - No sectors currently in this category")
 
     st.markdown("---")
     
@@ -552,16 +558,24 @@ def run_admin_backtesting():
         df_comp = st.session_state.compass_df
         st.success(f"✅ Compass Generated ({len(df_comp)} rows)")
         
-        # Download Only
-        csv_compass = df_comp.to_csv(index=True).encode('utf-8')
-        st.download_button(
-            label="⬇️ Download CSV",
-            data=csv_compass,
-            file_name="Compass_Logic_And_Timing_Master.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+        col_opt1, col_opt2 = st.columns(2)
         
+        with col_opt1:
+            if st.button("✨ Optimize & Save Settings", type="primary", use_container_width=True):
+                with st.spinner("Finding best logic per ETF and saving to file..."):
+                    optimized_dict, msg = us.optimize_compass_settings(df_comp)
+                    st.success(f"✅ Success! {len(optimized_dict)} ETFs optimized. The dashboard will now use these settings automatically.")
+                    
+        with col_opt2:
+            csv_compass = df_comp.to_csv(index=True).encode('utf-8')
+            st.download_button(
+                label="⬇️ Download CSV",
+                data=csv_compass,
+                file_name="Compass_Logic_And_Timing_Master.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+            
         # AI Prompt Context (RESTORED)
         st.markdown("### 📋 AI Optimization Prompt")
         st.markdown("""
