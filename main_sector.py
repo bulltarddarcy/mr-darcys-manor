@@ -531,7 +531,7 @@ def run_theme_momentum_app(df_global=None):
 
     with st.container():
         # --- 1. THEME DATA ---
-        st.markdown("#### 1. Theme Data (Training Sets - Currently Uses 10 day trend relative to the benchmark.)")
+        st.markdown("#### 1. Theme Data (training sets use 10d trend rel to benchmark selected above)")
         
         dl_theme = st.selectbox(
             "Select Theme to Download", 
