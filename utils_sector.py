@@ -1,6 +1,6 @@
 """
-Sector rotation utilities - AUTO-SAVE VERSION
-Automatically loads optimized settings from a local JSON file.
+Sector rotation utilities - AUTO-SAVE & MANUAL CONFIG VERSION
+Automatically loads optimized settings from JSON, or falls back to manual config.
 """
 
 import streamlit as st
@@ -22,19 +22,33 @@ logger = logging.getLogger(__name__)
 import utils_darcy as ud
 
 # ==========================================
-# 0. SMART CONFIGURATION (AUTO-LOADER)
+# 0. SMART CONFIGURATION
 # ==========================================
 CONFIG_FILENAME = "sector_optimized_config.json"
 
+# --- MANUAL OVERRIDE (Optional) ---
+# The app will look for 'sector_optimized_config.json' first.
+# If you want to hardcode values, put them here.
+SECTOR_CONFIG = {}
+
 def load_dynamic_config() -> Dict:
-    """Loads optimized settings from local JSON file. Returns empty dict if file missing."""
+    """
+    Loads settings. Priority:
+    1. Local JSON file (from Admin 'Save' button)
+    2. SECTOR_CONFIG dictionary (Manual paste)
+    """
+    # 1. Try JSON
     if os.path.exists(CONFIG_FILENAME):
         try:
             with open(CONFIG_FILENAME, 'r') as f:
                 return json.load(f)
         except Exception as e:
             logger.error(f"Error loading config: {e}")
-            return {}
+            
+    # 2. Fallback to Manual Dict
+    if SECTOR_CONFIG:
+        return SECTOR_CONFIG
+        
     return {}
 
 def save_dynamic_config(config_dict: Dict):
@@ -421,15 +435,24 @@ def get_momentum_performance_categories(
         
         try:
             # 2. DECIDE SETTINGS
+            is_optimized = False
+            source_label = "Def"
+            
             if force_timeframe:
                 # Manual Override (e.g. User unchecked "Smart Optimization")
-                # Use standard smoothing (3) with the forced window
                 win_key = force_timeframe
                 smooth_win = 3 
+                source_label = "Man"
             else:
                 # Optimized Logic (User checked "Smart Optimization")
-                settings = dynamic_config.get(ticker, [DEFAULT_WINDOW, DEFAULT_SMOOTH])
-                win_key, smooth_win = settings[0], int(settings[1])
+                if ticker in dynamic_config:
+                    settings = dynamic_config[ticker]
+                    win_key, smooth_win = settings[0], int(settings[1])
+                    source_label = "✨ Opt"
+                    is_optimized = True
+                else:
+                    win_key, smooth_win = DEFAULT_WINDOW, DEFAULT_SMOOTH
+                    source_label = "Def"
             
             # 3. Calculation
             col_r, col_m = f"RRG_Ratio_{win_key}", f"RRG_Mom_{win_key}"
@@ -462,7 +485,7 @@ def get_momentum_performance_categories(
                 'quadrant_5d': get_quadrant_name(r5, m5),
                 'quadrant_10d': get_quadrant_name(r10, m10), 
                 'quadrant_20d': get_quadrant_name(r20, m20),
-                'reason': f"Logic: {win_key}/{smooth_win}d", 
+                'reason': f"{source_label}: {win_key}/{smooth_win}d", 
                 'days_in_category': streak_info['days']
             }
             categories[bucket_key].append(theme_info)
@@ -478,7 +501,7 @@ def get_quadrant_name(ratio: float, momentum: float) -> str:
     else: return "🔴 Lagging"
 
 # ==========================================
-# 7. ORCHESTRATOR (The Missing Function Restored!)
+# 7. ORCHESTRATOR
 # ==========================================
 @st.cache_data(ttl=ud.CACHE_TTL, show_spinner=False)
 def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
@@ -486,6 +509,7 @@ def fetch_and_process_universe(benchmark_ticker: str = "SPY"):
     uni_df, tickers, theme_map = dm.load_universe(benchmark_ticker)
     if uni_df.empty: return {}, ["SECTOR_UNIVERSE is empty"], theme_map, uni_df, {}
 
+    # CHANGED: Use PARQUET_SECTOR_ROTATION
     db_url = st.secrets.get("PARQUET_SECTOR_ROTATION")
     if not db_url: return {}, ["PARQUET secret missing"], theme_map, uni_df, {}
 
@@ -698,7 +722,7 @@ def optimize_compass_settings(compass_df: pd.DataFrame) -> Tuple[Dict, str]:
         for logic in logics:
             signal_col = f"{logic}_Signal"
             hits = group[group[signal_col] == 1]
-            if len(hits) < 10: continue
+            if len(hits) < 3: continue
             score = hits['Target_5d'].mean() # Metric: Average 5d Return
             if score > best_score: best_score = score; best_logic = logic
         if best_logic:
