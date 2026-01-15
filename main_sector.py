@@ -1,14 +1,3 @@
-"""
-Sector Rotation App - SPLIT VERSION
-Contains two separate apps:
-1. run_theme_momentum_app: User-facing dashboard (Charts, Signals, Analysis)
-2. run_admin_backtesting: Admin tools (Universe Gen, Compass, AI Data)
-"""
-
-import streamlit as st
-import pandas as pd
-import utils_sector as us
-
 # ==========================================
 # APP 1: THE TRADING DASHBOARD
 # ==========================================
@@ -43,6 +32,8 @@ def run_theme_momentum_app(df_global=None):
         st.session_state.sector_view = "5 Days"
     if "sector_trails" not in st.session_state:
         st.session_state.sector_trails = False
+    if "use_smart_opt" not in st.session_state:
+        st.session_state.use_smart_opt = False
     
     all_themes = sorted(list(theme_map.keys()))
     if not all_themes:
@@ -55,166 +46,145 @@ def run_theme_momentum_app(df_global=None):
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
 
-    # --- 4. RRG QUADRANT GRAPHIC ---
-    st.subheader("Rotation Quadrant Graphic")
-
-    # User Guide
-    with st.expander("🗺️ Graphic User Guide", expanded=False):
-        st.markdown(f"""
-        **🧮 How It Works (The Math)**
-        This chart shows **Relative Performance** against **{st.session_state.sector_benchmark}** (not absolute price).
-        
-        * **X-Axis (Trend):** Are we beating the benchmark?
-            * `> 100`: Outperforming {st.session_state.sector_benchmark}
-            * `< 100`: Underperforming {st.session_state.sector_benchmark}
-        * **Y-Axis (Momentum):** How fast is the trend changing?
-            * `> 100`: Gaining speed (Acceleration)
-            * `< 100`: Losing speed (Deceleration)
-        
-        *Calculations use Weighted Regression (recent days weighted 3x more)*
-        """)
-
-    # Controls
-    with st.expander("⚙️ Chart Inputs & Filters", expanded=False):
-        col_inputs, col_filters = st.columns([1, 1])
-        
-        # --- LEFT: TIMEFRAME & BENCHMARK ---
-        with col_inputs:
-            st.markdown("**Benchmark Ticker**")
-            new_benchmark = st.radio(
-                "Benchmark",
-                ["SPY", "QQQ"],
-                horizontal=True,
-                index=["SPY", "QQQ"].index(st.session_state.sector_benchmark) 
-                    if st.session_state.sector_benchmark in ["SPY", "QQQ"] else 0,
-                key="sector_benchmark_radio",
-                label_visibility="collapsed"
-            )
-            
-            if new_benchmark != st.session_state.sector_benchmark:
-                st.session_state.sector_benchmark = new_benchmark
-                st.cache_data.clear()
-                st.rerun()
-
-            st.markdown("---")
-            st.markdown("**Timeframe Window**")
-            st.session_state.sector_view = st.radio(
-                "Timeframe Window",
-                ["5 Days", "10 Days", "20 Days"],
-                horizontal=True,
-                key="timeframe_radio",
-                label_visibility="collapsed"
-            )
-            
-            st.markdown('<div style="margin-top: 5px;"></div>', unsafe_allow_html=True)
-            st.session_state.sector_trails = st.checkbox(
-                "Show 3-Day Trails",
-                value=st.session_state.sector_trails
-            )
-            
-            # Display last data date
-            if st.session_state.sector_benchmark in etf_data_cache:
-                bench_df = etf_data_cache[st.session_state.sector_benchmark]
-                if not bench_df.empty:
-                    last_dt = bench_df.index[-1].strftime("%Y-%m-%d")
-                    st.caption(f"📅 Data Date: {last_dt}")
-
-        # --- RIGHT: SECTOR FILTERS ---
-        with col_filters:
-            st.markdown("**Sectors Shown (Applies to Entire Page!)**")
-            btn_col1, btn_col2, btn_col3 = st.columns(3)
-            
-            with btn_col1:
-                if st.button("➕ Everything", use_container_width=True):
-                    st.session_state.sector_theme_filter_widget = all_themes
-                    st.rerun()
-
-            with btn_col2:
-                if st.button("⭐ Big 11", use_container_width=True):
-                    big_11 = [
-                        "Comms", "Cons Discr", "Cons Staples",
-                        "Energy", "Financials", "Healthcare", "Industrials",
-                        "Materials", "Real Estate", "Technology", "Utilities"
-                    ]
-                    valid = [t for t in big_11 if t in all_themes]
-                    st.session_state.sector_theme_filter_widget = valid
-                    st.rerun()
-
-            with btn_col3:
-                if st.button("➖ Clear", use_container_width=True):
-                    st.session_state.sector_theme_filter_widget = []
-                    st.rerun()
-            
-            sel_themes = st.multiselect(
-                "Select Themes",
-                all_themes,
-                key="sector_theme_filter_widget",
-                label_visibility="collapsed"
-            )
+    # --- 4. CONFIGURATION & INPUTS ---
+    # Moved header out of expander for visibility
+    st.subheader("⚙️ Inputs & Filters")
     
+    c_in1, c_in2 = st.columns(2)
+    
+    with c_in1:
+        st.markdown("**Benchmark Ticker**")
+        new_benchmark = st.radio(
+            "Benchmark",
+            ["SPY", "QQQ"],
+            horizontal=True,
+            index=["SPY", "QQQ"].index(st.session_state.sector_benchmark) 
+                if st.session_state.sector_benchmark in ["SPY", "QQQ"] else 0,
+            key="sector_benchmark_radio",
+            label_visibility="collapsed"
+        )
+        if new_benchmark != st.session_state.sector_benchmark:
+            st.session_state.sector_benchmark = new_benchmark
+            st.cache_data.clear()
+            st.rerun()
+
+    with c_in2:
+        st.markdown("**Timeframe Window (Chart)**")
+        st.session_state.sector_view = st.radio(
+            "Timeframe Window",
+            ["5 Days", "10 Days", "20 Days"],
+            horizontal=True,
+            key="timeframe_radio",
+            label_visibility="collapsed"
+        )
+    
+    # Toggle Row
+    c_tog1, c_tog2 = st.columns(2)
+    with c_tog1:
+        st.session_state.use_smart_opt = st.checkbox(
+            "✨ Use Smart Optimization",
+            value=st.session_state.use_smart_opt,
+            help="If checked, tables below use the statistically BEST timeframe per sector. If unchecked, they match the Chart Window."
+        )
+    with c_tog2:
+        st.session_state.sector_trails = st.checkbox(
+            "Show 3-Day Trails (Chart)",
+            value=st.session_state.sector_trails
+        )
+
+    # Sector Filter Expander
+    with st.expander("🔎 Filter Sectors Shown", expanded=False):
+        btn_col1, btn_col2, btn_col3 = st.columns(3)
+        with btn_col1:
+            if st.button("➕ Everything", use_container_width=True):
+                st.session_state.sector_theme_filter_widget = all_themes
+                st.rerun()
+        with btn_col2:
+            if st.button("⭐ Big 11", use_container_width=True):
+                big_11 = ["Comms", "Cons Discr", "Cons Staples", "Energy", "Financials", "Healthcare", "Industrials", "Materials", "Real Estate", "Technology", "Utilities"]
+                valid = [t for t in big_11 if t in all_themes]
+                st.session_state.sector_theme_filter_widget = valid
+                st.rerun()
+        with btn_col3:
+            if st.button("➖ Clear", use_container_width=True):
+                st.session_state.sector_theme_filter_widget = []
+                st.rerun()
+        
+        sel_themes = st.multiselect(
+            "Select Themes",
+            all_themes,
+            key="sector_theme_filter_widget",
+            label_visibility="collapsed"
+        )
+
     # --- GLOBAL FILTER APPLICATION ---
     filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
     view_key = timeframe_map[st.session_state.sector_view]
 
-    # --- 6. RRG CHART ---
-    categories = us.get_momentum_performance_categories(etf_data_cache, filtered_map)
-    
-    st.markdown("**Filter Chart by Category:**")
-    btn_cols = st.columns(5)
-    filter_config = [
-        (0, "🎯 All", "all"),
-        (1, "⬈ Gain/Out", "gaining_mom_outperforming"),
-        (2, "⬉ Gain/Under", "gaining_mom_underperforming"),
-        (3, "⬊ Lose/Out", "losing_mom_outperforming"),
-        (4, "⬋ Lose/Under", "losing_mom_underperforming")
-    ]
-
-    for col_idx, label, filter_key in filter_config:
-        with btn_cols[col_idx]:
-            if st.button(label, use_container_width=True, key=f"filter_{filter_key}"):
-                st.session_state.chart_filter = filter_key
-                st.rerun()
-    
-    if 'chart_filter' not in st.session_state:
-        st.session_state.chart_filter = "all"
-    
-    if st.session_state.chart_filter == "all":
-        filtered_map_chart = filtered_map
-        st.caption(f"Showing all {len(filtered_map_chart)} themes")
-    else:
-        selected_themes = [t['theme'] for t in categories.get(st.session_state.chart_filter, [])]
-        filtered_map_chart = {k: v for k, v in filtered_map.items() if k in selected_themes}
-        st.caption(f"Showing {len(filtered_map_chart)} themes in {st.session_state.chart_filter}")
-    
-    # Display chart
-    chart_placeholder = st.empty()
-    with chart_placeholder:
-        fig = us.plot_simple_rrg(etf_data_cache, filtered_map_chart, view_key, st.session_state.sector_trails)
-        chart_event = st.plotly_chart(
-            fig,
-            use_container_width=True,
-            on_select="rerun",
-            selection_mode="points"
-        )
-    
-    if chart_event and chart_event.selection and chart_event.selection.points:
-        point = chart_event.selection.points[0]
-        if "customdata" in point:
-            st.session_state.sector_target = point["customdata"]
-        elif "text" in point:
-            st.session_state.sector_target = point["text"]
+    # --- 6. CATEGORIZATION LOGIC ---
+    force_tf = None if st.session_state.use_smart_opt else view_key
+    categories = us.get_momentum_performance_categories(
+        etf_data_cache, 
+        filtered_map, 
+        force_timeframe=force_tf
+    )
     
     st.divider()
 
-    # --- 7. THEME CATEGORIES DISPLAY ---
+    # --- CHART SECTION (IN EXPANDER) ---
+    with st.expander("🗺️ Rotation Quadrant Graphic", expanded=False):
+        st.markdown("**Filter Chart by Category:**")
+        if st.session_state.use_smart_opt:
+            st.caption("ℹ️ *Categories below are based on Optimized Timeframes, not the Chart.*")
+        
+        btn_cols = st.columns(5)
+        filter_config = [
+            (0, "🎯 All", "all"),
+            (1, "⬈ Gain/Out", "gaining_mom_outperforming"),
+            (2, "⬉ Gain/Under", "gaining_mom_underperforming"),
+            (3, "⬊ Lose/Out", "losing_mom_outperforming"),
+            (4, "⬋ Lose/Under", "losing_mom_underperforming")
+        ]
+
+        for col_idx, label, filter_key in filter_config:
+            with btn_cols[col_idx]:
+                if st.button(label, use_container_width=True, key=f"filter_{filter_key}"):
+                    st.session_state.chart_filter = filter_key
+                    st.rerun()
+        
+        if 'chart_filter' not in st.session_state:
+            st.session_state.chart_filter = "all"
+        
+        if st.session_state.chart_filter == "all":
+            filtered_map_chart = filtered_map
+        else:
+            selected_themes = [t['theme'] for t in categories.get(st.session_state.chart_filter, [])]
+            filtered_map_chart = {k: v for k, v in filtered_map.items() if k in selected_themes}
+        
+        chart_placeholder = st.empty()
+        with chart_placeholder:
+            fig = us.plot_simple_rrg(etf_data_cache, filtered_map_chart, view_key, st.session_state.sector_trails)
+            chart_event = st.plotly_chart(
+                fig,
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode="points"
+            )
+        
+        if chart_event and chart_event.selection and chart_event.selection.points:
+            point = chart_event.selection.points[0]
+            if "customdata" in point:
+                st.session_state.sector_target = point["customdata"]
+            elif "text" in point:
+                st.session_state.sector_target = point["text"]
+
+    # --- 7. THEME CATEGORIES DISPLAY (ONLY GAIN MOM & OUTPERF) ---
     st.subheader("📊 Theme Categories")
     
+    # UPDATED: Only showing the first category
     quadrant_meta = [
-        ('gaining_mom_outperforming', '⬈ GAIN MOM & OUTPERF', 'success', '✅ Best Opportunities - Sectors accelerating...'),
-        ('gaining_mom_underperforming', '⬉ GAIN MOM & UNDERPERF', 'info', '🔄 Potential Reversals - Sectors bottoming...'),
-        ('losing_mom_outperforming', '⬊ LOSE MOM & OUTPERF', 'warning', '⚠️ Topping - Take profits...'),
-        ('losing_mom_underperforming', '⬋ LOSE MOM & UNDERPERF', 'error', '❌ Avoid - Sectors declining...')
+        ('gaining_mom_outperforming', '⬈ GAIN MOM & OUTPERF', 'success', '✅ Best Opportunities - Sectors accelerating...')
     ]
 
     for key, title, style_func_name, caption in quadrant_meta:
@@ -223,7 +193,7 @@ def run_theme_momentum_app(df_global=None):
         
         if items:
             style_func(f"**{title}** ({len(items)} sectors)")
-            st.caption(caption)
+            # st.caption(caption) # Optional: comment out if you want less clutter
             
             data = []
             for theme_info in items:
@@ -292,7 +262,7 @@ def run_theme_momentum_app(df_global=None):
         st.info(f"No stocks found for selected themes.")
         return
 
-    # Run Analysis - FAST MODE (No expensive columns yet)
+    # Run Analysis
     df_stocks = us.analyze_stocks_batch(
         etf_data_cache, 
         stock_theme_pairs, 
@@ -316,12 +286,10 @@ def run_theme_momentum_app(df_global=None):
         > **3.0** = Outperformed risk-adjusted expectation by 3%.
         """)
     
-    # Define Columns
     numeric_columns = ["Price", "Market Cap (B)", "Beta", "Alpha 5d", "Alpha 10d", "Alpha 20d", "RVOL 5d", "RVOL 10d", "RVOL 20d"]
     categorical_columns = ["Theme", "Theme Category", "Div", "8 EMA", "21 EMA", "50 MA", "200 MA"]
     all_filter_columns = numeric_columns + categorical_columns
 
-    # Helpers
     def get_safe_options(df, col_name):
         if col_name not in df.columns: return ["-"]
         opts = sorted([str(x) for x in df[col_name].unique() if pd.notna(x) and str(x).strip() != ""])
@@ -332,31 +300,21 @@ def run_theme_momentum_app(df_global=None):
     unique_divs = get_safe_options(df_stocks, 'Div')
     
     def safe_index(options, value, default=0):
-        try:
-            return options.index(value)
-        except ValueError:
-            return default if 0 <= default < len(options) else 0
+        try: return options.index(value)
+        except ValueError: return default if 0 <= default < len(options) else 0
             
-    # --- FILTER LOOP (Builds UI List Only) ---
-    current_ui_filters = [] # Store current widget states here
+    current_ui_filters = [] 
     
     for i in range(8):
         cols = st.columns(5)
         default = st.session_state.filter_defaults.get(i, {})
-        
-        # 1. Column Selector
         col_opts = [None] + all_filter_columns
         col_idx = safe_index(col_opts, default.get('column'), 0)
         
-        column = cols[0].selectbox(
-            f"F{i+1}", col_opts, index=col_idx, 
-            key=f"filter_{i}_column", label_visibility="collapsed", placeholder="Column..."
-        )
+        column = cols[0].selectbox(f"F{i+1}", col_opts, index=col_idx, key=f"filter_{i}_column", label_visibility="collapsed", placeholder="Column...")
         
         if column:
             is_numeric = column in numeric_columns
-            
-            # 2. Operator Selector
             ops = [">=", "<="] if is_numeric else ["="]
             op_idx = safe_index(ops, default.get('operator', '>='), 0)
             operator = cols[1].selectbox("Op", ops, index=op_idx, key=f"filter_{i}_operator", label_visibility="collapsed")
@@ -364,68 +322,50 @@ def run_theme_momentum_app(df_global=None):
             val_type, val, val_col, val_cat = "Number", None, None, None
             
             if is_numeric:
-                # 3. Type Selector
                 type_opts = ["Number", "Column"]
                 type_idx = safe_index(type_opts, default.get('type', 'Number'), 0)
                 val_type = cols[2].radio("T", type_opts, index=type_idx, key=f"filter_{i}_type", horizontal=True, label_visibility="collapsed")
                 
                 if val_type == "Number":
-                    # 4. Value Input
                     val = cols[3].number_input("V", value=float(default.get('value', 0.0)), step=0.1, format="%.2f", key=f"filter_{i}_value", label_visibility="collapsed")
                 else:
-                    # 4. Column Comparison
                     vc_idx = safe_index(numeric_columns, default.get('value_column'), 0)
                     val_col = cols[3].selectbox("C", numeric_columns, index=vc_idx, key=f"filter_{i}_val_col", label_visibility="collapsed")
             else:
-                # Categorical Value
                 val_type = "Categorical"
                 if column == "Theme": cat_opts = unique_themes
                 elif column == "Theme Category": cat_opts = unique_categories
                 elif column == "Div": cat_opts = unique_divs
                 else: cat_opts = get_safe_options(df_stocks, column)
-                
                 cat_idx = safe_index(cat_opts, default.get('value_cat'), 0)
                 val_cat = cols[3].selectbox("V", cat_opts, index=cat_idx, key=f"filter_{i}_val_cat", label_visibility="collapsed")
 
-            # 5. Logic Selector
             logic = None
             if i < 7:
                 logic_opts = ["AND", "OR"]
                 log_idx = safe_index(logic_opts, default.get('logic', 'AND'), 0)
                 logic = cols[4].radio("L", logic_opts, index=log_idx, key=f"filter_{i}_logic", horizontal=True, label_visibility="collapsed")
             
-            current_ui_filters.append({
-                'column': column, 'operator': operator, 'value_type': val_type,
-                'value': val, 'value_column': val_col, 'value_categorical': val_cat,
-                'logic': logic
-            })
+            current_ui_filters.append({'column': column, 'operator': operator, 'value_type': val_type, 'value': val, 'value_column': val_col, 'value_categorical': val_cat, 'logic': logic})
 
-    # --- APPLY BUTTON LOGIC ---
     st.markdown('<div style="margin-top: 10px;"></div>', unsafe_allow_html=True)
     
-    # 1. Initialize active filters on first load
     if "active_stock_filters" not in st.session_state:
         st.session_state.active_stock_filters = current_ui_filters
 
-    # 2. Button to update active filters AND RESET ENRICHMENT
     if st.button("Apply Filters", type="primary", use_container_width=True):
         st.session_state.active_stock_filters = current_ui_filters
-        # RESET the checkboxes so we don't do expensive calculations automatically
         st.session_state.opt_show_divergences = False
         st.session_state.opt_show_mkt_caps = False
         st.rerun()
 
-    # 3. Apply the ACTIVE filters (not the UI filters)
     df_filtered = us.apply_stock_filters(df_stocks, st.session_state.active_stock_filters)
     
-    # Check if UI differs from Active (Visual Cue)
     if current_ui_filters != st.session_state.active_stock_filters:
         st.caption("⚠️ *Filters have changed. Click 'Apply Filters' to update the table.*")
 
-    # Display Results
     st.markdown(f"**Showing {len(df_filtered)} of {len(df_stocks)} stock-theme combinations**")
 
-    # --- SETTINGS CHECKBOXES (RENDERED AFTER FILTERING) ---
     c1, c2, c3, _ = st.columns([2, 2, 2, 6]) 
     with c1:
         st.checkbox("Show Divergences", key="opt_show_divergences", help="Enrich filtered list. Slower.")
@@ -434,7 +374,6 @@ def run_theme_momentum_app(df_global=None):
     with c3:
         st.checkbox("Show Biotech", key="opt_show_biotech", value=False, help="Include Biotech theme.")
 
-    # --- ENRICH DATA ---
     df_filtered = us.enrich_stock_data(
         df_filtered, 
         etf_data_cache, 
@@ -465,11 +404,7 @@ def run_theme_momentum_app(df_global=None):
     st.dataframe(df_filtered, use_container_width=True, hide_index=True, column_config=column_config)
 
     # --- TICKER LOOKUP ---
-    lookup_ticker = st.text_input(
-        "Enter a ticker to see its sectors:", 
-        placeholder="e.g. AAPL",
-        label_visibility="visible"
-    ).upper().strip()
+    lookup_ticker = st.text_input("Enter a ticker to see its sectors:", placeholder="e.g. AAPL", label_visibility="visible").upper().strip()
 
     if lookup_ticker:
         if not uni_df.empty and 'Ticker' in uni_df.columns:
@@ -485,244 +420,3 @@ def run_theme_momentum_app(df_global=None):
     if not df_filtered.empty:
         st.caption("Copy tickers:")
         st.code(", ".join(df_filtered['Ticker'].unique().tolist()), language="text")
-
-
-# ==========================================
-# APP 2: THE ADMIN & BACKTESTING SUITE
-# ==========================================
-def run_admin_backtesting():
-    """
-    The 'Back End' for optimization.
-    Focus: Generating universe, testing logic (Compass), creating AI datasets.
-    """
-    st.title("🛠️ Sector Admin & Backtesting")
-    
-    # --- SHARED DATA FETCH ---
-    if "sector_benchmark" not in st.session_state:
-        st.session_state.sector_benchmark = "SPY"
-        
-    st.caption(f"Loaded Universe Benchmark: **{st.session_state.sector_benchmark}**")
-    
-    new_bench = st.radio("Benchmark Source:", ["SPY", "QQQ"], horizontal=True, key="admin_bench_radio")
-    if new_bench != st.session_state.sector_benchmark:
-        st.session_state.sector_benchmark = new_bench
-        st.cache_data.clear()
-        st.rerun()
-
-    with st.spinner(f"Loading Sector Data for Admin Tools..."):
-        etf_data_cache, _, theme_map, uni_df, _ = \
-            us.fetch_and_process_universe(st.session_state.sector_benchmark)
-            
-    all_themes = sorted(list(theme_map.keys()))
-
-    # ==========================================
-    # PHASE 1: GENERATE NEW UNIVERSE
-    # ==========================================
-    st.header("Phase 1: Generate New Universe")
-    st.caption("Use this tool to mathematically generate a universe based on ETF holdings.")
-    
-    # UPDATED: 4 Columns layout to fit button on the right
-    c_gen1, c_gen2, c_gen3, c_gen4 = st.columns([1, 1, 1, 1])
-    
-    with c_gen1:
-        target_weight_input = st.number_input(
-            "Target Cumulative Weight %", 
-            min_value=5.0, max_value=100.0, value=60.0, step=5.0, format="%.1f",
-            help="We will keep pulling tickers until they account for this % of the ETF's weight."
-        )
-    with c_gen2:
-        qty_cap = st.number_input("Max Tickers per Sector", min_value=0, value=0, 
-            help="Hard cap on count. Leave 0 for no limit.")
-        qty_cap_val = None if qty_cap == 0 else qty_cap
-    with c_gen3:
-        min_vol_input = st.number_input("Min $ Volume (Daily)", value=10_000_000, step=1_000_000, format="%d",
-            help="Filter out illiquid stocks.")
-    
-    # UPDATED: Button moved to 4th column with spacing for alignment
-    with c_gen4:
-        st.markdown('<div style="margin-top: 28px;"></div>', unsafe_allow_html=True)
-        # REMOVED type="primary"
-        run_gen = st.button("🚀 Generate", use_container_width=True)
-
-    if run_gen:
-        generator = us.UniverseGenerator()
-        with st.spinner("Fetching holdings and validating volume... (This may take 30s)"):
-            csv_data, stats_df = generator.generate_universe(
-                theme_map, 
-                target_cumulative_weight=(target_weight_input / 100.0),
-                max_tickers_per_sector=qty_cap_val,
-                min_dollar_volume=min_vol_input
-            )
-        
-        st.subheader("Generation Results")
-        def color_status(val):
-            color = '#ff4b4b' if 'No Data' in val else '#ffa700' if 'Limit' in val else '#21c354'
-            return f'color: {color}'
-
-        st.dataframe(
-            stats_df.style.map(color_status, subset=['Status']),
-            use_container_width=True,
-            column_config={
-                "Weight Pulled": st.column_config.NumberColumn("ETF Weight %", format="%.1f%%"),
-                "Tickers Selected": st.column_config.NumberColumn("Tickers Added"),
-            }
-        )
-        
-        if any("Limit" in s for s in stats_df['Status'].values):
-            st.warning("⚠️ **Data Limitation:** Some sectors only returned Top 10 holdings.")
-
-        # UPDATED: CSV Output in Expander
-        with st.expander("📄 View/Copy Your New Universe CSV", expanded=False):
-            st.code(csv_data, language="csv")
-
-    # ==========================================
-    # PHASE 2 & 3: THE COMPASS
-    # ==========================================
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.header("Phase 2 & 3: The Compass (Optimize Logic & Timing)")
-    st.caption("Generate a master file to scientifically prove WHICH trend definition works best, and WHEN to enter.")
-    
-    if "compass_df" not in st.session_state:
-        st.session_state.compass_df = None
-
-    st.info("""
-    **This export creates a 'Matrix of Truth' testing 30 different strategy combinations per day.**
-    
-    **The Buckets (Variables Tested):**
-    1.  **6 Logic Definitions:**
-        * `Logic A`: 10d Trend / 3d Smooth (Standard)
-        * `Logic B`: 10d Trend / 5d Smooth (Smoother)
-        * `Logic C`: 20d Trend / 3d Smooth (Slow)
-        * `Logic D`: 20d Trend / 5d Smooth (Slowest)
-        * `Logic E`: 5d Trend / 2d Smooth (Fast Scalp)
-        * `Logic F`: 5d Trend / 3d Smooth (Fast Smooth)
-    2.  **Entry Timing:** `Streak Counter` (Test EV of buying Day 1 vs Day 2 vs Day 3).
-    3.  **Forward Returns:** `1d`, `3d`, `5d`, `10d`, `20d` (Did the signal work?).
-    """)
-    
-    # REMOVED type="primary"
-    if st.button("🧭 Generate Compass Data", use_container_width=True):
-        with st.spinner("Calculating 6 Logics x Streak Counts for all ETFs..."):
-            df_compass = us.generate_compass_data(etf_data_cache, theme_map)
-            st.session_state.compass_df = df_compass
-            
-    if st.session_state.compass_df is not None and not st.session_state.compass_df.empty:
-        df_comp = st.session_state.compass_df
-        st.success(f"✅ Generated {len(df_comp)} rows of optimization data!")
-        
-        csv_compass = df_comp.to_csv(index=True).encode('utf-8')
-        st.download_button(
-            label="⬇️ Download Compass_Master.csv",
-            data=csv_compass,
-            file_name="Compass_Logic_And_Timing_Master.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-        
-        st.markdown("### 📋 AI Optimization Prompt")
-        st.markdown("""
-        **Copy this prompt to ChatGPT/Claude to optimize your strategy:**
-        
-        ```text
-        I have uploaded a 'Compass Master' file containing historical data for multiple Sector ETFs.
-        This file tests 6 different 'Trend Logics' (A through F) and includes Forward Returns (1d to 20d).
-
-        **Columns Guide:**
-        - Logic_X_Signal: 1 = The trend is 'Gaining Momentum & Outperforming'. 0 = It is not.
-        - Logic_X_Streak: How many consecutive days the signal has been active (1 = First Day).
-        - Target_Xd: The percent return of the ETF X days later.
-
-        **My Goal:**
-        I want to find the 'Golden Setup' for each Sector. 
-
-        **Please analyze the data and answer:**
-        1. Which Logic (A-F) has the highest correlation with positive 5-day and 10-day returns?
-        2. PERFORM A STREAK ANALYSIS: For the best Logic, is the Expected Value (EV) higher on Day 1 (Fresh) or Day 3 (Confirmed)?
-        3. Are there specific sectors (e.g., Semis vs Utilities) that require different Logics (e.g., Fast vs Slow)?
-        ```
-        """)
-
-    # ==========================================
-    # PHASE 4: AI TRAINING DATA
-    # ==========================================
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.header("Phase 4: Download Sector History")
-    st.caption("Download deep history for specific themes to train AI on Alpha/RVOL metrics.")
-
-    if "gen_theme_df" not in st.session_state:
-        st.session_state.gen_theme_df = None
-    if "gen_theme_name" not in st.session_state:
-        st.session_state.gen_theme_name = ""
-
-    st.markdown("#### Theme Data (Training Sets)")
-    dl_theme = st.selectbox("Select Theme", options=all_themes, index=0, key="dl_theme_selector")
-    
-    # REMOVED type="primary"
-    if st.button(f"🧠 Generate AI Training Data for {dl_theme}", use_container_width=True):
-        target_etf = theme_map.get(dl_theme)
-        if target_etf and target_etf in etf_data_cache:
-            theme_stocks = uni_df[(uni_df['Role']=='Stock') & (uni_df['Theme']==dl_theme)]['Ticker'].unique().tolist()
-            with st.spinner("Calculating extended windows..."):
-                df_result = us.generate_ai_training_data(
-                    target_etf, etf_data_cache, theme_stocks, dl_theme, st.session_state.sector_benchmark
-                )
-                st.session_state.gen_theme_df = df_result
-                st.session_state.gen_theme_name = dl_theme
-        else:
-            st.warning("ETF data not found.")
-            st.session_state.gen_theme_df = None
-
-    if st.session_state.gen_theme_df is not None and not st.session_state.gen_theme_df.empty:
-        training_df = st.session_state.gen_theme_df
-        current_theme = st.session_state.gen_theme_name
-        st.success(f"✅ Data Ready: {current_theme} ({len(training_df)} rows)")
-
-        # Download Buttons
-        fmt_col1, fmt_col2 = st.columns(2)
-        with fmt_col1:
-            import io
-            parquet_buffer = io.BytesIO()
-            training_df.to_parquet(parquet_buffer, index=True)
-            st.download_button(
-                label=f"⬇️ {current_theme}.parquet",
-                data=parquet_buffer.getvalue(),
-                file_name=f"{current_theme}_AI_Training.parquet",
-                mime="application/octet-stream",
-                use_container_width=True
-            )
-        with fmt_col2:
-            st.download_button(
-                label=f"⬇️ {current_theme}.csv",
-                data=training_df.to_csv(index=True).encode('utf-8'),
-                file_name=f"{current_theme}_AI_Training.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-
-        st.markdown("### 📋 AI Prompt Context")
-        st.markdown(f"""
-        **Copy this prompt to ChatGPT/Claude:**
-        
-        ```text
-        I have uploaded a file containing historical trading data for the '{current_theme}' sector. 
-        The data is designed to train/optimize a swing trading strategy.
-
-        **Schema Description:**
-        1. **Context Columns:**
-           - `Theme_Category`: The status of the Sector ETF on that day (e.g., "Gaining Momentum & Outperforming").
-           - `Days_In_Category`: How many consecutive days the ETF has been in that specific category.
-
-        2. **Feature Columns (Predictors):**
-           - `Metric_Alpha_[N]d`: The stock's excess return vs the ETF over N days (Windows: 5, 10, 15, 20, 30, 50).
-           - `Metric_RVOL_[N]d`: The stock's Relative Volume over N days.
-
-        3. **Target Columns (Outcomes):**
-           - `Target_FwdRet_1d`: The stock's return on the NEXT day.
-           - `Target_FwdRet_5d`: The stock's return over the NEXT 5 days.
-           - `Target_FwdRet_10d`: The stock's return over the NEXT 10 days.
-
-        **Goal:**
-        Analyze the correlations between the `Theme_Category`, `Metric_Alpha`, and `Metric_RVOL` features against the `Target_FwdRet` columns.
-        Find the optimal combination of Alpha and RVOL filters for each Theme Category to maximize forward returns.
-        ```
-        """)
