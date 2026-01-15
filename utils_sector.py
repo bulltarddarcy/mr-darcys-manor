@@ -1,6 +1,6 @@
 """
-Sector rotation utilities - AUTO-SAVE & MANUAL CONFIG VERSION
-Automatically loads optimized settings from JSON, or falls back to manual config.
+Sector rotation utilities - GSHEET CONFIG VERSION
+Loads optimized settings directly from a Google Sheet tab (SECTOR_CONFIG).
 """
 
 import streamlit as st
@@ -22,46 +22,76 @@ logger = logging.getLogger(__name__)
 import utils_darcy as ud
 
 # ==========================================
-# 0. SMART CONFIGURATION
+# 0. SMART CONFIGURATION (GSHEET LOADER)
 # ==========================================
-CONFIG_FILENAME = "sector_optimized_config.json"
-
-# --- MANUAL OVERRIDE (Optional) ---
-# The app will look for 'sector_optimized_config.json' first.
-# If you want to hardcode values, put them here.
-SECTOR_CONFIG = {}
-
-def load_dynamic_config() -> Dict:
-    """
-    Loads settings. Priority:
-    1. Local JSON file (from Admin 'Save' button)
-    2. SECTOR_CONFIG dictionary (Manual paste)
-    """
-    # 1. Try JSON
-    if os.path.exists(CONFIG_FILENAME):
-        try:
-            with open(CONFIG_FILENAME, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading config: {e}")
-            
-    # 2. Fallback to Manual Dict
-    if SECTOR_CONFIG:
-        return SECTOR_CONFIG
-        
-    return {}
-
-def save_dynamic_config(config_dict: Dict):
-    """Saves optimized settings to local JSON file."""
-    try:
-        with open(CONFIG_FILENAME, 'w') as f:
-            json.dump(config_dict, f, indent=4)
-    except Exception as e:
-        logger.error(f"Error saving config: {e}")
-
 # Default Fallback
 DEFAULT_WINDOW = 'Med'   # 10 Days
 DEFAULT_SMOOTH = 3       # 3 Days
+
+# OPTIONAL: Hardcode here if GSHEET fails or for testing
+SECTOR_CONFIG = {}
+
+@st.cache_data(ttl=300) # Cache for 5 mins so we don't hit GSheets constantly
+def load_dynamic_config() -> Dict:
+    """
+    Loads optimized settings from the Google Sheet defined in secrets.
+    Expected Columns: [Ticker, Window, Smooth]
+    Returns: Dict {'SMH': ('Short', 2), ...}
+    """
+    # 1. Check Hardcoded First
+    if SECTOR_CONFIG:
+        return SECTOR_CONFIG
+
+    # 2. Check Secrets
+    config_url = st.secrets.get("SECTOR_CONFIG")
+    
+    if not config_url:
+        return {} # No secret, use defaults
+        
+    try:
+        # Handle Google Sheet Links or Raw CSV
+        if config_url.strip().startswith("http"):
+            if "docs.google.com/spreadsheets" in config_url:
+                # If it's a "Publish to Web" CSV link, pandas reads it directly
+                df = pd.read_csv(config_url)
+            else:
+                df = pd.read_csv(config_url)
+        else:
+            return {}
+
+        # Validate Columns
+        required = ['Ticker', 'Window', 'Smooth']
+        if not all(col in df.columns for col in required):
+            logger.error(f"Config Sheet missing columns. Found: {df.columns}")
+            return {}
+
+        # Convert to Dictionary
+        config_dict = {}
+        for _, row in df.iterrows():
+            ticker = str(row['Ticker']).strip().upper()
+            window = str(row['Window']).strip().capitalize() # Ensure 'Short', 'Med', 'Long'
+            
+            # Map simplified inputs if user typed '5d' instead of 'Short'
+            if '5' in window: window = 'Short'
+            elif '10' in window: window = 'Med'
+            elif '20' in window: window = 'Long'
+            
+            # Validate Window
+            if window not in ['Short', 'Med', 'Long']:
+                window = DEFAULT_WINDOW
+            
+            try:
+                smooth = int(row['Smooth'])
+            except:
+                smooth = DEFAULT_SMOOTH
+                
+            config_dict[ticker] = (window, smooth)
+            
+        return config_dict
+
+    except Exception as e:
+        logger.error(f"Error loading SECTOR_CONFIG: {e}")
+        return {}
 
 # ==========================================
 # 1. CONSTANTS
