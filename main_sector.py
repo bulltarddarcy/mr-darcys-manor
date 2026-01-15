@@ -43,8 +43,6 @@ def run_theme_momentum_app(df_global=None):
         st.session_state.sector_view = "5 Days"
     if "sector_trails" not in st.session_state:
         st.session_state.sector_trails = False
-    if "use_smart_opt" not in st.session_state:
-        st.session_state.use_smart_opt = False
     
     all_themes = sorted(list(theme_map.keys()))
     if not all_themes:
@@ -57,72 +55,70 @@ def run_theme_momentum_app(df_global=None):
     if "sector_theme_filter_widget" not in st.session_state:
         st.session_state.sector_theme_filter_widget = all_themes
 
-    # --- 4. TOP CONFIGURATION ---
+    # --- 4. CONFIGURATION ---
     st.subheader("⚙️ Configuration")
     
-    c_conf1, c_conf2 = st.columns(2)
-    
-    with c_conf1:
-        st.markdown("**Benchmark Ticker**")
-        new_benchmark = st.radio(
-            "Benchmark",
-            ["SPY", "QQQ"],
-            horizontal=True,
-            index=["SPY", "QQQ"].index(st.session_state.sector_benchmark) 
-                if st.session_state.sector_benchmark in ["SPY", "QQQ"] else 0,
-            key="sector_benchmark_radio",
+    # Row 1: Benchmark
+    st.markdown("**Benchmark Ticker**")
+    new_benchmark = st.radio(
+        "Benchmark",
+        ["SPY", "QQQ"],
+        horizontal=True,
+        index=["SPY", "QQQ"].index(st.session_state.sector_benchmark) 
+            if st.session_state.sector_benchmark in ["SPY", "QQQ"] else 0,
+        key="sector_benchmark_radio",
+        label_visibility="collapsed"
+    )
+    if new_benchmark != st.session_state.sector_benchmark:
+        st.session_state.sector_benchmark = new_benchmark
+        st.cache_data.clear()
+        st.rerun()
+
+    st.markdown("") # Spacer
+
+    # Row 2: Sector Filter (Full Width)
+    with st.expander("🔎 Select Sectors to View", expanded=False):
+        btn_col1, btn_col2, btn_col3 = st.columns(3)
+        with btn_col1:
+            if st.button("➕ Everything", use_container_width=True):
+                st.session_state.sector_theme_filter_widget = all_themes
+                st.rerun()
+        with btn_col2:
+            if st.button("⭐ Big 11", use_container_width=True):
+                big_11 = ["Comms", "Cons Discr", "Cons Staples", "Energy", "Financials", "Healthcare", "Industrials", "Materials", "Real Estate", "Technology", "Utilities"]
+                valid = [t for t in big_11 if t in all_themes]
+                st.session_state.sector_theme_filter_widget = valid
+                st.rerun()
+        with btn_col3:
+            if st.button("➖ Clear", use_container_width=True):
+                st.session_state.sector_theme_filter_widget = []
+                st.rerun()
+        
+        sel_themes = st.multiselect(
+            "Select Themes",
+            all_themes,
+            key="sector_theme_filter_widget",
             label_visibility="collapsed"
         )
-        if new_benchmark != st.session_state.sector_benchmark:
-            st.session_state.sector_benchmark = new_benchmark
-            st.cache_data.clear()
-            st.rerun()
-
-    with c_conf2:
-        st.markdown("**Sector Filter**")
-        with st.expander("🔎 Select Sectors to View", expanded=False):
-            btn_col1, btn_col2, btn_col3 = st.columns(3)
-            with btn_col1:
-                if st.button("➕ Everything", use_container_width=True):
-                    st.session_state.sector_theme_filter_widget = all_themes
-                    st.rerun()
-            with btn_col2:
-                if st.button("⭐ Big 11", use_container_width=True):
-                    big_11 = ["Comms", "Cons Discr", "Cons Staples", "Energy", "Financials", "Healthcare", "Industrials", "Materials", "Real Estate", "Technology", "Utilities"]
-                    valid = [t for t in big_11 if t in all_themes]
-                    st.session_state.sector_theme_filter_widget = valid
-                    st.rerun()
-            with btn_col3:
-                if st.button("➖ Clear", use_container_width=True):
-                    st.session_state.sector_theme_filter_widget = []
-                    st.rerun()
-            
-            sel_themes = st.multiselect(
-                "Select Themes",
-                all_themes,
-                key="sector_theme_filter_widget",
-                label_visibility="collapsed"
-            )
 
     # --- GLOBAL FILTER APPLICATION ---
     filtered_map = {k: v for k, v in theme_map.items() if k in sel_themes}
+    
+    # Map friendly name to internal key (e.g. "5 Days" -> "Short")
     timeframe_map = {"5 Days": "Short", "10 Days": "Med", "20 Days": "Long"}
+    
+    # Ensure default
+    if st.session_state.sector_view not in timeframe_map:
+        st.session_state.sector_view = "5 Days"
+        
     view_key = timeframe_map[st.session_state.sector_view]
 
-    # --- 6. CATEGORIZATION LOGIC ---
-    force_tf = None if st.session_state.use_smart_opt else view_key
-    categories = us.get_momentum_performance_categories(
-        etf_data_cache, 
-        filtered_map, 
-        force_timeframe=force_tf
-    )
-    
     st.divider()
 
-    # --- CHART SECTION (IN EXPANDER) ---
-    with st.expander("🗺️ Rotation Quadrant Graphic", expanded=False):
+    # --- 5. CHART SECTION (IN EXPANDER) ---
+    # expanded=True keeps it open when interacting with inner widgets
+    with st.expander("🗺️ Rotation Quadrant Graphic", expanded=True):
         
-        # MOVED CONTROLS INSIDE HERE
         c_chart1, c_chart2 = st.columns(2)
         with c_chart1:
             st.markdown("**Timeframe Window (Chart Only)**")
@@ -133,6 +129,9 @@ def run_theme_momentum_app(df_global=None):
                 key="timeframe_radio",
                 label_visibility="collapsed"
             )
+            # Update view_key immediately if changed
+            view_key = timeframe_map[st.session_state.sector_view]
+            
         with c_chart2:
             st.markdown("**Visual Options**")
             st.session_state.sector_trails = st.checkbox(
@@ -141,9 +140,15 @@ def run_theme_momentum_app(df_global=None):
             )
 
         st.markdown("---")
+        
+        # Calculate Categories for CHART filtering (uses Chart Timeframe)
+        categories_chart = us.get_momentum_performance_categories(
+            etf_data_cache, 
+            filtered_map, 
+            force_timeframe=view_key
+        )
+        
         st.markdown("**Filter Chart by Category:**")
-        if st.session_state.use_smart_opt:
-            st.caption("ℹ️ *Note: Table categories below use 'Smart Opt', but this Chart always uses the Timeframe Window selected above.*")
         
         btn_cols = st.columns(5)
         filter_config = [
@@ -166,7 +171,7 @@ def run_theme_momentum_app(df_global=None):
         if st.session_state.chart_filter == "all":
             filtered_map_chart = filtered_map
         else:
-            selected_themes = [t['theme'] for t in categories.get(st.session_state.chart_filter, [])]
+            selected_themes = [t['theme'] for t in categories_chart.get(st.session_state.chart_filter, [])]
             filtered_map_chart = {k: v for k, v in filtered_map.items() if k in selected_themes}
         
         chart_placeholder = st.empty()
@@ -186,58 +191,84 @@ def run_theme_momentum_app(df_global=None):
             elif "text" in point:
                 st.session_state.sector_target = point["text"]
 
-    # --- 7. THEME CATEGORIES DISPLAY ---
-    st.subheader("📊 Theme Categories")
+    # --- 6. DUAL TABLES DISPLAY ---
+    st.subheader("📊 Theme Categories (Gain Mom & Outperform)")
     
-    # MOVED CHECKBOX HERE
-    st.session_state.use_smart_opt = st.checkbox(
-        "✨ Use Smart Optimization",
-        value=st.session_state.use_smart_opt,
-        help="If checked, tables below use the statistically BEST timeframe per sector (read from your Google Sheet). If unchecked, they match the Chart Window."
+    # 1. Calculate Standard (Matches Chart)
+    cats_standard = categories_chart # Already calculated above using view_key
+    
+    # 2. Calculate Optimized (Uses Config)
+    cats_optimized = us.get_momentum_performance_categories(
+        etf_data_cache, 
+        filtered_map, 
+        force_timeframe=None # None triggers Smart Opt lookup
     )
     
-    # NEW: Warning if Smart Opt is ON but no data is returned (User hasn't populated Google Sheet yet)
-    has_any_smart_data = any(len(v) > 0 for v in categories.values())
-    if st.session_state.use_smart_opt and not has_any_smart_data:
-        st.error("⚠️ **Optimization Config Missing:** You checked 'Smart Optimization' but no configuration was found in the Google Sheet (or `SECTOR_CONFIG` in secrets). Please populate the 'Settings' tab in your Google Sheet with columns: Ticker, Window, Smooth.")
+    # The bucket we care about
+    target_bucket = 'gaining_mom_outperforming'
     
-    quadrant_meta = [
-        ('gaining_mom_outperforming', '⬈ GAIN MOM & OUTPERF', 'success', '✅ Best Opportunities - Sectors accelerating...')
-    ]
+    # Helper to prepare dataframe
+    def prepare_display_df(items):
+        if not items: return pd.DataFrame()
+        data = []
+        for theme_info in items:
+            days = theme_info['days_in_category']
+            days_display = "🆕 Day 1" if days == 1 else "⭐ Day 2" if days == 2 else f"Day {days}"
+            data.append({
+                "Sector": theme_info['theme'],
+                "Days": days_display,
+                "5d": theme_info['quadrant_5d'],
+                "Reason": theme_info['reason']
+            })
+        df = pd.DataFrame(data)
+        # Sort by Days (Newest first)
+        df['_days_sort'] = df['Days'].str.extract(r'(\d+)').astype(float).fillna(0)
+        df = df.sort_values('_days_sort').drop('_days_sort', axis=1)
+        return df
 
-    for key, title, style_func_name, caption in quadrant_meta:
-        items = categories.get(key, [])
-        style_func = getattr(st, style_func_name)
-        
-        if items:
-            style_func(f"**{title}** ({len(items)} sectors)")
-            
-            data = []
-            for theme_info in items:
-                days = theme_info['days_in_category']
-                days_display = "🆕 Day 1" if days == 1 else "⭐ Day 2" if days == 2 else f"Day {days}"
-                
-                data.append({
-                    "Sector": theme_info['theme'],
-                    "Days": days_display,
-                    "Category": theme_info['display_category'],
-                    "5d": theme_info['quadrant_5d'],
-                    "10d": theme_info['quadrant_10d'],
-                    "20d": theme_info['quadrant_20d'],
-                    "Why Selected": theme_info['reason']
-                })
-            
-            df_display = pd.DataFrame(data)
-            df_display['_days_sort'] = df_display['Days'].str.extract(r'(\d+)').astype(int)
-            df_display = df_display.sort_values('_days_sort').drop('_days_sort', axis=1)
-            
+    # Prepare Data
+    df_std = prepare_display_df(cats_standard.get(target_bucket, []))
+    df_opt = prepare_display_df(cats_optimized.get(target_bucket, []))
+    
+    # Calculate Height to remove scrollbar (approx 35px per row + 38px header)
+    def get_height(df):
+        rows = len(df)
+        if rows == 0: return 38
+        return (rows + 1) * 35 + 3
+    
+    col_std, col_opt = st.columns(2)
+    
+    with col_std:
+        st.markdown(f"**Standard ({st.session_state.sector_view})**")
+        if not df_std.empty:
             st.dataframe(
-                df_display, hide_index=True, use_container_width=True,
-                column_config={"Days": st.column_config.TextColumn("Days", help="Consecutive days in this category", width="small")}
+                df_std, 
+                hide_index=True, 
+                use_container_width=True, 
+                height=get_height(df_std),
+                column_config={
+                    "Sector": st.column_config.TextColumn("Sector", width="small"),
+                    "Reason": st.column_config.TextColumn("Logic", width="medium"),
+                }
             )
         else:
-            if not st.session_state.use_smart_opt or has_any_smart_data:
-                style_func(f"**{title}** - No sectors currently in this category")
+            st.info("No sectors match standard criteria.")
+
+    with col_opt:
+        st.markdown("**✨ Smart Optimized**")
+        if not df_opt.empty:
+            st.dataframe(
+                df_opt, 
+                hide_index=True, 
+                use_container_width=True, 
+                height=get_height(df_opt),
+                column_config={
+                    "Sector": st.column_config.TextColumn("Sector", width="small"),
+                    "Reason": st.column_config.TextColumn("Logic", width="medium"),
+                }
+            )
+        else:
+            st.warning("No sectors match optimized criteria (or config missing).")
 
     st.markdown("---")
     
@@ -266,8 +297,11 @@ def run_theme_momentum_app(df_global=None):
         }
     
     # --- 3. PROCESS DATA (Using Global Filters) ---
+    # For Stock Analysis, which category map should we use?
+    # Usually safer to use the Standard one to avoid confusion, or offer a choice.
+    # Defaulting to Standard (Chart Timeframe) for consistency with the filter labels.
     theme_cat_map = {}
-    for cat_list in categories.values():
+    for cat_list in cats_standard.values():
         for t in cat_list:
             theme_cat_map[t['theme']] = t['display_category']
 
